@@ -1,0 +1,31 @@
+[project]
+name = "wod-agent-etl"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "httpx>=0.28.1",
+    "netcdf4>=1.7.4",
+    "pandas>=3.0.5",
+]
+
+[dependency-groups]
+dev = [
+    "pypdf>=6.16.1",
+    "pytest>=9.1.1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# The package sits at the repo root so it installs like any other Python project and is
+# not owned by any one agent runtime's directory convention. Agent entry points
+# (docs/AGENT.md and the thin per-tool pointers) reference it; nothing references them.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["wod_etl*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::RuntimeWarning"]

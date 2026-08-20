@@ -1,0 +1,337 @@
+{
+  "table": "Table 3a. Depth-dependent measured variables, codes, and datasets",
+  "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
+  "page": 18,
+  "note": "Codes are not contiguous (5, 7, 10, 12-16, 18, 19, 22, 23, 27, 28 are unused here). Codes 30/31/32 (lat/lon/Julian day) are measured variables only for SUR, APB, UOR, where each observation carries its own position.",
+  "variables": [
+    {
+      "code": 1,
+      "name": "Temperature",
+      "standard_unit": "Degrees Celsius",
+      "unit_abbrev": "°C",
+      "datasets": [
+        "OSD",
+        "CTD",
+        "MBT",
+        "XBT",
+        "SUR",
+        "APB",
+        "MRB",
+        "PFL",
+        "UOR",
+        "DRB",
+        "GLD"
+      ]
+    },
+    {
+      "code": 2,
+      "name": "Salinity",
+      "standard_unit": "Dimensionless",
+      "unit_abbrev": "unitless",
+      "datasets": [
+        "OSD",
+        "CTD",
+        "SUR",
+        "APB",
+        "MRB",
+        "PFL",
+        "UOR",
+        "DRB",
+        "GLD"
+      ]
+    },
+    {
+      "code": 3,
+      "name": "Oxygen",
+      "standard_unit": "Micromole kilogram-1",
+      "unit_abbrev": "µmol/kg",
+      "datasets": [
+        "OSD",
+        "CTD",
+        "SUR",
+        "MRB",
+        "PFL",
+        "UOR",
+        "DRB",
+        "GLD"
+      ]
+    },
+    {
+      "code": 4,
+      "name": "Phosphate",
+      "standard_unit": "Micromole kilogram-1",
+      "unit_abbrev": "µmol/kg",
+      "datasets": [
+        "OSD",
+        "SUR"
+      ]
+    },
+    {
+      "code": 6,
+      "name": "Silicate",
+      "standard_unit": "Micromole kilogram-1",
+      "unit_abbrev": "µmol/kg",
+      "datasets": [
+        "OSD",
+        "SUR"
+      ]
+    },
+    {
+      "code": 8,
+      "name": "Nitrate and Nitrate + Nitrite",
+      "standard_unit": "Micromole kilogram-1",
+      "unit_abbrev": "µmol/kg",
+      "datasets": [
+        "OSD",
+        "CTD",
+        "SUR",
+        "MRB",
+        "PFL"
+      ]
+    },
+    {
+      "code": 9,
+      "name": "pH",
+      "standard_unit": "Dimensionless",
+      "unit_abbrev": "unitless",
+      "datasets": [
+        "OSD",
+        "CTD",
+        "SUR",
+        "MRB",
+        "PFL"
+      ]
+    },
+    {
+      "code": 11,
+      "name": "Chlorophyll",
+      "standard_unit": "Microgram liter-1",
+      "unit_abbrev": "µg/l",
+      "datasets": [
+        "OSD",
+        "CTD",
+        "SUR",
+        "MRB",
+        "PFL",
+        "UOR",
+        "DRB",
+        "GLD"
+      ]
+    },
+    {
+      "code": 17,
+      "name": "Alkalinity",
+      "standard_unit": "Millimole liter-1",
+      "unit_abbrev": "mmol/l",
+      "datasets": [
+        "OSD",
+        "SUR"
+      ]
+    },
+    {
+      "code": 20,
+      "name": "Partial pressure of carbon dioxide",
+      "standard_unit": "Micro atmosphere",
+      "unit_abbrev": "µatm",
+      "datasets": [
+        "OSD",
+        "CTD",
+        "SUR",
+        "MRB",
+        "PFL"
+      ]
+    },
+    {
+      "code": 21,
+      "name": "Dissolved inorganic carbon",
+      "standard_unit": "Millimole liter-1",
+      "unit_abbrev": "mmol/l",
+      "datasets": [
+        "OSD",
+        "SUR"
+      ]
+    },
+    {
+      "code": 24,
+      "name": "Transmissivity (Beam Attenuation Coefficient)",
+      "standard_unit": "Per meter",
+      "unit_abbrev": "m-1",
+      "datasets": [
+        "OSD",
+        "CTD",
+        "SUR",
+        "MRB",
+        "PFL",
+        "DRB",
+        "UOR",
+        "GLD"
+      ]
+    },
+    {
+      "code": 25,
+      "name": "Pressure",
+      "standard_unit": "Decibar",
+      "unit_abbrev": "dbar",
+      "datasets": [
+        "OSD",
+        "CTD",
+        "SUR",
+        "MRB",
+        "UOR",
+        "GLD",
+        "PFL",
+        "DRB"
+      ]
+    },
+    {
+      "code": 26,
+      "name": "Air temperature",
+      "standard_unit": "Degrees Celsius",
+      "unit_abbrev": "°C",
+      "datasets": [
+        "SUR"
+      ]
+    },
+    {
+      "code": 29,
+      "name": "Air pressure",
+      "standard_unit": "Millibar",
+      "unit_abbrev": "mbar",
+      "datasets": [
+        "SUR"
+      ]
+    },
+    {
+      "code": 30,
+      "name": "Latitude",
+      "standard_unit": "Degrees",
+      "unit_abbrev": "deg",
+      "datasets": [
+        "SUR",
+        "APB",
+        "UOR"
+      ]
+    },
+    {
+      "code": 31,
+      "name": "Longitude",
+      "standard_unit": "Degrees",
+      "unit_abbrev": "deg",
+      "datasets": [
+        "SUR",
+        "APB",
+        "UOR"
+      ]
+    },
+    {
+      "code": 32,
+      "name": "Julian year-day-1",
+      "standard_unit": "Day",
+      "unit_abbrev": "day",
+      "datasets": [
+        "SUR",
+        "APB",
+        "UOR"
+      ]
+    },
+    {
+      "code": 33,
+      "name": "Tritium",
+      "standard_unit": "Tritium Unit",
+      "unit_abbrev": "TU",
+      "datasets": [
+        "OSD"
+      ]
+    },
+    {
+      "code": 34,
+      "name": "Helium",
+      "standard_unit": "Nanomole kilogram-1",
+      "unit_abbrev": "nmol/kg",
+      "datasets": [
+        "OSD"
+      ]
+    },
+    {
+      "code": 35,
+      "name": "Helium-3 (3He)",
+      "standard_unit": "Percent",
+      "unit_abbrev": "%",
+      "datasets": [
+        "OSD"
+      ]
+    },
+    {
+      "code": 36,
+      "name": "Carbon-14 (14C)",
+      "standard_unit": "Per mille",
+      "unit_abbrev": "‰",
+      "datasets": [
+        "OSD"
+      ]
+    },
+    {
+      "code": 37,
+      "name": "Carbon-13 (13C)",
+      "standard_unit": "Per mille",
+      "unit_abbrev": "‰",
+      "datasets": [
+        "OSD"
+      ]
+    },
+    {
+      "code": 38,
+      "name": "Argon",
+      "standard_unit": "Nanomole kilogram-1",
+      "unit_abbrev": "nmol/kg",
+      "datasets": [
+        "OSD"
+      ]
+    },
+    {
+      "code": 39,
+      "name": "Neon",
+      "standard_unit": "Nanomole kilogram-1",
+      "unit_abbrev": "nmol/kg",
+      "datasets": [
+        "OSD"
+      ]
+    },
+    {
+      "code": 40,
+      "name": "Chlorofluorocarbon-11",
+      "standard_unit": "Picomole kilogram-1",
+      "unit_abbrev": "pmol/kg",
+      "datasets": [
+        "OSD"
+      ]
+    },
+    {
+      "code": 41,
+      "name": "Chlorofluorocarbon-12",
+      "standard_unit": "Picomole kilogram-1",
+      "unit_abbrev": "pmol/kg",
+      "datasets": [
+        "OSD"
+      ]
+    },
+    {
+      "code": 42,
+      "name": "Chlorofluorocarbon-113",
+      "standard_unit": "Picomole kilogram-1",
+      "unit_abbrev": "pmol/kg",
+      "datasets": [
+        "OSD"
+      ]
+    },
+    {
+      "code": 43,
+      "name": "Oxygen-18 (18O)",
+      "standard_unit": "Per mille",
+      "unit_abbrev": "‰",
+      "datasets": [
+        "OSD"
+      ]
+    }
+  ]
+}

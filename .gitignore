@@ -1,0 +1,14 @@
+# Working data — provenance and outputs of a run, not source.
+# No placeholders needed: config.py creates raw/, staging/, processed/ and
+# staging/manifests/ at import, so a fresh clone builds them itself.
+data/
+
+# Extracted manual text cache — rebuild with:
+#   uv run python -m wod_etl.knowledge.index_manual
+knowledge/wod_readme_db/page_text.json
+
+.venv/
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/

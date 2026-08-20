@@ -1,0 +1,149 @@
+{
+  "table": "Table 13. Maximum depth gradient and inversion factors",
+  "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
+  "page": 56,
+  "definitions": {
+    "gradient": "(v2 - v1) / (z2 - z1), where 1 is the current level and 2 the next level (Equation 1, p.53)",
+    "MGV": "Maximum Gradient Value. Applies to a NEGATIVE gradient (excessive decrease with depth). Exceeding it sets observed-level flag 3.",
+    "MIV": "Maximum Inversion Value. Applies to a POSITIVE gradient (excessive increase with depth). Exceeding it sets observed-level flag 2.",
+    "ZSI": "Zero Sensitivity Indicator. Flags a value of zero as a missing-value marker when the gradient decreasing to zero exceeds MGV * ZSI. Sets flag 4."
+  },
+  "rules": [
+    "MGV and MIV are DIFFERENT thresholds; a single symmetric threshold is not correct.",
+    "Separate values apply above and below 400 m depth.",
+    "For high-resolution instruments (HCTD, XBT) use a minimum depth difference of 3.0 m when computing the gradient.",
+    "Salinity MGV/MIV above 400 m are deliberately huge and near-irrelevant to the check."
+  ],
+  "factors": [
+    {
+      "variable": "Temperature",
+      "wod_code": 1,
+      "shallow_z_lt_400m": {
+        "MIV": 0.3,
+        "MGV": 0.7
+      },
+      "deep_z_gt_400m": {
+        "MIV": 0.3,
+        "MGV": 0.7
+      },
+      "ZSI": 5.0
+    },
+    {
+      "variable": "Salinity",
+      "wod_code": 2,
+      "shallow_z_lt_400m": {
+        "MIV": 9.0,
+        "MGV": 9.0
+      },
+      "deep_z_gt_400m": {
+        "MIV": 0.05,
+        "MGV": 0.05
+      },
+      "ZSI": 5.0
+    },
+    {
+      "variable": "Oxygen",
+      "wod_code": 3,
+      "shallow_z_lt_400m": {
+        "MIV": 43.57,
+        "MGV": 43.57
+      },
+      "deep_z_gt_400m": {
+        "MIV": 32.677,
+        "MGV": 32.677
+      },
+      "ZSI": 87.14
+    },
+    {
+      "variable": "Phosphate",
+      "wod_code": 4,
+      "shallow_z_lt_400m": {
+        "MIV": 0.967,
+        "MGV": 0.967
+      },
+      "deep_z_gt_400m": {
+        "MIV": 0.488,
+        "MGV": 0.488
+      },
+      "ZSI": 2.439
+    },
+    {
+      "variable": "Silicate",
+      "wod_code": 6,
+      "shallow_z_lt_400m": {
+        "MIV": 4.878,
+        "MGV": 4.878
+      },
+      "deep_z_gt_400m": {
+        "MIV": 3.415,
+        "MGV": 3.415
+      },
+      "ZSI": 2.927
+    },
+    {
+      "variable": "Nitrate",
+      "wod_code": 8,
+      "shallow_z_lt_400m": {
+        "MIV": 0.976,
+        "MGV": 0.976
+      },
+      "deep_z_gt_400m": {
+        "MIV": 0.488,
+        "MGV": 0.488
+      },
+      "ZSI": 2.439
+    },
+    {
+      "variable": "pH",
+      "wod_code": 9,
+      "shallow_z_lt_400m": {
+        "MIV": 0.4,
+        "MGV": 0.4
+      },
+      "deep_z_gt_400m": {
+        "MIV": 0.2,
+        "MGV": 0.2
+      },
+      "ZSI": 2.0
+    },
+    {
+      "variable": "Chlorophyll",
+      "wod_code": 11,
+      "shallow_z_lt_400m": {
+        "MIV": 1.0,
+        "MGV": 1.0
+      },
+      "deep_z_gt_400m": {
+        "MIV": 0.25,
+        "MGV": 0.25
+      },
+      "ZSI": 2.0
+    },
+    {
+      "variable": "Alkalinity",
+      "wod_code": 17,
+      "shallow_z_lt_400m": {
+        "MIV": 0.3,
+        "MGV": 0.1
+      },
+      "deep_z_gt_400m": {
+        "MIV": 0.05,
+        "MGV": 0.05
+      },
+      "ZSI": 2.0
+    },
+    {
+      "variable": "Nitrate + Nitrite",
+      "wod_code": 8,
+      "shallow_z_lt_400m": {
+        "MIV": 0.976,
+        "MGV": 0.976
+      },
+      "deep_z_gt_400m": {
+        "MIV": 0.488,
+        "MGV": 0.488
+      },
+      "ZSI": 2.439
+    }
+  ]
+}

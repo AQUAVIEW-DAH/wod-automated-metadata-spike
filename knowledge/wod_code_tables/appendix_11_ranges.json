@@ -1,0 +1,1603 @@
+{
+  "table": "Appendix 11. Tables of acceptable measurement ranges of observed variables as a function of depth and basin",
+  "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
+  "pages": "87-113",
+  "what_this_is": "The manual gives min/max per depth level PER OCEAN BASIN (30 basin columns spread over 3 pages per variable). Assigning a cast to a basin requires the range_area.msk and range_basin_list.msk files from the WOD website, which are NOT in the PDF. These values are therefore the UNION across all basins at each depth: min of all basin minima, max of all basin maxima.",
+  "consequence": "This envelope is depth-dependent (a large improvement over one global pair) but deliberately permissive, because marginal seas widen it. At 5500 m the salinity union spans 1.0-50.0 because the Baltic reaches 1.0 and the Red Sea reaches 50.0. A value inside this envelope is not necessarily inside its own basin's range.",
+  "lookup_rule": "A depth between two listed levels uses the nearest listed level; if equidistant, the shallower one (manual p.86). The deepest entry, 5500, covers all greater depths.",
+  "variables": {
+    "1": {
+      "wod_code": 1,
+      "variable": "Temperature",
+      "appendix": "11.1",
+      "pages": [
+        87,
+        88,
+        89
+      ],
+      "levels": [
+        {
+          "depth_m": 0,
+          "min": -3.0,
+          "max": 35.0
+        },
+        {
+          "depth_m": 10,
+          "min": -3.0,
+          "max": 35.0
+        },
+        {
+          "depth_m": 20,
+          "min": -3.0,
+          "max": 35.0
+        },
+        {
+          "depth_m": 30,
+          "min": -3.0,
+          "max": 35.0
+        },
+        {
+          "depth_m": 50,
+          "min": -3.0,
+          "max": 35.0
+        },
+        {
+          "depth_m": 75,
+          "min": -3.0,
+          "max": 35.0
+        },
+        {
+          "depth_m": 100,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 125,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 150,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 200,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 250,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 300,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 400,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 500,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 600,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 700,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 800,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 900,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 1000,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 1100,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 1200,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 1300,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 1400,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 1500,
+          "min": -3.0,
+          "max": 32.0
+        },
+        {
+          "depth_m": 1750,
+          "min": -3.0,
+          "max": 34.0
+        },
+        {
+          "depth_m": 2000,
+          "min": -3.0,
+          "max": 34.0
+        },
+        {
+          "depth_m": 2500,
+          "min": -3.0,
+          "max": 34.0
+        },
+        {
+          "depth_m": 3000,
+          "min": -3.0,
+          "max": 34.0
+        },
+        {
+          "depth_m": 3500,
+          "min": -3.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 4000,
+          "min": -2.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 4500,
+          "min": -2.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 5000,
+          "min": -2.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 5500,
+          "min": -2.0,
+          "max": 20.0
+        }
+      ]
+    },
+    "2": {
+      "wod_code": 2,
+      "variable": "Salinity",
+      "appendix": "11.2",
+      "pages": [
+        90,
+        91,
+        92
+      ],
+      "levels": [
+        {
+          "depth_m": 0,
+          "min": 0.0,
+          "max": 44.0
+        },
+        {
+          "depth_m": 10,
+          "min": 0.0,
+          "max": 44.0
+        },
+        {
+          "depth_m": 20,
+          "min": 0.0,
+          "max": 44.0
+        },
+        {
+          "depth_m": 30,
+          "min": 0.0,
+          "max": 44.0
+        },
+        {
+          "depth_m": 50,
+          "min": 0.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 75,
+          "min": 0.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 100,
+          "min": 0.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 125,
+          "min": 0.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 150,
+          "min": 0.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 200,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 250,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 300,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 400,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 500,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 600,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 700,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 800,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 900,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 1000,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 1100,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 1200,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 1300,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 1400,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 1500,
+          "min": 1.0,
+          "max": 43.0
+        },
+        {
+          "depth_m": 1750,
+          "min": 1.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 2000,
+          "min": 1.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 2500,
+          "min": 1.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 3000,
+          "min": 1.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 3500,
+          "min": 1.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 4000,
+          "min": 1.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 4500,
+          "min": 1.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 5000,
+          "min": 1.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 5500,
+          "min": 1.0,
+          "max": 50.0
+        }
+      ]
+    },
+    "3": {
+      "wod_code": 3,
+      "variable": "Oxygen",
+      "appendix": "11.3",
+      "pages": [
+        93,
+        94,
+        95
+      ],
+      "levels": [
+        {
+          "depth_m": 0,
+          "min": 0.0,
+          "max": 523.0
+        },
+        {
+          "depth_m": 10,
+          "min": 0.0,
+          "max": 523.0
+        },
+        {
+          "depth_m": 20,
+          "min": 0.0,
+          "max": 523.0
+        },
+        {
+          "depth_m": 30,
+          "min": 0.0,
+          "max": 523.0
+        },
+        {
+          "depth_m": 50,
+          "min": 0.0,
+          "max": 523.0
+        },
+        {
+          "depth_m": 75,
+          "min": 0.0,
+          "max": 479.0
+        },
+        {
+          "depth_m": 100,
+          "min": 0.0,
+          "max": 436.0
+        },
+        {
+          "depth_m": 125,
+          "min": 0.0,
+          "max": 436.0
+        },
+        {
+          "depth_m": 150,
+          "min": 0.0,
+          "max": 436.0
+        },
+        {
+          "depth_m": 200,
+          "min": 0.0,
+          "max": 436.0
+        },
+        {
+          "depth_m": 250,
+          "min": 0.0,
+          "max": 436.0
+        },
+        {
+          "depth_m": 300,
+          "min": 0.0,
+          "max": 436.0
+        },
+        {
+          "depth_m": 400,
+          "min": 0.0,
+          "max": 436.0
+        },
+        {
+          "depth_m": 500,
+          "min": 0.0,
+          "max": 436.0
+        },
+        {
+          "depth_m": 600,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 700,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 800,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 900,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 1000,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 1100,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 1200,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 1300,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 1400,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 1500,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 1750,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 2000,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 2500,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 3000,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 3500,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 4000,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 4500,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 5000,
+          "min": 0.0,
+          "max": 392.0
+        },
+        {
+          "depth_m": 5500,
+          "min": 0.0,
+          "max": 392.0
+        }
+      ]
+    },
+    "4": {
+      "wod_code": 4,
+      "variable": "Phosphate",
+      "appendix": "11.4",
+      "pages": [
+        96,
+        97,
+        98
+      ],
+      "levels": [
+        {
+          "depth_m": 0,
+          "min": 0.0,
+          "max": 60.0
+        },
+        {
+          "depth_m": 10,
+          "min": 0.0,
+          "max": 60.0
+        },
+        {
+          "depth_m": 20,
+          "min": 0.0,
+          "max": 60.0
+        },
+        {
+          "depth_m": 30,
+          "min": 0.0,
+          "max": 60.0
+        },
+        {
+          "depth_m": 50,
+          "min": 0.0,
+          "max": 60.0
+        },
+        {
+          "depth_m": 75,
+          "min": 0.0,
+          "max": 60.0
+        },
+        {
+          "depth_m": 100,
+          "min": 0.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 125,
+          "min": 0.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 150,
+          "min": 0.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 200,
+          "min": 0.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 250,
+          "min": 0.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 300,
+          "min": 0.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 400,
+          "min": 0.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 500,
+          "min": 0.0,
+          "max": 20.0
+        },
+        {
+          "depth_m": 600,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 700,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 800,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 900,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 1000,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 1100,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 1200,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 1300,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 1400,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 1500,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 1750,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 2000,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 2500,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 3000,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 3500,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 4000,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 4500,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 5000,
+          "min": 0.01,
+          "max": 20.0
+        },
+        {
+          "depth_m": 5500,
+          "min": 0.01,
+          "max": 20.0
+        }
+      ]
+    },
+    "6": {
+      "wod_code": 6,
+      "variable": "Silicate",
+      "appendix": "11.5",
+      "pages": [
+        99,
+        100,
+        101
+      ],
+      "levels": [
+        {
+          "depth_m": 0,
+          "min": 0.0,
+          "max": 360.0
+        },
+        {
+          "depth_m": 10,
+          "min": 0.0,
+          "max": 355.0
+        },
+        {
+          "depth_m": 20,
+          "min": 0.0,
+          "max": 355.0
+        },
+        {
+          "depth_m": 30,
+          "min": 0.0,
+          "max": 355.0
+        },
+        {
+          "depth_m": 50,
+          "min": 0.0,
+          "max": 355.0
+        },
+        {
+          "depth_m": 75,
+          "min": 0.0,
+          "max": 355.0
+        },
+        {
+          "depth_m": 100,
+          "min": 0.0,
+          "max": 355.0
+        },
+        {
+          "depth_m": 125,
+          "min": 0.0,
+          "max": 320.0
+        },
+        {
+          "depth_m": 150,
+          "min": 0.0,
+          "max": 315.0
+        },
+        {
+          "depth_m": 200,
+          "min": 0.0,
+          "max": 305.0
+        },
+        {
+          "depth_m": 250,
+          "min": 0.0,
+          "max": 295.0
+        },
+        {
+          "depth_m": 300,
+          "min": 0.0,
+          "max": 295.0
+        },
+        {
+          "depth_m": 400,
+          "min": 0.0,
+          "max": 250.0
+        },
+        {
+          "depth_m": 500,
+          "min": 0.0,
+          "max": 250.0
+        },
+        {
+          "depth_m": 600,
+          "min": 0.0,
+          "max": 250.0
+        },
+        {
+          "depth_m": 700,
+          "min": 0.0,
+          "max": 250.0
+        },
+        {
+          "depth_m": 800,
+          "min": 0.0,
+          "max": 250.0
+        },
+        {
+          "depth_m": 900,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 1000,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 1100,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 1200,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 1300,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 1400,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 1500,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 1750,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 2000,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 2500,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 3000,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 3500,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 4000,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 4500,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 5000,
+          "min": 0.0,
+          "max": 270.0
+        },
+        {
+          "depth_m": 5500,
+          "min": 0.0,
+          "max": 270.0
+        }
+      ]
+    },
+    "8": {
+      "wod_code": 8,
+      "variable": "Nitrate and Nitrate + Nitrite",
+      "appendix": "11.6",
+      "pages": [
+        102,
+        103,
+        104
+      ],
+      "levels": [
+        {
+          "depth_m": 0,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 10,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 20,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 30,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 50,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 75,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 100,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 125,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 150,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 200,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 250,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 300,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 400,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 500,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 600,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 700,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 800,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 900,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 1000,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 1100,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 1200,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 1300,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 1400,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 1500,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 1750,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 2000,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 2500,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 3000,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 3500,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 4000,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 4500,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 5000,
+          "min": 0.0,
+          "max": 500.0
+        },
+        {
+          "depth_m": 5500,
+          "min": 0.0,
+          "max": 500.0
+        }
+      ]
+    },
+    "9": {
+      "wod_code": 9,
+      "variable": "pH",
+      "appendix": "11.7",
+      "pages": [
+        105,
+        106,
+        107
+      ],
+      "levels": [
+        {
+          "depth_m": 0,
+          "min": 6.0,
+          "max": 9.3
+        },
+        {
+          "depth_m": 10,
+          "min": 6.0,
+          "max": 9.3
+        },
+        {
+          "depth_m": 20,
+          "min": 6.0,
+          "max": 9.3
+        },
+        {
+          "depth_m": 30,
+          "min": 6.0,
+          "max": 9.3
+        },
+        {
+          "depth_m": 50,
+          "min": 6.0,
+          "max": 9.3
+        },
+        {
+          "depth_m": 75,
+          "min": 6.0,
+          "max": 9.3
+        },
+        {
+          "depth_m": 100,
+          "min": 6.0,
+          "max": 9.3
+        },
+        {
+          "depth_m": 125,
+          "min": 6.0,
+          "max": 8.9
+        },
+        {
+          "depth_m": 150,
+          "min": 6.0,
+          "max": 8.9
+        },
+        {
+          "depth_m": 200,
+          "min": 6.0,
+          "max": 8.8
+        },
+        {
+          "depth_m": 250,
+          "min": 6.7,
+          "max": 8.8
+        },
+        {
+          "depth_m": 300,
+          "min": 6.7,
+          "max": 8.8
+        },
+        {
+          "depth_m": 400,
+          "min": 6.7,
+          "max": 8.8
+        },
+        {
+          "depth_m": 500,
+          "min": 6.7,
+          "max": 8.8
+        },
+        {
+          "depth_m": 600,
+          "min": 7.0,
+          "max": 8.8
+        },
+        {
+          "depth_m": 700,
+          "min": 7.0,
+          "max": 8.8
+        },
+        {
+          "depth_m": 800,
+          "min": 7.0,
+          "max": 8.8
+        },
+        {
+          "depth_m": 900,
+          "min": 7.0,
+          "max": 8.8
+        },
+        {
+          "depth_m": 1000,
+          "min": 7.0,
+          "max": 8.7
+        },
+        {
+          "depth_m": 1100,
+          "min": 7.1,
+          "max": 8.7
+        },
+        {
+          "depth_m": 1200,
+          "min": 7.1,
+          "max": 8.7
+        },
+        {
+          "depth_m": 1300,
+          "min": 7.1,
+          "max": 8.7
+        },
+        {
+          "depth_m": 1400,
+          "min": 7.2,
+          "max": 8.7
+        },
+        {
+          "depth_m": 1500,
+          "min": 7.2,
+          "max": 8.7
+        },
+        {
+          "depth_m": 1750,
+          "min": 7.2,
+          "max": 8.7
+        },
+        {
+          "depth_m": 2000,
+          "min": 7.2,
+          "max": 8.7
+        },
+        {
+          "depth_m": 2500,
+          "min": 7.2,
+          "max": 8.7
+        },
+        {
+          "depth_m": 3000,
+          "min": 7.2,
+          "max": 8.7
+        },
+        {
+          "depth_m": 3500,
+          "min": 7.2,
+          "max": 8.7
+        },
+        {
+          "depth_m": 4000,
+          "min": 7.2,
+          "max": 8.7
+        },
+        {
+          "depth_m": 4500,
+          "min": 7.2,
+          "max": 8.7
+        },
+        {
+          "depth_m": 5000,
+          "min": 7.2,
+          "max": 8.7
+        },
+        {
+          "depth_m": 5500,
+          "min": 7.2,
+          "max": 8.7
+        }
+      ]
+    },
+    "11": {
+      "wod_code": 11,
+      "variable": "Chlorophyll",
+      "appendix": "11.8",
+      "pages": [
+        108,
+        109,
+        110
+      ],
+      "levels": [
+        {
+          "depth_m": 0,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 10,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 20,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 30,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 50,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 75,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 100,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 125,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 150,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 200,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 250,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 300,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 400,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 500,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 600,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 700,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 800,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 900,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 1000,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 1100,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 1200,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 1300,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 1400,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 1500,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 1750,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 2000,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 2500,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 3000,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 3500,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 4000,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 4500,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 5000,
+          "min": 0.0,
+          "max": 50.0
+        },
+        {
+          "depth_m": 5500,
+          "min": 0.0,
+          "max": 50.0
+        }
+      ]
+    },
+    "17": {
+      "wod_code": 17,
+      "variable": "Alkalinity",
+      "appendix": "11.9",
+      "pages": [
+        111,
+        112,
+        113
+      ],
+      "levels": [
+        {
+          "depth_m": 0,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 10,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 20,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 30,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 50,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 75,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 100,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 125,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 150,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 200,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 250,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 300,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 400,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 500,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 600,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 700,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 800,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 900,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 1000,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 1100,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 1200,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 1300,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 1400,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 1500,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 1750,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 2000,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 2500,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 3000,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 3500,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 4000,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 4500,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 5000,
+          "min": 0.0,
+          "max": 3.1
+        },
+        {
+          "depth_m": 5500,
+          "min": 0.0,
+          "max": 3.1
+        }
+      ]
+    }
+  }
+}

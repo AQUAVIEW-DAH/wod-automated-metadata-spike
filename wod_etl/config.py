@@ -1,0 +1,139 @@
+"""Global paths, environment settings, and tunable constants for the WOD ETL pipeline.
+
+Every skill imports its defaults from here so an agent can change behaviour in one place
+rather than passing the same arguments through every call.
+"""
+import os
+from pathlib import Path
+
+# ----------------------------------------------------------------- paths
+# The project root cannot be derived by counting parents: an installed copy of the package
+# sits elsewhere entirely. Walk up looking for the markers that define a WOD ETL workspace
+# -- all of them tracked files, so a fresh clone resolves before data/ exists -- and fall
+# back to the environment variable or the current directory.
+
+
+def _find_root() -> Path:
+    override = os.environ.get("WOD_PROJECT_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+    here = Path(__file__).resolve()
+    for candidate in [here, *here.parents]:
+        if (candidate / "knowledge" / "wod_code_tables").is_dir():
+            return candidate
+        if (candidate / "pyproject.toml").is_file() and (candidate / "knowledge").is_dir():
+            return candidate
+    return Path.cwd().resolve()
+
+
+ROOT = _find_root()
+
+DATA_DIR = ROOT / "data"
+RAW_DIR = DATA_DIR / "raw"
+STAGING_DIR = DATA_DIR / "staging"
+PROCESSED_DIR = DATA_DIR / "processed"
+MANIFEST_DIR = STAGING_DIR / "manifests"
+
+KNOWLEDGE_DIR = ROOT / "knowledge"
+CODE_TABLES_DIR = KNOWLEDGE_DIR / "wod_code_tables"
+WOD_README_PDF = KNOWLEDGE_DIR / "wod_readme.pdf"
+
+for _d in (RAW_DIR, STAGING_DIR, PROCESSED_DIR, MANIFEST_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
+
+# ------------------------------------------------------------------ HTTP
+USER_AGENT = os.environ.get("WOD_USER_AGENT", "WOD-ETL-Agent/1.0")
+HTTP_TIMEOUT = float(os.environ.get("WOD_HTTP_TIMEOUT", "30"))
+PEEK_BYTES = int(os.environ.get("WOD_PEEK_BYTES", "8192"))
+DOWNLOAD_CHUNK_BYTES = 1 << 16
+MAX_DOWNLOAD_BYTES = int(os.environ.get("WOD_MAX_DOWNLOAD_BYTES", str(2 * 1024**3)))
+HTTP_RETRIES = int(os.environ.get("WOD_HTTP_RETRIES", "3"))
+HTTP_BACKOFF_SECONDS = 2.0
+
+# --------------------------------------------------------- WOD constants
+# Manual p.19: high-resolution casts have a depth increment < 2 m and belong to the CTD
+# dataset; anything coarser is low-resolution and belongs to OSD.
+HIGH_RES_DEPTH_INCREMENT_M = 2.0
+
+# Manual p.54: gradient thresholds differ above and below 400 m.
+GRADIENT_DEPTH_SPLIT_M = 400.0
+
+# Manual p.54: for high-resolution instruments use a minimum depth difference of 3.0 m
+# when computing gradients, so a tiny dz cannot inflate the result.
+MIN_GRADIENT_DEPTH_DIFF_M = 3.0
+
+# NOT a WOD constant. Table 3b supplies atomic weights and the molar volume of O2 only --
+# it gives no seawater density. This is a conventional stand-in used when in-situ density
+# is unavailable, and it is recorded in the output metadata whenever it is applied.
+ASSUMED_SEAWATER_DENSITY_KG_M3 = 1025.0
+SEAWATER_DENSITY_PROVENANCE = (
+    "assumed constant 1025 kg/m3; not specified by WOD Table 3b; in-situ density unavailable"
+)
+
+# ---------------------------------------------------------------- output
+NETCDF_FILL_VALUE = -9999.0
+QC_FILL_VALUE = -1
+CF_CONVENTIONS = "CF-1.8"
+WOD_VERSION = "WOD23"
+
+# ------------------------------------------------------- failure policy
+# How process_accession reacts to a per-file failure during an unattended run.
+#   "skip"  -- record the failure in the manifest and continue (default)
+#   "stop"  -- abort the whole run on the first failure
+ON_FILE_ERROR = os.environ.get("WOD_ON_FILE_ERROR", "skip")
+
+# A run aborts if this fraction of files fails, on the assumption that something
+# systematic is wrong rather than the data being individually bad.
+ABORT_IF_FAILURE_RATE_ABOVE = float(os.environ.get("WOD_ABORT_FAILURE_RATE", "0.5"))
+ABORT_FAILURE_RATE_MIN_SAMPLE = 10
+
+# ------------------------------------------------------- source text
+# Originators write CSVs in whatever their spreadsheet defaults to. Japanese-authored
+# files are routinely cp932 and will raise UnicodeDecodeError on utf-8. Tried in order.
+TEXT_ENCODINGS = ("utf-8-sig", "utf-8", "cp932", "latin-1")
+
+# Missing-value markers beyond the numeric sentinels load_tabular already knows. Real
+# submissions use a legend of asterisk codes, and their meanings differ:
+#   below-detection and not-detected are REAL information (the value lies under a stated
+#   threshold) but WOD Table 12 has no observed-level flag for it, so they still become
+#   missing. Count them and say so rather than dropping them quietly.
+NA_SENTINELS = {
+    "**NS": "not sampled",
+    "*NS": "not sampled",
+    "***NA": "not analysed",
+    "**NA": "not analysed",
+    "*NA": "not analysed",
+    "Not analyzed": "not analysed",
+    "Not analysed": "not analysed",
+    "*DL": "below detection limit",
+    "**DL": "below detection limit",
+    "**ND": "not detected",
+    "*ND": "not detected",
+    "****ND": "no data",
+}
+
+# Extensions that are metadata/documentation rather than measurements.
+NON_DATA_EXTENSIONS = {
+    ".xml", ".pdf", ".html", ".htm", ".md", ".doc", ".docx", ".json",
+    ".png", ".jpg", ".jpeg", ".gif", ".zip", ".gz", ".tar", ".sh",
+}
+
+
+def describe() -> dict:
+    """Return the effective configuration, for logging into a run manifest."""
+    return {
+        "root": str(ROOT),
+        "raw_dir": str(RAW_DIR),
+        "staging_dir": str(STAGING_DIR),
+        "processed_dir": str(PROCESSED_DIR),
+        "user_agent": USER_AGENT,
+        "http_timeout": HTTP_TIMEOUT,
+        "http_retries": HTTP_RETRIES,
+        "peek_bytes": PEEK_BYTES,
+        "high_res_depth_increment_m": HIGH_RES_DEPTH_INCREMENT_M,
+        "gradient_depth_split_m": GRADIENT_DEPTH_SPLIT_M,
+        "min_gradient_depth_diff_m": MIN_GRADIENT_DEPTH_DIFF_M,
+        "assumed_seawater_density_kg_m3": ASSUMED_SEAWATER_DENSITY_KG_M3,
+        "on_file_error": ON_FILE_ERROR,
+        "text_encodings": list(TEXT_ENCODINGS),
+    }

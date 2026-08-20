@@ -1,0 +1,71 @@
+{
+  "table": "Table 12. Definition of the quality control flags",
+  "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
+  "page": 55,
+  "note": "FOUR SEPARATE FLAG SCALES. The same integer means different things in each. Do not mix them in one column.",
+  "scales": {
+    "entire_cast": {
+      "applies_to": "whole cast, as a function of variable",
+      "flags": {
+        "0": "accepted cast",
+        "1": "failed annual standard deviation check",
+        "2": "two or more density inversions (Levitus, 1982 criteria)",
+        "3": "flagged cruise",
+        "4": "failed seasonal standard deviation check",
+        "5": "failed monthly standard deviation check",
+        "6": "failed annual and seasonal standard deviation check",
+        "7": "bullseye from standard level data or failed annual and monthly standard deviation check",
+        "8": "failed seasonal and monthly standard deviation check",
+        "9": "failed annual, seasonal and monthly standard deviation check"
+      }
+    },
+    "depth": {
+      "applies_to": "individual depth readings",
+      "flags": {
+        "0": "accepted value",
+        "1": "duplicates or inversions in recorded depth (same or less than previous depth)",
+        "2": "density inversion"
+      }
+    },
+    "observed_level": {
+      "applies_to": "individual variable observations at observed levels",
+      "flags": {
+        "0": "accepted value",
+        "1": "range outlier (outside of broad range check)",
+        "2": "failed inversion check",
+        "3": "failed gradient check",
+        "4": "observed level 'bullseye' flag and zero gradient check",
+        "5": "combined gradient and inversion checks",
+        "6": "failed range and inversion checks",
+        "7": "failed range and gradient checks",
+        "8": "failed range and questionable data checks",
+        "9": "failed range and combined gradient and inversion checks"
+      }
+    },
+    "standard_level": {
+      "applies_to": "values interpolated to standard depth levels",
+      "flags": {
+        "0": "accepted value",
+        "1": "bullseye marker",
+        "2": "density inversion",
+        "3": "failed annual standard deviation check",
+        "4": "failed seasonal standard deviation check",
+        "5": "failed monthly standard deviation check",
+        "6": "failed annual and seasonal standard deviation check",
+        "7": "failed annual and monthly standard deviation check",
+        "8": "failed seasonal and monthly standard deviation check",
+        "9": "failed annual, seasonal and monthly standard deviation check"
+      }
+    },
+    "biological": {
+      "applies_to": "Comparable Biological Value (CBV), Taxa code 27 only",
+      "flags": {
+        "0": "accepted value",
+        "1": "range outlier (outside of broad range check)",
+        "2": "questionable value ('bullseye flag')",
+        "3": "group was not reviewed",
+        "4": "failed annual standard deviation check"
+      }
+    }
+  }
+}

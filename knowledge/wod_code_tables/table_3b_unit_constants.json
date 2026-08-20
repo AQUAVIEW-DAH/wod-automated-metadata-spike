@@ -1,0 +1,22 @@
+{
+  "table": "Table 3b. Variable unit standard conversion constants",
+  "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
+  "page": 19,
+  "notes": [
+    "Standard atomic weights scaled to Carbon-12 (Lide, 1992).",
+    "Molar volume of O2 at STP from Garcia and Gordon (1992).",
+    "The manual gives no seawater-density constant here; converting µmol/l to µmol/kg requires in-situ density, or an assumed value if density is unavailable."
+  ],
+  "molar_volume_o2_stp_l_per_mole": 22.3916,
+  "atomic_weights_g_per_mole": {
+    "hydrogen": 1.0079,
+    "helium": 4.0026,
+    "carbon": 12.011,
+    "nitrogen": 14.0067,
+    "oxygen": 15.9994,
+    "neon": 20.1797,
+    "phosphorus": 30.9738,
+    "argon": 39.948,
+    "silicon": 28.0855
+  }
+}

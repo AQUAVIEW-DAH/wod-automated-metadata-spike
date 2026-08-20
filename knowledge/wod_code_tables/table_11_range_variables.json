@@ -1,0 +1,71 @@
+{
+  "table": "Table 11. Data ranges for quality control of individual variables",
+  "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
+  "pages": [
+    54,
+    86
+  ],
+  "note": "Table 11 lists WHICH variables get range checks and points to the appendix holding the numbers. The actual ranges live in Appendix 11 (p.86+) and are a function of BOTH depth (102 standard levels + one below 5500 m) AND ocean basin (16 basin columns). They are not single global min/max pairs.",
+  "lookup_rule": "A standard depth between two listed depths uses the nearest listed depth; if equidistant, the shallower one (e.g. 5 m uses the 0 m values).",
+  "variables": [
+    {
+      "code": 1,
+      "variable": "Temperature",
+      "unit": "Degree Celsius (°C)",
+      "appendix": "11.1"
+    },
+    {
+      "code": 2,
+      "variable": "Salinity",
+      "unit": "Dimensionless (unitless)",
+      "appendix": "11.2"
+    },
+    {
+      "code": 3,
+      "variable": "Oxygen",
+      "unit": "Micromole kilogram-1 (µmol/kg)",
+      "appendix": "11.3"
+    },
+    {
+      "code": 4,
+      "variable": "Phosphate",
+      "unit": "Micromole kilogram-1 (µmol/kg)",
+      "appendix": "11.4"
+    },
+    {
+      "code": 6,
+      "variable": "Silicate",
+      "unit": "Micromole kilogram-1 (µmol/kg)",
+      "appendix": "11.5"
+    },
+    {
+      "code": 8,
+      "variable": "Nitrate and Nitrate + nitrite",
+      "unit": "Micromole kilogram-1 (µmol/kg)",
+      "appendix": "11.6"
+    },
+    {
+      "code": 9,
+      "variable": "pH",
+      "unit": "Dimensionless (unitless)",
+      "appendix": "11.7"
+    },
+    {
+      "code": 11,
+      "variable": "Total Chlorophyll unless specified",
+      "unit": "Microgram liter-1 (µg/l)",
+      "appendix": "11.8"
+    },
+    {
+      "code": 17,
+      "variable": "Alkalinity",
+      "unit": "Millimole liter-1 (mmol/l)",
+      "appendix": "11.9"
+    }
+  ],
+  "surface_envelope_example_temperature": {
+    "warning": "Illustrative only. These are the WIDEST (0 m) bounds across basins. Using them at all depths will pass deep outliers: at 3000 m the real maximum is far below 35 °C.",
+    "min": -2.1,
+    "max": 35.0
+  }
+}
