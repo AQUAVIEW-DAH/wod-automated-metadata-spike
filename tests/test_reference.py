@@ -161,23 +161,35 @@ class TestSearchManual:
 
 
 class TestKnowledgeRouting:
-    """The knowledge index promises that common questions are answerable without opening
-    the 131-page manual. These guard that promise against drift."""
+    """The wod-reference skill promises that common questions are answerable without
+    opening the 131-page manual. These guard that promise against drift.
 
-    KNOWLEDGE = Path(__file__).resolve().parents[1] / "knowledge"
+    The index is the skill body itself; the prose files it routes to live in knowledge/.
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+    KNOWLEDGE = ROOT / "knowledge"
+    INDEX = ROOT / ".claude" / "skills" / "wod-reference" / "SKILL.md"
 
     def test_index_and_prose_references_exist(self):
-        for name in ("README.md", "datasets.md", "cast_structure.md",
-                     "accession_field_guide.md", "wod_code_tables/standardization_rules.md"):
+        assert self.INDEX.is_file(), "the wod-reference skill is the knowledge index"
+        for name in ("datasets.md", "cast_structure.md", "accession_field_guide.md",
+                     "wod_code_tables/standardization_rules.md"):
             assert (self.KNOWLEDGE / name).is_file(), f"missing knowledge doc: {name}"
 
     def test_index_links_all_resolve(self):
         import re
-        index = self.KNOWLEDGE / "README.md"
-        for link in re.findall(r"\]\(([^)#]+)\)", index.read_text()):
+        for link in re.findall(r"\]\(([^)#]+)\)", self.INDEX.read_text()):
             if link.startswith(("http", "#")):
                 continue
-            assert (index.parent / link).resolve().exists(), f"dead link in index: {link}"
+            assert (self.INDEX.parent / link).resolve().exists(), f"dead link in index: {link}"
+
+    def test_index_routes_to_every_prose_reference(self):
+        """A prose file the index does not name is a file nobody will find."""
+        text = self.INDEX.read_text()
+        for name in ("datasets.md", "cast_structure.md", "accession_field_guide.md",
+                     "wod_code_tables/standardization_rules.md"):
+            assert name in text, f"the wod-reference skill does not route to {name}"
 
     @pytest.mark.parametrize("question,terms", [
         ("plankton is not a Table 3a variable", ["Biological Header", "upper and lower depth"]),

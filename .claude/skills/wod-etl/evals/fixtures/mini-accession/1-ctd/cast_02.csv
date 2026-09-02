@@ -1,0 +1,11 @@
+# Latitude: 34.402
+# Longitude: -120.733
+# Date: 2024-03-04
+# Time (UTC): 14:40
+# Station: 002
+Depth (m),Temperature (deg C),Salinity (PSU),Conductivity (S/m)
+0,15.61,33.38,4.400
+10,15.20,33.44,4.365
+25,13.88,33.66,4.258
+50,11.70,33.90,4.069
+100,9.31,34.05,3.840

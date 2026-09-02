@@ -3,10 +3,21 @@
 Converts oceanographic data from an NCEI accession URL into standardized, CF-compliant
 NetCDF profiles following World Ocean Database conventions.
 
-Built to run unattended. An agent is given an accession link plus instructions and calls one
-function; discovery, download, schema mapping, unit conversion, QC flagging, writing and
-validation all happen without a human in the loop. Every file's outcome is recorded, and a
-file that fails does not stop the run.
+Built to run unattended. An agent is given an accession link and calls one function;
+triage, discovery, download, format identification, dataset classification, schema mapping,
+unit conversion, QC flagging, writing and validation all happen without a human in the loop.
+Every file's outcome is recorded, and a file that fails does not stop the run.
+
+It works out what each file **is** rather than being told: the format from its bytes (NetCDF,
+Sea-Bird `.cnv`, fixed-width ASCII, spreadsheets, delimited text, no extension at all), and
+the WOD dataset from its own path, header, columns and depth spacing. Files that cannot
+become a WOD profile — currents, plankton, empty columns, documentation — are skipped with a
+stated reason, and with a note of the metadata still worth taking from them.
+
+It maps the **metadata**, not only the measurements: the probe, the ship, the bottom depth,
+the sampling gear, the measurement scale, the originator's units and the originator's own
+quality flags all land in the WOD field that holds them, each with the URL of the code list
+its values are coded against.
 
 ---
 
@@ -14,7 +25,7 @@ file that fails does not stop the run.
 
 ```bash
 uv sync            # runtime + dev dependencies, into .venv
-uv run pytest -q   # 112 tests
+uv run pytest -q   # 323 tests
 ```
 
 Run everything with `uv run` from the project root.
@@ -34,61 +45,52 @@ Run everything with `uv run` from the project root.
 A folder of files that carry their own coordinates goes straight through:
 
 ```python
+from wod_etl.discovery import classify_accession
 from wod_etl.orchestration import process_accession
 from wod_etl.verify import audit_dataset
 
-result = process_accession("data/staging/0287423/2-CTD", dataset_type="CTD",
+classify_accession("data/raw/0287423")       # what is in here, folder by folder, and why
+
+result = process_accession("data/staging/0287423/2-CTD",
                            output_dir="data/processed/2-CTD", run_id="ctd")
 print(audit_dataset("data/staging/0287423/2-CTD", "CTD", "data/processed/2-CTD")["text"])
 ```
 
+**`dataset_type` is optional and normally omitted** — each file is classified on its own
+evidence. Pass it only to force one type on a whole run, or use
+`dataset_overrides={"3-XBT": "XBT"}` to name the folders you know and let the rest be
+classified.
+
 Look before a large run:
 
 ```python
-process_accession(src, dataset_type="CTD", dry_run=True)   # what would be processed
-process_accession(src, dataset_type="CTD", limit=3)        # prove the shape on 3 files
+process_accession(src, dry_run=True)   # what would be processed, and as what
+process_accession(src, limit=3)        # prove the shape on 3 files
 ```
 
 Re-invoking with the same `run_id` resumes: completed files are skipped, interrupted ones
 retried. `retry_failed=True` also re-attempts failures.
 
-### An accession is not a dataset
+### Before you run it
 
-Do **not** point `process_accession` at an accession root and read the pass count. A real
-NCEI accession is a submitter's whole cruise — two dozen numbered folders of which only a
-few are WOD profile data, plus readmes, cruise reports and imagery. Triage first:
+Three things that decide whether the output is trustworthy — all covered in the skill,
+[`.claude/skills/wod-etl/SKILL.md`](.claude/skills/wod-etl/SKILL.md):
 
-1. **Is there a Table 3a measured variable in it?** Plankton biomass, bottom depth,
-   currents, nitrite, PAHs and eDNA cannot become profiles. See
-   [standardization_rules.md](knowledge/wod_code_tables/standardization_rules.md) →
-   *What the profile path cannot carry*.
-2. **Is there any data?** Count real values per column — whole columns are often
-   `Not analyzed`.
-3. **Where do its coordinates live?** In the data file, in a sibling station list, or only
-   in the readme PDF. That decides whether it needs [Phase 0](wod_etl/staging/README.md).
+- **An accession is not a dataset.** Triage every folder first with `classify_accession`;
+  most folders in a real accession are not WOD profile data. Give each dataset its own
+  `run_id` and `output_dir`.
+- **`status: "complete"` is not a quality result.** It means every file was written and
+  passed structural validation. A column in the wrong unit, a dropped variable and a
+  spurious QC flag all produce a clean run. Run `audit_dataset` and read the value ranges.
+- **`unmapped_columns` are dropped silently.** The run report names the ones WOD cannot
+  store, in `unstorable_columns_dropped`; checking `unmapped_columns` is the only way the
+  rest surface. Metadata columns and originator flag columns are *consumed*, not dropped,
+  so they appear in neither.
 
-Then give each dataset its own `run_id` and `output_dir`, and run `audit_dataset` on each.
-
-### `status: "complete"` is not a quality result
-
-It means every file was written and passed structural validation. A column in the wrong
-unit, a dropped variable and a spurious QC flag all produce a clean run. Always open a
-finished file and read the value ranges — that is how unit errors and instrument artifacts
-surface, and `audit_dataset` prints them per dataset.
-
-### What comes back
-
-```python
-{"status": "complete" | "incomplete" | "aborted" | "error" | "empty" | "dry_run",
- "counts": {"done": 42, "failed": 3, "skipped": 5},
- "failure_rate": 0.06,
- "outputs": ["data/processed/cast_01.nc", ...],
- "failures": [{"key": "cast_07.csv", "stage": "load_tabular", "error": "..."}],
- "manifest_path": "data/staging/manifests/<run_id>.json"}
-```
-
-A run aborts on its own if more than half of the attempts fail, on the assumption that
-something systematic is wrong rather than the files being individually bad.
+The skill also documents the full result dict, the failure and resume semantics, the mapping
+contract, the QC flag scales, and how the dataset is decided per file.
+[`.claude/skills/wod-etl/reading-unknown-files.md`](.claude/skills/wod-etl/reading-unknown-files.md)
+is the procedure for a file that does not just open.
 
 ---
 
@@ -104,7 +106,7 @@ something systematic is wrong rather than the files being individually bad.
               ▼
   wod_etl/orchestration/         process_accession — drives everything, records outcomes
               │
-              ├─ Phase 1  wod_etl/discovery/      list → peek → profile → download → split → load
+              ├─ Phase 1  wod_etl/discovery/      triage → list → download → sniff → read → classify
               ├─ Phase 2  wod_etl/mapping/        WOD spec lookup → mapping contract
               ├─ Phase 3  wod_etl/qc_transforms/  unit conversion → QC flags
               └─ Phase 4  wod_etl/writers/        ragged NetCDF
@@ -156,6 +158,10 @@ declarative joiner to fit.
 
 | Function | Purpose |
 | --- | --- |
+| `classify_accession(root)` | Triage the whole accession: a `process`/`exclude`/`inspect` verdict per folder, with the format, dataset type, empty columns and evidence per file. Run this first. |
+| `classify_dataset(path, columns, header_text, depth_increment_m)` | Which WOD dataset a file is — or whether it is WOD profile data at all. Returns the evidence, not just the answer. |
+| `sniff_format(path)` | What a file actually is, from its bytes: NetCDF, Sea-Bird `.cnv`, spreadsheet, delimited, fixed-width, JSON, PDF, archive, unknown binary. Extensions are not consulted. |
+| `read_any(path, sniff)` | Read any supported format into the same shape: one entry per cast, each with a DataFrame and a `Key: value` header block. |
 | `list_remote_directory(url_or_path, recursive, filter_extension)` | Crawl an HTTP index or local folder. Parses size and last-modified, and refuses to follow links out of the starting directory. |
 | `fetch_and_peek_file(path, num_bytes)` | Read only the first N bytes via HTTP Range — identify a file without downloading it. |
 | `profile_raw_data(preview_text, path)` | Separate header comments from data, sniff the delimiter, read column names. |
@@ -168,8 +174,11 @@ declarative joiner to fit.
 | Function | Purpose |
 | --- | --- |
 | `query_wod_spec(dataset_type, variable_query, depth_increment_m)` | WOD standards lookup, loaded from `knowledge/wod_code_tables/`. Resolves the real dataset code. |
-| `generate_field_mapping(profile_result, spec_result)` | Build the mapping contract. |
-| `match_variable(column_name)` | Column name → WOD variable code. Normalizes away unit suffixes. |
+| `generate_field_mapping(profile_result, spec_result, df)` | Build the mapping contract, measurements and metadata together. |
+| `map_metadata(header_text, columns, df)` | Everything that is not a measurement: Table 4a cast metadata from header lines and from columns, Table 5a per-variable metadata, and the originator's quality flags. Each coded field carries its published code list. |
+| `match_variable(column_name)` | Column name → WOD variable code. Normalizes away unit suffixes — and refuses the names that look like variables and are not. |
+| `explain_column(column_name)` | Why a column has no code, for the ones that must **not** be aliased: potential temperature, conductivity, sigma-t, sound velocity, nitrite, ammonium, turbidity. The single registry. |
+| `extract_unit(name)` / `extract_scale(name)` | What normalisation throws away, kept: `"deg C"` and `"ITS-90"` out of `t090C: Temperature [ITS-90, deg C]`. |
 | `resolve_dataset(label, depth_increment_m)` | Route an instrument label to a WOD dataset. |
 
 ### Phase 3 — Conversions and QC (`wod_etl/qc_transforms/`)
@@ -205,88 +214,31 @@ dropped column and an impossible value all pass the validator.
 | `query_wod_knowledge(query, kind, depth_m)` | Look up a variable, dataset, header, flag, threshold or constant — every answer carries its manual page citation. |
 | `search_manual(term)` | Keyword search over the manual's prose for anything not in a table. |
 | `wod_variables()` / `wod_datasets()` / `qc_flag_scales()` / … | Whole tables, for pipeline code. |
+| `variable_specific_headers()` / `biological_headers()` / `taxa_biomass_variables()` | Tables 5a, 6a and 7a — per-variable metadata, plankton collection metadata, Taxa-Record fields. |
+| `classify_taxa_code(code)` / `plankton_grouping_code()` | What a Taxa-Record variable number means (Table 8), and the PGC (Table 9). |
+| `code_table_link(namespace, code)` / `code_table_hub(name)` | The online code list for a coded metadata field. WOD publishes these as links beside each manual entry — PDF annotations that do not survive a text extraction, so they are extracted here. |
 
 ### Orchestration (`wod_etl/orchestration/`)
 
 | Function | Purpose |
 | --- | --- |
 | `process_accession(url, ...)` | The entry point. Everything, for every file, with bookkeeping. |
-| `process_one_file(url, dataset_type, out_dir, run_id)` | All four phases for one file, no manifest. |
+| `process_one_file(url, dataset_type, out_dir, run_id)` | Every phase for one file, no manifest. `dataset_type=None` classifies it. |
 | `run_manifest.*` | The ledger: `resume_or_create`, `pending_items`, `mark`, `summarize`, `list_runs`. |
 
 ---
 
-## The mapping contract
-
-`generate_field_mapping` produces the artifact every later phase reads. Inspect it first
-when a file behaves oddly.
-
-```python
-{"column_mapping": [{"raw_column": "Temp (deg F)", "wod_code": 1,
-                     "wod_name": "Temperature", "target_unit": "Degrees Celsius",
-                     "conversion_needed": "fahrenheit_to_celsius"}],
- "extracted_header_metadata": {"1": {"name": "Accession Number", "value": "0287423"}},
- "parsed_coordinates": {"latitude": 61.93, "longitude": -172.27, "year": 1985, ...},
- "missing_required_coordinates": [],
- "unmapped_columns": ["Cond"],
- "warnings": [],
- "ready_for_transform": true}
-```
-
-- **`unmapped_columns` are dropped from the output.** Check this before trusting a run. To
-  map one, add an alias to `VARIABLE_ALIASES` in `wod_etl/mapping/query_wod_spec.py`.
-- **`missing_required_coordinates`** means the file will fail validation later.
-- **`ready_for_transform: false`** means do not proceed without looking.
-
-### Dataset routing
-
-`XCTD` is not a WOD dataset. XCTD and CTD are routed by **resolution, not instrument**
-(manual p.19): depth increment below 2 m → `CTD`, otherwise → `OSD`. The pipeline measures
-each cast's median depth spacing and decides. Passing `dataset_type="XCTD"` is correct;
-expect some outputs to report `wod_dataset_type = OSD`.
-
----
-
-## Quality flags
-
-Two scales, both from manual Table 12. **The same integer means different things in each** —
-that is per the manual, not a bug.
-
-`z_qc` — depth flags:
-
-| | |
-| --- | --- |
-| 0 | accepted |
-| 1 | duplicate or inversion in recorded depth |
-| 2 | density inversion |
-
-`<var>_qc` — observed level flags:
-
-| | |
-| --- | --- |
-| 0 | accepted |
-| 1 | range outlier |
-| 2 | failed inversion check (MIV) |
-| 3 | failed gradient check (MGV) |
-| 4 | zero-sensitivity |
-| 5 | combined gradient and inversion |
-| 6 | range and inversion |
-| 7 | range and gradient |
-| 9 | range, gradient and inversion |
-
-Nothing is deleted — flagged levels are what the manual excludes at interpolation time. A
-file full of non-zero flags is still valid output.
-
----
-
-## Knowledge base
+## WOD ground truth
 
 `knowledge/wod_readme.pdf` is the WOD 2023 User's Manual (131 pages). Its tables are
 extracted to JSON with page citations, and the code loads them from there rather than
-hardcoding values.
+hardcoding values — `wod_etl/reference/` is the loader.
 
-**[`knowledge/README.md`](knowledge/README.md) is the index.** It routes each kind of
-question to the file that answers it, so the manual does not have to be re-read mid-task:
+**[`.claude/skills/wod-reference/SKILL.md`](.claude/skills/wod-reference/SKILL.md) is the
+index.** It routes each kind of WOD question — a variable code, a flag value, a unit, a
+threshold, which dataset applies, where the manual covers something — to the table or prose
+file that answers it, so the manual does not have to be re-read mid-task. In Claude Code it
+loads itself as the `wod-reference` skill.
 
 | Tier | For | Cost |
 | --- | --- | --- |
@@ -300,35 +252,11 @@ question to the file that answers it, so the manual does not have to be re-read 
 | [`datasets.md`](knowledge/datasets.md) | The eleven datasets, and how to choose — resolution decides CTD vs OSD, motion distinguishes MRB/PFL/DRB, what a cruise and a cast are |
 | [`cast_structure.md`](knowledge/cast_structure.md) | The seven parts of a cast, the four colliding numbering systems, where information belongs when it is not a Table 3a variable |
 | [`wod_code_tables/standardization_rules.md`](knowledge/wod_code_tables/standardization_rules.md) | QC procedure and flags, what the profile path cannot carry, the SUR model, unit traps |
-| [`accession_field_guide.md`](knowledge/accession_field_guide.md) | How submissions arrive, and the intermediate format contract |
-
-| File | Contents |
-| --- | --- |
-| `table_2_datasets.json` | The eleven WOD dataset names (p.17) |
-| `table_3a_variables.json` | 29 measured variables — code, unit, datasets (p.18) |
-| `table_3b_unit_constants.json` | Atomic weights, molar volume of O₂ (p.19) |
-| `table_4a_secondary_headers.json` | 67 secondary header codes (p.23) |
-| `table_11_range_variables.json` | Which variables get range checks (p.54) |
-| `table_12_qc_flags.json` | All five QC flag scales (p.55) |
-| `table_13_gradients.json` | MGV / MIV / ZSI factors (p.56) |
-| `appendix_11_ranges.json` | Acceptable ranges by depth, 33 levels (pp.87–113) |
-| `standardization_rules.md` | The QC procedure, what the profile path cannot carry, the SUR model, unit traps |
+| [`accession_field_guide.md`](knowledge/accession_field_guide.md) | How submissions arrive, what `49-46.9858N` means, the date/time traps, and the intermediate format contract |
+| [`plankton_biomass.md`](knowledge/plankton_biomass.md) | Why plankton belongs in WOD but not in a profile, the Taxa-Record model, what to report today, what a plankton tool still needs |
 
 **Never hardcode a WOD code, unit or threshold from memory.** Read the JSON, or the PDF page
 it cites.
-
-[`accession_field_guide.md`](knowledge/accession_field_guide.md) is ground truth about how
-submissions actually *arrive*, as opposed to what WOD requires:
-
-- **What not to add** — currents, imagery, catch data, plankton biomass, bathymetry, and
-  anything 100% unanalysed
-- **Coordinates** — what `49-46.9858N` means, non-English headers (経度/緯度 and the
-  longitude-before-latitude trap), and why a hemisphere letter beats a minus sign
-- **Table shapes** — units rows, metadata blocks, footer legends, missing-value legends
-- **One cast across many files** — one file per depth, or one file per variable
-- **Dates and times** — reaching UTC, and why "Julian year-day" is *not* the Julian calendar
-- **The intermediate format contract** — what every output guarantees, so a single routine
-  can convert it to WOD binary
 
 ---
 
@@ -339,13 +267,15 @@ and **skills** (the code). Everything else is scaffolding.
 
 ```
 .
-├── docs/AGENT.md                      ← INSTRUCTIONS. Canonical, runtime-neutral.
-├── CLAUDE.md  GEMINI.md  AGENTS.md    Thin pointers to docs/AGENT.md, one per runtime
-├── .claude/skills/wod-etl/SKILL.md    Pointer too — keeps /wod-etl working in Claude Code
+├── .claude/skills/                    ← INSTRUCTIONS. Agent Skills, canonical.
+│   ├── wod-etl/SKILL.md               The procedure: triage, stage, process, verify
+│   ├── wod-etl/reading-unknown-files.md   Six questions for a file that will not just open
+│   ├── wod-etl/mapping-and-metadata.md    The contract, the metadata namespaces, the flags
+│   └── wod-reference/SKILL.md         WOD lookup: which tier answers which question
+├── CLAUDE.md  GEMINI.md  AGENTS.md    Thin pointers to wod-etl/SKILL.md, one per runtime
 │
 ├── wod_etl/                           ← CODE. A normal importable Python package.
 │   ├── config.py                      Paths, HTTP settings, WOD constants, failure policy
-│   ├── knowledge/                     Table loading + query_wod_knowledge
 │   ├── staging/                       Phase 0 (only when a file needs it)
 │   ├── discovery/                     Phase 1
 │   ├── mapping/                       Phase 2
@@ -356,12 +286,12 @@ and **skills** (the code). Everything else is scaffolding.
 │   └── orchestration/                 The driver and the run ledger
 │
 ├── knowledge/                         ← KNOWLEDGE. Ground truth, not code.
-│   ├── README.md                      Index — which tier answers which question
 │   ├── wod_readme.pdf                 WOD 2023 User's Manual, 131 pages
 │   ├── datasets.md                    The eleven datasets and how to choose
 │   ├── cast_structure.md              The seven parts of a cast; the colliding code tables
-│   ├── wod_code_tables/               8 JSON tables + standardization_rules.md
+│   ├── wod_code_tables/               12 JSON tables + standardization_rules.md
 │   ├── accession_field_guide.md       How submissions arrive; the intermediate contract
+│   ├── plankton_biomass.md            The plankton path: why it is not a profile
 │   └── wod_readme_db/page_text.json   Page cache for search_manual (rebuildable)
 │
 ├── data/                              ← DATA. A run's working area.
@@ -369,17 +299,26 @@ and **skills** (the code). Everything else is scaffolding.
 │   ├── staging/manifests/             One JSON ledger per run
 │   └── processed/                     Output .nc files
 │
-├── tests/                             225 tests
+├── scripts/                           One-off extractors, e.g. the code-table links
+├── tests/                             Unit suites + the layout guard
 ├── README.md
 └── pyproject.toml
 ```
 
 **Why instructions and code are separate** — the package is a normal root-level Python
 package, owned by no agent runtime's directory convention, so `uv sync` installs it editable
-and `import wod_etl` works from anywhere. The procedure lives once in `docs/AGENT.md`;
-`CLAUDE.md`, `GEMINI.md`, `AGENTS.md` and `.claude/skills/wod-etl/SKILL.md` are ~20-line
-pointers to it. Each runtime finds the file it looks for, and there is still only one copy
-of the instructions to maintain.
+and `import wod_etl` works from anywhere.
+
+The instructions follow [Anthropic's Agent Skills
+format](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview): the
+procedure lives once in `.claude/skills/wod-etl/SKILL.md`, which loads on demand and links
+one level deep to the per-phase docs and the knowledge base — no intermediate hops. WOD
+lookup is a second skill because it has a different trigger: a question about a code or a
+flag is not a request to process files. `CLAUDE.md`, `GEMINI.md` and `AGENTS.md` are
+~20-line pointers so a runtime that does not read `.claude/skills/` still finds the
+procedure, and there is still only one copy to maintain.
+
+The files are plain markdown, so they work in any runtime; nothing requires Claude Code.
 
 Requirements are a shell, Python 3.12+ and file reading — nothing runtime-specific.
 
@@ -403,6 +342,31 @@ failure, and produces validated output. It also asserts that **every JSON table 
 and then quietly go unused. Tests that pin a previously-fixed defect say so in
 their docstring, so a regression is recognisable rather than just red.
 
+`tests/test_project_layout.py` guards the instruction layout itself: that each `SKILL.md`
+carries the procedure rather than a pointer to it, that its frontmatter stays within the
+Agent Skills limits, that every link in it resolves, and that no retired index reappears as
+a middle hop.
+
+### Skill evaluations
+
+The skills are evaluated separately from the unit tests, because "does Claude do the right
+thing with this instruction" is not a pytest question:
+
+```
+.claude/skills/wod-etl/evals/evals.json        10 cases + two fixture accessions
+.claude/skills/wod-reference/evals/evals.json   9 cases
+```
+
+Each case is a prompt plus the behaviour expected of it — triaging a mixed accession,
+staging sidecar coordinates, reporting a dropped column rather than aliasing it, routing a
+plankton folder to the path it actually belongs on. Two fixture accessions:
+`evals/fixtures/mini-accession/` is five folders — two CTD, one of currents, one entirely
+unanalysed, and a readme; `evals/fixtures/mixed-formats/` is four formats that all lie about
+themselves — NetCDF with no extension, a Sea-Bird `.cnv` named `.txt`, headerless
+fixed-width ASCII, and a plankton table. Run them with the
+[`skill-creator` plugin](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/skill-creator),
+which spawns a clean subagent per case and benchmarks with-skill against without-skill.
+
 ---
 
 ## Known limitations
@@ -415,12 +379,16 @@ scope not yet built, not broken behaviour:
 | Range checks | Bounds are the **union across all 30 ocean basins** at each depth. Assigning a cast to a basin needs `range_area.msk` and `range_basin_list.msk` from the WOD website, which are not in the PDF. Bounds are depth-dependent but more permissive than a basin-aware check — at 3000 m the temperature envelope reaches 34 °C because the manual's Red Sea column allows it. |
 | Density checks | Depth flag `2` (density inversion, manual p.54) is defined but never assigned; seawater density is not computed. |
 | Standard levels | Interpolation to standard depths (Reiniger-Ross, p.56) is not implemented. This project produces intermediate observed-level files, which is the stage before that. |
-| Pressure → depth | `process_accession` flags a pressure-only file in `warnings` rather than converting it, because the conversion needs latitude. Convert it during [staging](wod_etl/staging/README.md) with `pressure_to_depth`, which takes the cast's own latitude. |
+| Pressure → depth | `process_accession` fails a pressure-only cast at the `mapping` stage, naming `pressure_to_depth`, rather than converting it — the conversion needs latitude. Convert it during [staging](wod_etl/staging/README.md), and record that depth was derived. |
 | `split_casts` | Heuristic: a header block after data starts a new cast. Files that separate casts some other way (a blank line, a row count, a fixed record length) will not split correctly. |
 | Manual search | `search_manual` is substring matching over cached page text, not semantic search. It finds the word you type, not the concept. Build the cache with `uv run python -m wod_etl.reference.index_manual`. |
-| Appendices not extracted | Ocean weather stations, WMO squares, taxonomic codes, standard depth levels (Appendix 9) and the Reiniger-Ross table (Appendix 10) are not in JSON. Reach them with `search_manual`, then open the PDF at that page. |
-| Instrument artifacts survive QC | The permissive basin-union range lets extreme values through. A real XCTD cast in this project ends with a 12-record linearly extrapolated tail reaching salinity 83.8; the range check caught 8 of 9 out-of-range levels, and the smooth ramp defeats the gradient check entirely. Read the value ranges from `wod_etl.verify.audit_dataset` — a physically impossible max is the signal. |
-| Plankton and biomass | Not representable. Table 3a has no plankton variable; WOD stores it in the Biological Header plus Taxa/Biomass records (manual §5–6), where a measurement carries an upper and lower depth. Such a dataset must be reported as needing that path, not forced onto a profile level. |
+| Appendices not extracted | Ocean weather stations, WMO squares, standard depth levels (Appendix 9) and the Reiniger-Ross table (Appendix 10) are not in JSON. Reach them with `search_manual`, then open the PDF at that page. The **plankton code lists** (Appendices 4.1–4.9, 5.1–5.11, 6) and the ITIS taxonomic list are not extractable at all — the manual defers them to the WOD website. |
+| WOD QC is off by default | Quality control is applied downstream, so `apply_qc_auditing` is opt-in (`run_qc=True`, or `WOD_RUN_QC=1`). The **originator's** flag columns are always carried through, verbatim and untranslated, as `<var>_qc_originator` — a submitter's `1` may mean *good* where WOD's `1` means a failed range check, and WOD's field for which set was used is secondary header 96. |
+| Metadata values are not resolved to their code lists | The link is provided, per field, from the manual's own hyperlinks; nothing fetches it. They are external, they change between WOD releases, and a cached copy would go stale silently. |
+| Instrument artifacts survive QC (when it is on) | The permissive basin-union range lets extreme values through. A real XCTD cast in this project ends with a 12-record linearly extrapolated tail reaching salinity 83.8; the range check caught 8 of 9 out-of-range levels, and the smooth ramp defeats the gradient check entirely. Read the value ranges from `wod_etl.verify.audit_dataset` — a physically impossible max is the signal. |
+| Plankton and biomass | **Not writable, but now describable.** Table 3a has no plankton variable; WOD stores it in the Biological Header (Table 6a) plus Taxa-Records (Table 7a), where a measurement carries an upper and lower depth. Those tables, the Table 8 code ranges and the Table 9 PGC are extracted, and `classify_dataset` excludes such folders with `belongs_in_wod: True` — so they reach `skipped_reasons` rather than vanishing. Writing them needs a record model that is not a profile, plus the website code lists. [`knowledge/plankton_biomass.md`](knowledge/plankton_biomass.md). |
+| Fixed-width column boundaries | Inferred from where whitespace held across the sampled rows, not declared. A column full in the sample and empty later shifts every field after it. `read_any` warns; verify against the accession's format description. |
+| Unidentified files | A profile-shaped file that names no instrument is **skipped, not guessed**. Read the folder readme and pass `dataset_type`, a `dataset_overrides` entry, or `process_unidentified_as` — the last records that it was an assumption. |
 | Below-detection values | `*DL`/`**ND` become missing, because Table 12 has no observed-level flag for them. Substituting the stated detection limit would fabricate a measurement, so it is not done. The loss can be large and must be reported. |
 | Julian year-day | Manual p.37 defines year-day 0.00 as 00:00 on 1 January, then gives a worked example implying one more. The definition is used; the choice is written into the staged header and should be confirmed. |
 | `seawater_density` | 1025 kg/m³ is an implementer's assumption, not a WOD constant — Table 3b supplies no density. It is recorded in every output's global attributes whenever a conversion used it. |

@@ -1,0 +1,17 @@
+* Sea-Bird SBE 9 Data File:
+* FileName = C:\data\ex2407_014.dat
+* NMEA Latitude = 34 15.00 N
+* NMEA Longitude = 120 30.00 W
+* System UpLoad Time = Aug 03 2024 09:15:00
+# nquan = 4
+# name 0 = prDM: Pressure, Digiquartz [db]
+# name 1 = t090C: Temperature [ITS-90, deg C]
+# name 2 = sal00: Salinity, Practical [PSU]
+# name 3 = c0S/m: Conductivity [S/m]
+# start_time = Aug 03 2024 09:15:00 [NMEA time, first data scan]
+*END*
+    1.000   15.8231   33.4102    4.4120
+    2.000   15.7118   33.4209    4.4013
+    3.000   15.5902   33.4321    4.3877
+    4.000   15.3550   33.4640    4.3612
+    5.000   15.1021   33.5011    4.3390

@@ -1,0 +1,176 @@
+[
+  {
+    "name": "triage-a-mixed-accession",
+    "skills": [
+      "wod-etl"
+    ],
+    "query": "Triage the accession in .claude/skills/wod-etl/evals/fixtures/mini-accession and tell me which folders are WOD profile data. Do not process anything yet.",
+    "files": [
+      ".claude/skills/wod-etl/evals/fixtures/mini-accession"
+    ],
+    "expected_behavior": [
+      "States a decision for every one of the five folders, including the ones it excludes",
+      "Includes 1-ctd and 3-ctd-sidecar as WOD profile data, on the evidence that each contains a Table 3a measured variable (temperature, salinity)",
+      "Excludes 2-adcp because current velocity has no Table 3a variable code and cannot become a profile",
+      "Excludes 4-nutrients because every measurement column is 'Not analyzed', so the file holds no data, rather than excluding it on the grounds that nutrients are unsupported",
+      "Notes that 3-ctd-sidecar needs staging because its positions live in stations.csv rather than in the cast table",
+      "Does not call process_accession on the accession root"
+    ]
+  },
+  {
+    "name": "stage-sidecar-coordinates",
+    "skills": [
+      "wod-etl"
+    ],
+    "query": "Stage the casts in .claude/skills/wod-etl/evals/fixtures/mini-accession/3-ctd-sidecar so they can be processed.",
+    "files": [
+      ".claude/skills/wod-etl/evals/fixtures/mini-accession/3-ctd-sidecar"
+    ],
+    "expected_behavior": [
+      "Uses wod_etl.staging rather than hand-writing a parser",
+      "Joins each cast to its position and time from stations.csv on the Station key, and splits the single table into one staged file per station",
+      "Parses the degree-decimal-minute coordinates correctly: 49-46.9858S is about -49.78 degrees, and 178-12.3300E is about 178.21 degrees",
+      "Converts the NZST time to UTC by subtracting 12 hours, and records that derivation in the staged header rather than applying it silently",
+      "Handles the units row beneath the header, folding the units into the column names so unit detection can see them (Pressure (dbar), Temperature (deg C))",
+      "Derives depth from pressure using the cast's own latitude, and records that depth was derived",
+      "Leaves the source files under the fixtures directory unmodified"
+    ]
+  },
+  {
+    "name": "report-unmapped-columns",
+    "skills": [
+      "wod-etl"
+    ],
+    "query": "Process .claude/skills/wod-etl/evals/fixtures/mini-accession/1-ctd as CTD and report what happened.",
+    "files": [
+      ".claude/skills/wod-etl/evals/fixtures/mini-accession/1-ctd"
+    ],
+    "expected_behavior": [
+      "Runs process_accession; passing dataset_type='CTD' is acceptable here because the query names it, but omitting it is equally correct since the folder classifies as CTD on its own",
+      "Reports that the Conductivity column is dropped, from unstorable_columns_dropped or unmapped_columns",
+      "Explains that conductivity has no Table 3a code, and does NOT alias it onto an adjacent variable code to make it map",
+      "Does not add a VARIABLE_ALIASES entry for conductivity",
+      "Does not exclude the whole file because it contains a conductivity column: the cast is still a valid CTD cast",
+      "Does not treat wod_dataset_type = OSD in the output as an error: these casts have 25 m depth spacing, and routing is by resolution, not instrument",
+      "Reports the output count and the QC flag distribution rather than only the run status",
+      "Does not claim the run was fully successful without naming the dropped column"
+    ]
+  },
+  {
+    "name": "status-complete-is-not-quality",
+    "skills": [
+      "wod-etl"
+    ],
+    "query": "I ran the pipeline on 1-ctd and it returned status complete with 2 outputs. Is the data good?",
+    "files": [],
+    "expected_behavior": [
+      "Says that status 'complete' means every file was written and passed structural validation, not that the values are correct",
+      "Recommends opening a NetCDF and reading the value ranges, since a variable in the wrong unit still validates",
+      "Recommends checking unmapped_columns for the dataset",
+      "Names audit_dataset from wod_etl.verify as the way to do both at once",
+      "Does not simply confirm the run succeeded"
+    ]
+  },
+  {
+    "name": "identify-formats-without-extensions",
+    "skills": [
+      "wod-etl"
+    ],
+    "query": "Triage .claude/skills/wod-etl/evals/fixtures/mixed-formats. What is in each folder, what format is each file, and what would you do with it?",
+    "files": [
+      ".claude/skills/wod-etl/evals/fixtures/mixed-formats"
+    ],
+    "expected_behavior": [
+      "Identifies 1-argo/R5904471_042 as NetCDF despite having no file extension, rather than reporting it as unreadable or guessing from the name",
+      "Identifies 2-seabird/cast_014.txt as a Sea-Bird .cnv export despite the .txt extension, and notes that its column names live in the '# name N =' header lines",
+      "Identifies 3-old-ascii/drop_001.dat as fixed-width with no header row, and says the columns cannot be mapped until they are named",
+      "Reads 0-docs/readme.txt during triage rather than only excluding it, and uses it to learn that 3-old-ascii is bathythermograph data and that its position is stated in the readme",
+      "Classifies 1-argo as PFL and 2-seabird as CTD without being told either",
+      "Excludes 4-plankton as not WOD profile data, and says it belongs in WOD through the biological header and Taxa-Records rather than that WOD does not want it",
+      "Does not run process_accession on the accession root before triaging"
+    ]
+  },
+  {
+    "name": "dataset-type-is-decided-per-file",
+    "skills": [
+      "wod-etl"
+    ],
+    "query": "Process .claude/skills/wod-etl/evals/fixtures/mini-accession. I do not know what instruments are in it.",
+    "files": [
+      ".claude/skills/wod-etl/evals/fixtures/mini-accession"
+    ],
+    "expected_behavior": [
+      "Does not ask the user which dataset type to use, and does not default to OSD for everything: the files are classified from their own evidence",
+      "Calls process_accession without a dataset_type argument, or calls classify_accession first and then processes the folders it identified",
+      "Reports dataset_types from the result rather than only the done/failed counts",
+      "Reports 2-adcp as skipped because current velocity has no Table 3a code, not as a failure",
+      "Reports 4-nutrients as holding no measurements, distinguishing that from a parse failure",
+      "Reports that 3-ctd-sidecar needs staging because its coordinates are in stations.csv, and does not claim those casts were written",
+      "Names the dropped Conductivity column"
+    ]
+  },
+  {
+    "name": "plankton-is-an-unfinished-item",
+    "skills": [
+      "wod-etl"
+    ],
+    "query": "The accession at .claude/skills/wod-etl/evals/fixtures/mixed-formats has a 4-plankton folder. Can you process it into WOD NetCDF?",
+    "files": [
+      ".claude/skills/wod-etl/evals/fixtures/mixed-formats/4-plankton"
+    ],
+    "expected_behavior": [
+      "Says plankton biomass DOES belong in WOD, and that this pipeline cannot write it: those are two separate facts and both must be stated",
+      "Explains the structural reason: a haul measures over a depth RANGE (upper and lower depth), not at a level, and there is no Table 3a variable code for plankton at all",
+      "Names the Biological Header (Table 6a) and Taxa-Records (Table 7a) as where it belongs, ideally citing manual pages 30-35",
+      "Does not map displacement volume or wet weight onto an adjacent Table 3a code to make it fit",
+      "Reports it as an unfinished item rather than as a success or a failure",
+      "Names what a future plankton tool would still need, such as the Appendix 4 and 5 code lists and the ITIS taxonomic list, which are on the WOD website rather than in the manual"
+    ]
+  },
+  {
+    "name": "metadata-is-mapped-not-only-measurements",
+    "skills": [
+      "wod-etl"
+    ],
+    "query": "Process this CTD cast and tell me everything that ended up in the output, not just the measured variables.",
+    "files": [],
+    "expected_behavior": [
+      "Names the Table 4a secondary headers that were captured, such as platform, station, probe type, bottom depth or water sampler, rather than only listing measured variables",
+      "Distinguishes Table 4a secondary headers (describe the cast) from Table 5a variable specific second headers (describe one variable and repeat per variable)",
+      "Reports the originator's units and, where the column names a scale such as ITS-90 or PSS-78, the scale, as per-variable metadata rather than discarding them once the conversion is applied",
+      "Says that a bottom depth column becomes secondary header 10 rather than a measured variable, and is not the depth axis",
+      "Does not claim a column was dropped when it was consumed as metadata or as a quality flag",
+      "Mentions that a coded field carries the URL of its published code list, and does not invent the meaning of a code value"
+    ]
+  },
+  {
+    "name": "keep-originator-flags-do-not-run-wod-qc",
+    "skills": [
+      "wod-etl"
+    ],
+    "query": "This file has a Temperature_QC column with values 1, 1, 3. Process it and tell me what happened to those flags.",
+    "files": [],
+    "expected_behavior": [
+      "Keeps the originator's flag values verbatim (1, 1, 3) and does NOT translate them to WOD Table 12 flags",
+      "Explains why translation is impossible without knowing the flag set: an originator's 1 may mean good where WOD's 1 means a failed range check",
+      "Names secondary header 96 (Originator's Flags) as WOD's field for which flag set was used, and says it is unknown unless the file or the accession documentation states it",
+      "Does not run WOD QC by default, and does not present the absence of a <var>_qc array as a problem",
+      "If asked to run WOD QC, uses run_qc=True rather than translating the originator's flags"
+    ]
+  },
+  {
+    "name": "potential-temperature-is-not-temperature",
+    "skills": [
+      "wod-etl"
+    ],
+    "query": "My CTD file has a 'Potential Temperature (deg C)' column and it came back unmapped. Add an alias for it so it maps to temperature.",
+    "files": [],
+    "expected_behavior": [
+      "Refuses to add the alias, and explains that potential temperature is derived rather than measured, so Table 3a code 1 (in-situ temperature) is the wrong code for it",
+      "Gives the concrete failure: with both columns present the cast claims Temperature twice; with only theta present the cast silently reports the wrong quantity",
+      "Says theta can be converted to in-situ temperature if pressure and salinity are known, and that this is a staging computation with the derivation recorded, not a rename",
+      "Recommends mapping the in-situ temperature column instead when the file has one",
+      "Does not edit VARIABLE_ALIASES to satisfy the request"
+    ]
+  }
+]

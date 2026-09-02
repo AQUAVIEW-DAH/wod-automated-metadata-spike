@@ -1,0 +1,134 @@
+[
+  {
+    "name": "flag-scales-do-not-collide",
+    "skills": [
+      "wod-reference"
+    ],
+    "query": "What does a QC flag value of 2 mean in this project's output?",
+    "files": [],
+    "expected_behavior": [
+      "Distinguishes the two scales rather than giving one answer: on z_qc, 2 is a density inversion; on an observed-level <var>_qc, 2 is a failed inversion check",
+      "Attributes both to manual Table 12 and notes the collision is per the manual, not a bug",
+      "Loads the values from knowledge/wod_code_tables/table_12_qc_flags.json via wod_etl.reference rather than reciting them from memory",
+      "Does not open knowledge/wod_readme.pdf"
+    ]
+  },
+  {
+    "name": "variable-not-stored-by-wod",
+    "skills": [
+      "wod-reference"
+    ],
+    "query": "Does WOD store conductivity? What is its variable code?",
+    "files": [],
+    "expected_behavior": [
+      "Answers that conductivity has no Table 3a variable code and WOD does not store it on the profile path",
+      "Checks table_3a_variables.json rather than guessing a code",
+      "Does not invent or approximate a code, and does not suggest mapping it onto an adjacent variable",
+      "May point out that sigma-t, sound velocity, nitrite, ammonium, CDOM and turbidity are in the same position"
+    ]
+  },
+  {
+    "name": "dataset-selection",
+    "skills": [
+      "wod-reference"
+    ],
+    "query": "What is the difference between MRB, DRB and PFL, and how do I choose between CTD and OSD?",
+    "files": [],
+    "expected_behavior": [
+      "Explains MRB/DRB/PFL by platform motion: moored buoy, drifting buoy, profiling float",
+      "States that CTD vs OSD is decided by vertical resolution, not by instrument -- depth increment below 2 m goes to CTD, otherwise OSD",
+      "Cites the manual page for the dataset table (p.17) or the resolution rule (p.19)",
+      "Reads knowledge/datasets.md rather than the PDF"
+    ]
+  },
+  {
+    "name": "deferred-appendix-is-locatable",
+    "skills": [
+      "wod-reference"
+    ],
+    "query": "Where does the WOD manual define the Reiniger-Ross interpolation coefficients?",
+    "files": [],
+    "expected_behavior": [
+      "Uses search_manual to find the page rather than paging through the PDF or guessing",
+      "Reports Appendix 10, around p.82",
+      "Notes that this appendix is deliberately not extracted to JSON because standard-level interpolation is not implemented here",
+      "Opens the PDF only at the located page, if at all"
+    ]
+  },
+  {
+    "name": "namespaces-collide-on-small-integers",
+    "skills": [
+      "wod-reference"
+    ],
+    "query": "What does WOD code 4 mean?",
+    "files": [],
+    "expected_behavior": [
+      "Says the question is ambiguous because several WOD tables number from 1 and mean different things",
+      "Names more than one of: Phosphate (Table 3a), Institution Code (Table 4a), Institution (Table 5a), Type of tow (Table 6a), Biomass value (Table 7a)",
+      "Explains the difference in scope between a Table 4a secondary header, which describes the cast, and a Table 5a variable specific second header, which describes one variable and repeats per variable",
+      "Asks which context the number came from, or lists the candidates rather than silently picking one",
+      "Loads the tables rather than answering from memory, and cites manual pages"
+    ]
+  },
+  {
+    "name": "variable-specific-second-header",
+    "skills": [
+      "wod-reference"
+    ],
+    "query": "My nutrient file has a column called 'Nitrate + Nitrite'. How does WOD store that, and where does the instrument and method metadata for a single variable go?",
+    "files": [],
+    "expected_behavior": [
+      "Says nitrate+nitrite IS storable, as Table 3a code 8, and not as a separate nitrite variable",
+      "Names variable specific second header 17 ('Contains nitrite', set to 1) as how the combination is recorded",
+      "Identifies Table 5a as the place per-variable metadata lives: scale (3), instrument (5), methods (6), originator's units (8)",
+      "Distinguishes Table 5a from Table 4a rather than conflating them",
+      "Does not send the user to the PDF for this: it is in knowledge/wod_code_tables/table_5a_variable_specific_headers.json"
+    ]
+  },
+  {
+    "name": "plankton-storage-model",
+    "skills": [
+      "wod-reference"
+    ],
+    "query": "How does WOD store zooplankton biomass? What is a Taxa-Record, and what does a variable number of -5002 mean?",
+    "files": [],
+    "expected_behavior": [
+      "Explains that a Taxa-Record is one taxonomic description over a depth RANGE (upper and lower depth), not a value at a level",
+      "Says how many Taxa-Records a case produces, e.g. ten species at five bottle depths gives 50",
+      "Names the biological header (Table 6a) as the collection metadata and Table 7a as the observation fields",
+      "Identifies -5002 as falling in the -5000 to -5999 non-taxonomic group range of Table 8, and does not confuse it with a Table 3a code",
+      "Mentions that several Table 7a fields switch unit on the sign of the value, so a negative value is not missing data",
+      "Notes that the Appendix 4/5/6 code lists and the ITIS list are not in this repository or in the manual, but on the WOD website"
+    ]
+  },
+  {
+    "name": "code-list-is-a-link-not-a-pdf-page",
+    "skills": [
+      "wod-reference"
+    ],
+    "query": "Where do I find the list of WOD probe type codes, and what about the code list for the originator's flag sets?",
+    "files": [],
+    "expected_behavior": [
+      "Gives the probe-type code list URL for secondary header 29, from code_table_link('secondary_header', 29) rather than from memory",
+      "Gives the originator flag set list, secondary header 96",
+      "Explains that the manual defines the metadata fields while the value code lists are published online, linked beside each entry, and that those links are PDF annotations that do not survive a text extraction",
+      "Does not send the user to Appendix 2 of the PDF to read the codes: that appendix is itself a page of links",
+      "Prefers the CSV over the HTML when the values themselves are wanted",
+      "Does not fabricate what probe type 7 means without fetching or being given the list"
+    ]
+  },
+  {
+    "name": "potential-temperature-has-no-wod-code",
+    "skills": [
+      "wod-reference"
+    ],
+    "query": "What is the WOD variable code for potential temperature?",
+    "files": [],
+    "expected_behavior": [
+      "Says there is none: Table 3a code 1 is in-situ temperature and potential temperature is derived",
+      "Explains the consequence of treating them as the same code rather than only stating the rule",
+      "Notes that theta can be converted to in-situ temperature given pressure and salinity",
+      "Does not answer '1'"
+    ]
+  }
+]
