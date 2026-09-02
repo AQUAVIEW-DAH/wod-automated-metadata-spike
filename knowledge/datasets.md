@@ -63,7 +63,9 @@ SUR silently discards them.
 Table 2 lists plankton under OSD, which is true of the *dataset* and misleading about the
 *record structure* — plankton lives in the Biological Header and Taxa/Biomass records, where
 a measurement carries an upper and lower depth. See
-[`cast_structure.md`](cast_structure.md) and *What the profile path cannot carry* in
+[`plankton_biomass.md`](plankton_biomass.md) for the whole picture,
+[`cast_structure.md`](cast_structure.md) for where it sits in a cast, and *What the profile
+path cannot carry* in
 [`wod_code_tables/standardization_rules.md`](wod_code_tables/standardization_rules.md).
 
 ---

@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Union
 from wod_etl.config import CODE_TABLES_DIR, WOD_README_PDF
 from wod_etl.reference.load_tables import (
     available_tables,
+    biological_headers,
+    classify_taxa_code,
     depth_flags,
     gradient_factors,
     load_table,
@@ -21,13 +23,21 @@ from wod_etl.reference.load_tables import (
     qc_flag_scales,
     range_check_variables,
     range_levels,
+    taxa_biomass_variables,
     unit_constants,
+    variable_specific_headers,
     wod_datasets,
     wod_secondary_headers,
     wod_variables,
 )
 
-KINDS = ("variable", "dataset", "secondary_header", "flag", "gradient", "range", "constant")
+KINDS = ("variable", "dataset", "secondary_header", "variable_specific_header",
+         "biological_header", "taxa_variable", "flag", "gradient", "range", "constant")
+
+# Five separate namespaces now collide on small integers, and a bare number is searched in
+# all of them on purpose. "What is code 4" has five answers -- Phosphate (Table 3a),
+# Institution Code (4a), Institution (5a), Type of tow (6a) and Biomass value (7a) -- and
+# an agent that sees only one of them has silently picked a namespace it never chose.
 
 
 def query_wod_knowledge(
@@ -103,6 +113,51 @@ def _secondary_headers(q, _depth) -> List[Dict[str, Any]]:
     ]
 
 
+def _variable_specific_headers(q, _depth) -> List[Dict[str, Any]]:
+    return [
+        {"kind": "variable_specific_header", "id": hid, "name": h["name"],
+         "appendix": h["appendix"], "csv_field": h.get("field"),
+         "description": h["description"],
+         "scope": "one variable within a cast, repeated per variable",
+         "citation": "Table 5a/5b, WOD 2023 User's Manual pp.28-29"}
+        for hid, h in variable_specific_headers().items()
+        if _hit(q, hid, f"{h['name']} {h['description']}")
+    ]
+
+
+def _biological_headers(q, _depth) -> List[Dict[str, Any]]:
+    return [
+        {"kind": "biological_header", "id": hid, "name": h["name"], "unit": h["unit"],
+         "appendix": h["appendix"], "description": h["description"],
+         "scope": "plankton sampling metadata for a cast; not written by the profile path",
+         "citation": "Table 6a/6b, WOD 2023 User's Manual pp.30-31"}
+        for hid, h in biological_headers().items()
+        if _hit(q, hid, f"{h['name']} {h['description']}")
+    ]
+
+
+def _taxa_variables(q, _depth) -> List[Dict[str, Any]]:
+    out = [
+        {"kind": "taxa_variable", "id": vid, "name": v["name"], "unit": v["unit"],
+         "appendix": v["appendix"], "description": v["description"],
+         "scope": "a field of one Taxa-Record: a taxon over a depth RANGE, not a level",
+         "citation": "Table 7a/7b, WOD 2023 User's Manual pp.33-35"}
+        for vid, v in taxa_biomass_variables().items()
+        if _hit(q, vid, f"{v['name']} {v['description']}")
+    ]
+    # A taxa VALUE (the content of field 1) is a different question from a taxa FIELD ID.
+    # Negative numbers can only be the former, so answer that too rather than returning
+    # nothing for "-5002".
+    if isinstance(q, (int, str)):
+        text = str(q).strip()
+        if re.fullmatch(r"-\d+", text):
+            out.append({"kind": "taxa_variable", "id": 1, "name": "Variable number",
+                        "taxa_code": classify_taxa_code(int(text)),
+                        "scope": "the VALUE of Taxa-Record field 1, not a field ID",
+                        "citation": "Table 8, WOD 2023 User's Manual p.35"})
+    return out
+
+
 def _flags(q, _depth) -> List[Dict[str, Any]]:
     out = []
     for scale_name, scale in qc_flag_scales().items():
@@ -174,6 +229,9 @@ _LOOKUPS = {
     "variable": _variables,
     "dataset": _datasets,
     "secondary_header": _secondary_headers,
+    "variable_specific_header": _variable_specific_headers,
+    "biological_header": _biological_headers,
+    "taxa_variable": _taxa_variables,
     "flag": _flags,
     "gradient": _gradients,
     "range": _ranges,

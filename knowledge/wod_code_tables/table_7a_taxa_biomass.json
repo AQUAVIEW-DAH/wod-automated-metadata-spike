@@ -1,0 +1,287 @@
+{
+  "table": "Table 7a. List of biomass and taxa-specific variables (descriptions from Table 7b), with the Table 8 variable-number ranges and the Table 9 Plankton Grouping Code",
+  "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
+  "pages": [
+    32,
+    33,
+    34,
+    35,
+    36
+  ],
+  "note": "A FIFTH namespace, and the one that carries plankton biomass. These are the fields of a Taxa-Record, not of a depth level. A Taxa-Record is one taxonomic description over one depth RANGE (upper/lower depth), not a value at one depth -- which is why plankton cannot be written through the profile path in this repository. Nothing here is a Table 3a variable code.",
+  "taxa_record_structure": {
+    "definition": "The typical plankton cast stores taxon-specific and/or biomass data as individual sets of unique observations called Taxa-Records. Each holds a taxonomic description, the depth range of the observation (upper and lower depth), the original measurement (abundance, biomass or volume) and every qualifier needed to represent it (life stage, sex, size).",
+    "granularity": "One Taxa-Record per unique combination of taxonomic description, depth range and measurement type. Taxa differing only in life stage or sex code are different taxonomic descriptions and get separate records: Calanus eggs, juveniles, adult male and adult female are four records.",
+    "examples": [
+      "Biomass (displacement volume) over 0-100 m and 200-500 m -> 2 Taxa-Records, one per depth range",
+      "Biomass as displacement volume and as wet weight over 0-250 m -> 2 Taxa-Records, one per measurement type",
+      "One species counted at five bottle depths -> 5 Taxa-Records",
+      "Ten species counted at five bottle depths -> 50 Taxa-Records"
+    ],
+    "cardinality": "One cast may hold many Taxa-Records; each Taxa-Record may carry any of the fields below."
+  },
+  "unit_convention": "'UNIT' in a field name means the ORIGINATOR'S unit, given by code 20 (Appendix 3.4). Several fields switch unit on the SIGN of the value -- a negative value is not missing data, it selects the smaller unit. See per-field descriptions for codes 11, 12, 13, 14, 15, 18, 25.",
+  "appendix_column": "'App' is the manual appendix holding that field's code list (Appendices 3.4, 5.1-5.11, 6). Those code lists live in the WOD online code tables, not in this repository.",
+  "taxa_variables": {
+    "1": {
+      "name": "Variable number",
+      "unit": null,
+      "appendix": null,
+      "description": "Identifies the type of taxon or biomass sampled. Positive values are official ITIS taxon codes; negative values are WOD taxon or group codes. See taxa_code_ranges (Table 8) for the breakdown."
+    },
+    "2": {
+      "name": "Upper depth",
+      "unit": "meters",
+      "appendix": null,
+      "description": "Shallowest depth of the sample."
+    },
+    "3": {
+      "name": "Lower depth",
+      "unit": "meters",
+      "appendix": null,
+      "description": "Deepest depth of the sample."
+    },
+    "4": {
+      "name": "Biomass value",
+      "unit": "set by the biomass variable code",
+      "appendix": "5.8",
+      "description": "The biomass value measured. Units are specified by the biomass variable code -- see taxa_code_ranges (Table 8) and Appendix 5.8."
+    },
+    "5": {
+      "name": "Taxon life stage",
+      "unit": null,
+      "appendix": "5.1",
+      "description": "A specific life stage indicated for a taxonomic observation, e.g. Calanus finmarchicus nauplii."
+    },
+    "6": {
+      "name": "Taxon sex code",
+      "unit": null,
+      "appendix": "5.2",
+      "description": "A specific sex indicated for a taxonomic observation, e.g. Calanus finmarchicus female."
+    },
+    "7": {
+      "name": "Taxon present",
+      "unit": null,
+      "appendix": "5.3",
+      "description": "A non-numeric description of relative abundance or presence, e.g. rare, common, dominant."
+    },
+    "8": {
+      "name": "Taxon trophic mode",
+      "unit": null,
+      "appendix": "5.4",
+      "description": "A specific trophic description for a taxonomic observation, e.g. autotrophic picoplankton."
+    },
+    "9": {
+      "name": "Taxon realm",
+      "unit": null,
+      "appendix": "5.5",
+      "description": "A specific realm description for a taxonomic observation, e.g. bathypelagic fish."
+    },
+    "10": {
+      "name": "Taxon count",
+      "unit": "count per UNIT",
+      "appendix": null,
+      "description": "The number of an individual taxon counted, per unit as specified by code 20."
+    },
+    "11": {
+      "name": "Sample-specific sample volume",
+      "unit": "m3 per UNIT if > 0, ml per UNIT if < 0",
+      "appendix": null,
+      "description": "Used only when each sample within a tow has a different sample volume, e.g. the different volumes filtered by each net of a MOCNESS. UNIT is set by code 20."
+    },
+    "12": {
+      "name": "Taxon volume",
+      "unit": "ml per UNIT if > 0, nl per UNIT if < 0",
+      "appendix": null,
+      "description": "The volume of an individual taxon counted. UNIT is set by code 20."
+    },
+    "13": {
+      "name": "Taxon wet weight",
+      "unit": "g per UNIT if > 0, mg per UNIT if < 0",
+      "appendix": null,
+      "description": "The wet weight of an individual taxon counted. UNIT is set by code 20."
+    },
+    "14": {
+      "name": "Taxon dry weight",
+      "unit": "g per UNIT if > 0, mg per UNIT if < 0",
+      "appendix": null,
+      "description": "The dry weight of an individual taxon counted. UNIT is set by code 20."
+    },
+    "15": {
+      "name": "Taxon ash-free weight",
+      "unit": "mg per UNIT if > 0, ng per UNIT if < 0",
+      "appendix": null,
+      "description": "Table 7b names this 'Taxon ash-free dry weight': the ash-free dry weight of an individual taxon counted. UNIT is set by code 20."
+    },
+    "16": {
+      "name": "Taxon feature",
+      "unit": null,
+      "appendix": "5.6",
+      "description": "A specific feature or shape indicated in a taxonomic observation, e.g. athecate Dinoflagellate."
+    },
+    "17": {
+      "name": "Taxon modifier",
+      "unit": null,
+      "appendix": "5.7",
+      "description": "A specific taxonomic identity description, e.g. Calanus spp., Ceratium sp. A, Ceratium sp. B, Ceratium spp., other."
+    },
+    "18": {
+      "name": "Size min",
+      "unit": "mm if > 0, otherwise a code",
+      "appendix": "5.8",
+      "description": "Table 7b names this 'Minimum size range description': the smaller size range used in a taxonomic description. If > 0 the units are mm. If < 0 it is a code: -1 small, -2 medium, -3 large, -4 very small, as provided in the original taxonomic description."
+    },
+    "19": {
+      "name": "Size max",
+      "unit": "mm",
+      "appendix": "5.8",
+      "description": "Table 7b names this 'Maximum size range description': the larger size range used in a taxonomic description, in mm."
+    },
+    "20": {
+      "name": "Originator's Unit",
+      "unit": null,
+      "appendix": "3.4",
+      "description": "Additional unit identifier for biomass and taxa-specific measurements. This is the 'UNIT' referred to by codes 10-15 and 25."
+    },
+    "21": {
+      "name": "Taxon radius",
+      "unit": "micrometer",
+      "appendix": null,
+      "description": "The radius (0.5 diameter) used in a taxonomic description."
+    },
+    "22": {
+      "name": "Taxon length",
+      "unit": "micrometer",
+      "appendix": null,
+      "description": "The length or height used in a taxonomic description."
+    },
+    "23": {
+      "name": "Taxon width",
+      "unit": "micrometer",
+      "appendix": null,
+      "description": "The width or shortest dimension used in a taxonomic description."
+    },
+    "25": {
+      "name": "Taxon carbon content",
+      "unit": "g per UNIT if > 0, mg per UNIT if < 0",
+      "appendix": null,
+      "description": "The carbon content of the individual taxon counted. UNIT is set by code 20. (Table 7a heads this column 'mg or ng per UNIT'; Table 7b p.35 says 'g' and 'mg'. The two disagree -- check the value against Appendix 3.4 before using it.)"
+    },
+    "26": {
+      "name": "Count method",
+      "unit": null,
+      "appendix": "5.9",
+      "description": "Used only when multiple methods are used within a single measurement, e.g. to distinguish bacterial groups discerned and counted by different staining or fluorescent techniques within one sample."
+    },
+    "27": {
+      "name": "Common Base-unit Value (CBV)",
+      "unit": null,
+      "appendix": "5.10",
+      "description": "A per-unit-volume common base-unit value calculated from the original value using sampling metadata such as towing distance or water volume filtered."
+    },
+    "28": {
+      "name": "CBV calculation method",
+      "unit": null,
+      "appendix": "5.11",
+      "description": "Method used for calculating the CBV."
+    },
+    "30": {
+      "name": "Plankton Grouping Code (PGC)",
+      "unit": null,
+      "appendix": "6",
+      "description": "A smart index indicating a plankton taxon's membership in up to four tiered groups (O'Brien 2007). See plankton_grouping_code below."
+    }
+  },
+  "taxa_code_ranges": {
+    "table": "Table 8. Summary of Taxa Variable Number Codes",
+    "page": 35,
+    "applies_to": "taxa variable 1 (Variable number)",
+    "ranges": [
+      {
+        "from": 1,
+        "to": 700000,
+        "label": "Official ITIS code",
+        "description": "Full taxonomic detail is available on the ITIS web site."
+      },
+      {
+        "from": -405,
+        "to": -400,
+        "label": "Biomass code",
+        "description": "e.g. all biomass types, total displacement volume, total wet mass. This range and -500..-503 are the codes that make a record a BIOMASS record rather than a taxon record."
+      },
+      {
+        "from": -503,
+        "to": -500,
+        "label": "Biomass code",
+        "description": "Second biomass code range; see -400..-405."
+      },
+      {
+        "from": -1999,
+        "to": -1000,
+        "label": "Failed ITIS review code",
+        "description": "ITIS was unable to verify validity. The description may be non-existent, non-taxonomic or unidentified."
+      },
+      {
+        "from": -5999,
+        "to": -5000,
+        "label": "Non-taxonomic group code",
+        "description": "e.g. 'gelatinous organisms'."
+      },
+      {
+        "from": -6999,
+        "to": -6000,
+        "label": "Multiple taxa group code",
+        "description": "e.g. 'Foraminifera & Radiolaria'."
+      },
+      {
+        "from": -9999,
+        "to": -7000,
+        "label": "Pending ITIS review code",
+        "description": "ITIS verification in progress as of the WOD release."
+      }
+    ],
+    "principal_investigator_codes": {
+      "page": 30,
+      "note": "For assigning PI codes only, plankton data are identified as variable 14 for all plankton, -5002 for zooplankton and -5006 for phytoplankton."
+    }
+  },
+  "plankton_grouping_code": {
+    "table": "Table 9. Operational example of the Plankton Grouping Code (PGC)",
+    "pages": [
+      35,
+      36
+    ],
+    "description": "A 7-digit code placing each taxon into broader groups so a user can reach hundreds of taxa with one code. It follows the taxonomic hierarchy of The Five Kingdoms (Margulis and Schwartz 1998) and is divided into Major group (e.g. bacteria, phytoplankton, zooplankton), Minor group (e.g. cyanobacteria, diatoms, crustaceans) and Focus group (e.g. copepods). Appendix 6 lists the PGC groups and codes.",
+    "worked_example": "Calanus finmarchicus has PGC 4212000: Major group 4 (zooplankton), Minor group 21 (crustaceans), Focus group 2000 (copepods).",
+    "usage": "Multiply the PGC value by the factor for the grouping level you want, then truncate.",
+    "levels": [
+      {
+        "level": "MAJOR GROUP",
+        "multiply_by": "10^-6",
+        "examples": [
+          {"pgc": 4212000, "result": 4, "equivalent": "zooplankton"},
+          {"pgc": 4218000, "result": 4, "equivalent": "zooplankton"},
+          {"pgc": 2160000, "result": 2, "equivalent": "phytoplankton"}
+        ]
+      },
+      {
+        "level": "MINOR GROUP",
+        "multiply_by": "10^-4",
+        "examples": [
+          {"pgc": 4212000, "result": 421, "equivalent": "crustacean"},
+          {"pgc": 4218000, "result": 421, "equivalent": "crustacean"},
+          {"pgc": 2160000, "result": 216, "equivalent": "diatoms"}
+        ]
+      },
+      {
+        "level": "FOCUS GROUP",
+        "multiply_by": "10^-2",
+        "examples": [
+          {"pgc": 4212000, "result": 42120, "equivalent": "copepods"},
+          {"pgc": 4218000, "result": 42180, "equivalent": "euphausiidae"}
+        ]
+      }
+    ],
+    "history": "WOD 2005 and 2001 used a precursor called the Biological Grouping Code (O'Brien et al. 2001). The PGC merges the BGC's separate 'protist' grouping into 'phytoplankton'; current WOD carries PGC codes in place of the corresponding BGC codes."
+  }
+}

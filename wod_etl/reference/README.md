@@ -15,10 +15,10 @@ Every WOD code, unit, flag meaning and threshold this project uses comes from
 `knowledge/wod_readme.pdf` with page citations. **Never hardcode a WOD value from memory** —
 if it isn't in a table, look it up here and cite the page.
 
-**Before reaching for the PDF, read
-[`knowledge/README.md`](../../knowledge/README.md).** It routes each kind of question
-to the table or prose file that answers it, and names the short list of appendices that
-genuinely require opening the manual. `search_manual` below is the tier in between: it
+**Before reaching for the PDF, use the `wod-reference` skill**
+([`.claude/skills/wod-reference/SKILL.md`](../../.claude/skills/wod-reference/SKILL.md)).
+It routes each kind of question to the table or prose file that answers it, and names the
+short list of appendices that genuinely require opening the manual. `search_manual` below is the tier in between: it
 searches a cached copy of the full text, so it costs nothing and hands you the page.
 
 ---
@@ -49,7 +49,10 @@ query_wod_knowledge("oxygen", kind="range", depth_m=3000)
 | --- | --- | --- |
 | `variable` | code, name, standard unit, which datasets store it | Table 3a p.18 |
 | `dataset` | the eleven dataset names; explains XCTD rather than inventing it | Table 2 p.17 |
-| `secondary_header` | metadata code ids and CSV field names | Table 4a p.23 |
+| `secondary_header` | cast metadata code ids and CSV field names | Table 4a p.23 |
+| `variable_specific_header` | per-variable metadata: scale, instrument, method, originator's units, Argo mode | Table 5a/5b pp.28–29 |
+| `biological_header` | how a plankton sample was collected: gear, tow, mesh, preservative | Table 6a/6b pp.30–31 |
+| `taxa_variable` | Taxa-Record fields, and what a negative variable number means | Table 7a/7b pp.33–35, Table 8 p.35 |
 | `flag` | what a flag value means, **on which scale** | Table 12 p.55 |
 | `gradient` | MGV / MIV / ZSI, optionally resolved at `depth_m` | Table 13 p.56 |
 | `range` | acceptable bounds, optionally resolved at `depth_m` | Appendix 11 pp.87–113 |
@@ -97,13 +100,65 @@ For pipeline code that needs a whole table rather than a lookup:
 | `wod_datasets()` | `{"OSD": "Ocean Station Data...", ...}` — 11 entries |
 | `wod_variables()` | `{1: {"name": "Temperature", "standard_unit": ...}, ...}` — 29 entries |
 | `wod_secondary_headers()` | `{1: "Accession Number", ...}` — 67 entries |
+| `variable_specific_headers()` | `{id: {name, appendix, field, description}}` — 19 entries |
+| `biological_headers()` | `{id: {name, unit, appendix, description}}` — 25 entries |
+| `taxa_biomass_variables()` | `{id: {name, unit, appendix, description}}` — 28 entries |
+| `taxa_code_ranges()` / `classify_taxa_code(code)` | Table 8 ranges; which one a variable number falls in |
+| `plankton_grouping_code()` | the PGC and its multiply-and-truncate usage |
 | `qc_flag_scales()` | all five scales from Table 12 |
 | `observed_level_flags()` / `depth_flags()` | one scale as `{int: meaning}` |
 | `gradient_factors()` | MGV/MIV/ZSI by variable code |
 | `range_levels()` | `{code: [(depth_m, min, max), ...]}` |
 | `unit_constants()` | Table 3b |
 | `range_check_variables()` | which variables get range-checked |
+| `code_table_link(namespace, code)` | the published code list for one metadata field — see below |
+| `code_table_hub(name)` | a named hub URL: `all_wod_code_tables`, `country_codes`, `originator_flag_sets`, … |
 | `load_table(name)` / `available_tables()` | raw JSON, and what exists |
+
+### The value code lists live online, and the links are in the PDF
+
+The manual defines the metadata **fields** (Tables 4a, 5a, 6a, 7a) and publishes the
+**value** code lists on the WOD website, as a hyperlink beside each entry. Those links are
+PDF *annotations*: they survive neither a text extraction nor a copy-paste, which is why the
+"App" column reads like a dead end in every extracted copy of the manual.
+
+They are pulled out of the PDF's annotations into
+`knowledge/wod_code_tables/code_table_links.json` — 62 code tables across the four
+namespaces, each with its HTML page, its CSV download where one exists, and the manual pages
+it is linked from.
+
+```python
+code_table_link("secondary_header", 29)
+# {"field": "s_29_probe_type", "name": "Probe Type",
+#  "html": "https://.../CODES/s_29_probe_type.html",
+#  "csv":  "https://.../CODES/CSV/s_29_probe_type.csv", "manual_pages": [25, 69]}
+
+code_table_link("secondary_header", 10)     # -> None
+```
+
+**`None` is an answer, not a gap.** A field with no code list carries a plain measurement or
+free text: bottom depth is metres.
+
+Fetch the **CSV**, not the HTML, when you need the values — same list, parseable. Nothing
+here fetches them automatically: they are external, they change between WOD releases, and a
+cached copy would go stale without saying so. `map_metadata` attaches the link to every
+coded field it finds, and the writer puts it in the NetCDF, so a reader of the output alone
+can resolve a code.
+
+Rebuild after replacing the PDF with a newer release:
+
+```bash
+uv run python scripts/extract_code_table_links.py
+```
+
+### Five namespaces, all keyed on small integers
+
+Tables 3a, 4a, 5a, 6a and 7a all number from 1 and mean entirely different things. Code `4`
+is Phosphate, Institution Code, Institution, Type of tow and Biomass value — one per table.
+
+`query_wod_knowledge(4)` deliberately searches **all** of them and returns every match, so an
+agent sees the collision instead of silently picking a namespace it never chose. Pass `kind=`
+once you know which table the number came from.
 
 ### Flag constants are checked, not trusted
 
@@ -123,7 +178,11 @@ vocabulary cannot disagree with the flags the QC phase assigned.
 ```
 knowledge/                      (project root, not this package)
 ├── wod_readme.pdf              WOD 2023 User's Manual, 131 pages — ground truth
-├── wod_code_tables/            8 JSON tables + standardization_rules.md
+├── wod_code_tables/            12 JSON tables + standardization_rules.md
+├── datasets.md                 which dataset a measurement belongs to
+├── cast_structure.md           the parts of a WOD cast, and the colliding namespaces
+├── plankton_biomass.md         the plankton path: why it is not a profile, what it needs
+├── accession_field_guide.md    how submissions actually arrive, and how to stage them
 └── wod_readme_db/
     └── page_text.json          page cache for search_manual (gitignored, rebuildable)
 ```
@@ -143,6 +202,12 @@ happened to Table 11 and Table 12 before this package existed.
   type, not the concept.
 - **Appendix 11 lists 33 depth levels**; the manual says ranges are defined on 102 standard
   levels. The nearest-level lookup rule the manual prescribes is applied.
-- Appendices not extracted to JSON: ocean weather stations, WMO squares, taxonomic codes,
-  standard depth levels (Appendix 9), the Reiniger-Ross depth-difference table
-  (Appendix 10). Reach them with `search_manual`, then open the PDF at that page.
+- Appendices not extracted to JSON: ocean weather stations, WMO squares, standard depth
+  levels (Appendix 9), the Reiniger-Ross depth-difference table (Appendix 10). Reach them
+  with `search_manual`, then open the PDF at that page.
+- **The plankton code lists are not here, and are not in the PDF either.** Tables 6a and 7a
+  are extracted — the field definitions, units and which appendix holds each code list — but
+  Appendices 4.1–4.9 (tow type, gear, preservative, methods), 5.1–5.11 (life stage, sex,
+  trophic mode, size, CBV) and 6 (PGC groups) are deferred by the manual to the WOD online
+  code tables. So is the ITIS taxonomic list. A plankton writer needs all of them; see
+  [`knowledge/plankton_biomass.md`](../../knowledge/plankton_biomass.md).

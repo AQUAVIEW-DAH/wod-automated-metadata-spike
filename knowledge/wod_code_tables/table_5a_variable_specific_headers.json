@@ -1,0 +1,128 @@
+{
+  "table": "Table 5a. List of variable specific second headers (descriptions from Table 5b)",
+  "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
+  "pages": [
+    28,
+    29
+  ],
+  "note": "A THIRD namespace, separate from both Table 3a variable codes and Table 4a secondary-header IDs. A Table 4a secondary header describes the CAST; a Table 5a variable specific second header describes ONE VARIABLE within that cast, and is repeated per variable. ID 5 is 'Instrument' here, 'Cast/Tow number' in Table 4a, and 'Helium-3' in Table 3a.",
+  "csv_field_naming": "v_<id>_<name>, e.g. v_1_accession, v_4_institute, v_5_instrument, v_6_measure_method, v_8_orig_units",
+  "appendix_column": "'App' is the manual appendix holding that header's code list; those lists live in the WOD online code tables, not in this repository. A header with no appendix carries a plain value rather than a code.",
+  "manual_discrepancy": "ID 22 (Reported uncertainty) is described in Table 5b but is absent from the Table 5a grid on p.28. It is included here.",
+  "variable_specific_headers": {
+    "1": {
+      "name": "Accession number",
+      "appendix": null,
+      "field": "v_1_accession",
+      "description": "NCEI accession number: unique number assigned by NCEI to each batch of data received. Variables for one cast may arrive at different times or from different sources and so carry different accession numbers; WOD merges the casts and keeps the source information intact."
+    },
+    "2": {
+      "name": "Project",
+      "appendix": null,
+      "field": "v_2_project",
+      "description": "Identifies the research project associated with the data collection."
+    },
+    "3": {
+      "name": "Scale",
+      "appendix": "3.1",
+      "field": null,
+      "description": "The internationally agreed reference measurement standard the units are based on (ITS temperature scale, Practical Salinity Scale, pH scale). Table 3a lists the variables and units; Appendix 3.1 lists the scale codes."
+    },
+    "4": {
+      "name": "Institution",
+      "appendix": null,
+      "field": "v_4_institute",
+      "description": "Institution (organization, university, center) associated with the investigator who sampled this specific variable."
+    },
+    "5": {
+      "name": "Instrument",
+      "appendix": "3.2",
+      "field": "v_5_instrument",
+      "description": "The tool, apparatus or measuring device used for this variable."
+    },
+    "6": {
+      "name": "Methods",
+      "appendix": "3.3",
+      "field": "v_6_measure_method",
+      "description": "Procedure, measuring protocol or technique associated with this measured variable. The list is what was reported with submitted data, not a comprehensive list of available methods."
+    },
+    "8": {
+      "name": "Originator's units",
+      "appendix": "3.4",
+      "field": "v_8_orig_units",
+      "description": "The submitter's original measurement units, before conversion to the Table 3a standard unit."
+    },
+    "10": {
+      "name": "Equilibrator type",
+      "appendix": "3.5",
+      "field": null,
+      "description": "Design or type of instrument used for equilibrating seawater with air in preparation for measuring CO2 concentrations."
+    },
+    "11": {
+      "name": "Filter type and size",
+      "appendix": "3.6",
+      "field": null,
+      "description": "Filter type and size."
+    },
+    "12": {
+      "name": "Incubation time",
+      "appendix": "3.7",
+      "field": null,
+      "description": "25 is dawn to noon, 26 is noon to dusk; any other value is in hours."
+    },
+    "13": {
+      "name": "CO2 sea warming",
+      "appendix": null,
+      "field": null,
+      "description": "Temperature difference between the sea surface temperature (SST) and that inside the CO2 equilibrator."
+    },
+    "15": {
+      "name": "Analysis temperature",
+      "appendix": null,
+      "field": null,
+      "description": "Temperature of the seawater at the time of CO2 analysis."
+    },
+    "16": {
+      "name": "Uncalibrated",
+      "appendix": null,
+      "field": null,
+      "description": "Set to 1 if the instrument is uncalibrated."
+    },
+    "17": {
+      "name": "Contains nitrite",
+      "appendix": null,
+      "field": null,
+      "description": "Set to 1 if the nitrate value is actually the sum of nitrate + nitrite. This is how WOD records a nitrate+nitrite column: as variable code 8 (Nitrate) carrying this header, NOT as a separate nitrite variable."
+    },
+    "18": {
+      "name": "Normal Standard Seawater batch",
+      "appendix": null,
+      "field": null,
+      "description": "IAPSO normal standard seawater batch number, P-series: code 78 means batch P78."
+    },
+    "19": {
+      "name": "Adjustment",
+      "appendix": null,
+      "field": null,
+      "description": "A data adjustment (correction, calibration) applied to Argo profiling floats by Argo project data management. A real value: the mean difference between the original real-time and the adjusted delayed-mode profile of temperature, salinity, oxygen or pressure for all values below 500 m. Its presence -- even as 0.0 -- means the profile went through additional Argo quality control and is adjusted real-time or delayed-mode data. See also header 24 (Mode)."
+    },
+    "22": {
+      "name": "Reported uncertainty",
+      "appendix": null,
+      "field": null,
+      "description": "Statistical uncertainty assigned by Argo data management to each observation, based on both sensor accuracy and correction accuracy."
+    },
+    "23": {
+      "name": "Primary minimum depth (not in use)",
+      "appendix": null,
+      "field": null,
+      "description": "Historical. Some Argo profilers carried two sensor packages -- one switching off near 5 m to preclude biofouling, another switching on at 20 m and measuring to the surface. This is the shallowest depth at which the primary sensor was used, with shallower depths taken from the surface sensor. No longer needed since Argo combines sensors itself, but still present on some older floats."
+    },
+    "24": {
+      "name": "Mode",
+      "appendix": null,
+      "field": null,
+      "description": "Argo and BGC Argo delivery mode: 1 real-time, 2 delayed, 3 adjusted real-time. Real-time data (including adjusted real-time) are quality-controlled and flagged automatically and are typically distributed within 24 hours; delayed-mode data are often available 12-18 months later."
+    }
+  }
+}

@@ -89,6 +89,13 @@ right, the *record structure* is different.
 discrete depths is Table 3a code `11` and is a genuine profile — a phytoplankton pigment
 dataset goes through the normal path, while a zooplankton wet-weight dataset does not.
 
+Tables 6a/6b and 7a/7b are now extracted — `table_6a_biological_headers.json` and
+`table_7a_taxa_biomass.json`, loadable through `wod_etl.reference` — so the record shape can
+be described precisely without opening the PDF.
+[`../plankton_biomass.md`](../plankton_biomass.md) is the full picture: the Taxa-Record
+model, the sign-selects-the-unit trap, what to report today, and what a future plankton tool
+still needs.
+
 ### It has no WOD home at all
 
 Common submission columns with no Table 3a code — all must be reported as dropped, never
@@ -101,9 +108,29 @@ mapped to something adjacent:
   CDOM in m⁻¹ is *not* code `24` (transmissivity / beam attenuation) — different measurement.
 - **Currents** (ADCP).
 - From CTD exports: **conductivity**, **sigma-t / sigma-theta**, **sound velocity**,
-  **potential temperature**. Potential temperature in particular must not be mapped to
-  code `1`; a cast that already has in-situ temperature would then claim the code twice.
+  **potential temperature**. Potential temperature is the sharpest case and must not be
+  mapped to code `1`. Theta is *derived* — in-situ temperature adjusted for adiabatic
+  compression. A cast that already carries in-situ temperature would claim code 1 twice; a
+  cast carrying only theta would silently report the wrong quantity. If theta is all there
+  is, convert it to in-situ during staging — it needs pressure and salinity — and record the
+  conversion. `explain_column()` in `wod_etl.mapping` is the single registry of these, and
+  is what `match_variable` consults to refuse a match.
+- **Bottom depth, water depth, sounding.** Not a variable at all: secondary header `10`.
+  Note that a name containing "depth" is not the depth axis — treating `Bottom Depth` as the
+  vertical coordinate sets every level of the cast to the same value.
 - **Size-fractionated** anything. There is one chlorophyll code, so only a total maps.
+
+### The originator's own quality flags
+
+A submitter's flag column is **kept and never translated**. WOD Table 12 is WOD's scale; the
+originator's is theirs, and an originator `1` may mean *good* where WOD's `1` means a failed
+range check. There is no mapping between them without knowing which scheme was used — which
+is exactly what **secondary header 96, Originator's Flags** records (p.13, p.58). Its code
+list is online: `code_table_hub("originator_flag_sets")`.
+
+So: carry the values verbatim into their own array, name the source column, and record the
+flag set as unknown if the file does not state it. Report that it is unknown rather than
+assuming a common scheme.
 
 ---
 

@@ -18,7 +18,7 @@ Decide this before doing any work on a folder. Wasted staging is cheap; a wrong 
 | --- | --- |
 | **Currents / ADCP** | WOD does not hold currents. No Table 3a code. But keep the *navigation* — see §1.1. |
 | **Imagery — jpg, png, gif, mp4** | Not measurements. Already in `config.NON_DATA_EXTENSIONS`, so `process_accession` skips them, but say in your report that the folder was imagery rather than letting it vanish into `skipped`. |
-| **Plankton biomass / taxonomy** | Belongs in WOD, but through the Biological Header + Taxa/Biomass records, **not** the profile path. See standardization_rules.md. |
+| **Plankton biomass / taxonomy** | Belongs in WOD, but through the Biological Header (Table 6a) + Taxa-Records (Table 7a), **not** the profile path. See [`plankton_biomass.md`](plankton_biomass.md). Report it as an unfinished item, and capture the gear/tow/mesh/preservative metadata while you have the accession open — only the submitter has it. |
 | **Bathymetry / soundings** | Bottom depth is secondary header 10 — per-cast metadata, not a measured variable. A sounding track has no profile in it. Not output, but not useless either — see §1.1. |
 | **Nitrite, ammonium, CDOM, turbidity, PAHs, microplastics, eDNA** | No Table 3a code. Nitrite is deliberately excluded (manual p.49). |
 | **Fish and mammal catch, seabird counts** | Not ocean profile variables. |
@@ -33,6 +33,12 @@ cannot be staged.
 The folders in the left column produce no cast of their own. Several of them are still the
 best evidence in the accession about the casts you *are* adding, and reaching for them costs
 one join.
+
+`classify_dataset` surfaces this as a `harvest` field on every exclusion, and
+`classify_accession` collects it per folder — so an excluded folder arrives already labelled
+with what to take from it. **Nothing harvests automatically:** matching two files on position
+and time is a judgement, so it happens during staging and the source file is cited in
+`notes`.
 
 | Folder | What it cannot be | What it can supply |
 | --- | --- | --- |
@@ -53,8 +59,8 @@ other casts (a set of profiles all stopping dead at the same round depth is the 
 not the ocean's) rather than from a probe-type table you have not verified.
 
 **Do not invent the codes.** Headers 3 (platform), 4 (institution) and 29 (probe type) take
-numeric values from WOD's *website* code tables, which are not in the manual — see
-[`knowledge/README.md`](README.md). Write the name the accession states and say it is a name,
+numeric values from WOD's *website* code tables, which are not in the manual (Appendix 2
+lists only a subset). Write the name the accession states and say it is a name,
 or leave the header out. Never guess a probe type from a max depth.
 
 ---

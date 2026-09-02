@@ -1,0 +1,163 @@
+{
+  "table": "Table 6a. List of biological header variables (descriptions from Table 6b)",
+  "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
+  "pages": [
+    30,
+    31
+  ],
+  "note": "A FOURTH namespace. The biological header records how a plankton sample was COLLECTED -- gear, tow, mesh, volume, preservation, counting. It hangs off the cast, one per cast, and is the metadata half of the plankton path; the measurements themselves are Taxa-Records (Table 7a). No biological header applies to a profile cast, and the profile NetCDF writer in this repository does not emit any of them.",
+  "csv_field_naming": "b_<id>_<name>, e.g. b_21_institutes (used for both counting and voucher institution)",
+  "appendix_column": "'App' is the manual appendix holding that header's code list (Appendix 4.x, pp.71). Those code lists live in the WOD online code tables, not in this repository. A header with no appendix carries a plain measured value in the stated unit.",
+  "biological_headers": {
+    "1": {
+      "name": "Water volume filtered",
+      "unit": "m3",
+      "appendix": null,
+      "description": "Total volume of water filtered by the sampling gear."
+    },
+    "2": {
+      "name": "Sampling duration",
+      "unit": "minutes",
+      "appendix": null,
+      "description": "Time over which the sampling gear was towed."
+    },
+    "3": {
+      "name": "Mesh size",
+      "unit": "micrometer",
+      "appendix": null,
+      "description": "Pore size of the sampling device."
+    },
+    "4": {
+      "name": "Type of tow",
+      "unit": null,
+      "appendix": "4.1",
+      "description": "Towing method used, e.g. horizontal, vertical, oblique."
+    },
+    "5": {
+      "name": "Large removed volume",
+      "unit": "milliliter",
+      "appendix": null,
+      "description": "Minimum volume criterion for removing large plankters. See also code 12."
+    },
+    "6": {
+      "name": "Large plankters removed",
+      "unit": null,
+      "appendix": "4.2",
+      "description": "Whether large plankters were removed (1) or not removed (2). See codes 5 and 12."
+    },
+    "7": {
+      "name": "Gear code",
+      "unit": null,
+      "appendix": "4.3",
+      "description": "Type of gear used, e.g. plankton net, bottle, MOCNESS."
+    },
+    "8": {
+      "name": "Sampler volume",
+      "unit": "liters",
+      "appendix": null,
+      "description": "Internal volume of the sampling gear, e.g. a Niskin bottle."
+    },
+    "9": {
+      "name": "Net mouth area",
+      "unit": "m2",
+      "appendix": null,
+      "description": "Mouth or opening area of the sampling gear. Where only mouth diameter was provided, area was calculated as pi * (0.5 * diameter)^2."
+    },
+    "10": {
+      "name": "Preservative",
+      "unit": null,
+      "appendix": "4.4",
+      "description": "Type of preservative used for the plankton sample."
+    },
+    "11": {
+      "name": "Weight method",
+      "unit": null,
+      "appendix": "4.5",
+      "description": "Method used for weighing the plankton sample."
+    },
+    "12": {
+      "name": "Large removed length",
+      "unit": "centimeter",
+      "appendix": null,
+      "description": "Minimum size/length criterion for removing large plankters. See also code 5."
+    },
+    "13": {
+      "name": "Count method",
+      "unit": null,
+      "appendix": "4.6",
+      "description": "Method used for counting the plankton sample."
+    },
+    "14": {
+      "name": "Tow distance",
+      "unit": "meters",
+      "appendix": null,
+      "description": "Distance over which the sampling gear was towed."
+    },
+    "15": {
+      "name": "Average towing speed",
+      "unit": "knots",
+      "appendix": null,
+      "description": "Average speed used to tow the sampling gear."
+    },
+    "16": {
+      "name": "Sampling start time",
+      "unit": "GMT",
+      "appendix": null,
+      "description": "Sampling start time, Greenwich Mean Time."
+    },
+    "18": {
+      "name": "Flowmeter type",
+      "unit": null,
+      "appendix": "4.3",
+      "description": "Brand and/or model of the flowmeter used."
+    },
+    "19": {
+      "name": "Flowmeter calibration",
+      "unit": null,
+      "appendix": "4.7",
+      "description": "Calibration frequency for the flowmeter."
+    },
+    "20": {
+      "name": "Counting institution",
+      "unit": null,
+      "appendix": null,
+      "description": "Institution responsible for identifying and counting the taxa-specific sample (b_21_institutes)."
+    },
+    "21": {
+      "name": "Voucher institution",
+      "unit": null,
+      "appendix": null,
+      "description": "Location (institution) of the taxa-specific sample voucher (b_21_institutes; same institute code list as code 20)."
+    },
+    "22": {
+      "name": "Wire angle start",
+      "unit": "degrees",
+      "appendix": null,
+      "description": "Wire angle of the towing apparatus at sampling start."
+    },
+    "23": {
+      "name": "Wire angle end",
+      "unit": "degrees",
+      "appendix": null,
+      "description": "Wire angle of the towing apparatus at sampling end."
+    },
+    "24": {
+      "name": "Depth determination method",
+      "unit": null,
+      "appendix": "4.8",
+      "description": "Code indicating that depth was calculated from wire angle and length, or from a PI-specific target depth."
+    },
+    "25": {
+      "name": "Volume method",
+      "unit": null,
+      "appendix": "4.9",
+      "description": "Method used for measuring the volume of the plankton sample."
+    },
+    "30": {
+      "name": "Accession number for the biology",
+      "unit": null,
+      "appendix": null,
+      "description": "NCEI dataset identification for the biological component of the current cast (v_1_accession)."
+    }
+  }
+}

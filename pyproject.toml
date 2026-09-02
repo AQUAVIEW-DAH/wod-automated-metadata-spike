@@ -6,6 +6,9 @@ dependencies = [
     "beautifulsoup4>=4.15.0",
     "httpx>=0.28.1",
     "netcdf4>=1.7.4",
+    # Accessions arrive as spreadsheets often enough that read_any needs an Excel engine;
+    # without one it can only tell you to export the sheet to CSV yourself.
+    "openpyxl>=3.1.5",
     "pandas>=3.0.5",
 ]
 
@@ -13,6 +16,7 @@ dependencies = [
 dev = [
     "pypdf>=6.16.1",
     "pytest>=9.1.1",
+    "pyyaml>=6.0.3",
 ]
 
 [build-system]
@@ -21,7 +25,8 @@ build-backend = "setuptools.build_meta"
 
 # The package sits at the repo root so it installs like any other Python project and is
 # not owned by any one agent runtime's directory convention. Agent entry points
-# (docs/AGENT.md and the thin per-tool pointers) reference it; nothing references them.
+# (the SKILL.md instruction files and the thin per-tool pointers) reference it;
+# nothing references them.
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["wod_etl*"]

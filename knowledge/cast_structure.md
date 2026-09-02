@@ -11,6 +11,13 @@ the last two identify the measurements themselves.
 | 4 | **Character data + PI code** | Originator's cruise and cast codes, Principal Investigator | p.30 |
 | 5 | **Biological header** | How biological data were sampled — tow type, gear, preservative, weight/count method | Tables 6a/6b; values in Appendix 4 |
 | 6 | **Taxa-specific and biomass data** | Plankton weights, volumes, concentrations — whole-sample or per taxon | Appendices 5–6 |
+
+**The appendices in that last column are pages of links, not tables.** Each WOD table defines
+metadata *fields*; the *values* they take are code lists published online, linked from beside
+each entry in the manual as PDF annotations that do not survive a text extraction. All 62 are
+extracted into `wod_code_tables/code_table_links.json` — reach one with
+`code_table_link("secondary_header", 29)`. Opening the appendix itself tells you nothing the
+link does not.
 | 7 | **Measured variables** | Temperature, salinity, oxygen, nutrients, tracers, pressure vs depth | **Table 3a**, p.18 |
 
 ---
@@ -85,7 +92,10 @@ For PI assignment, plankton is identified as variable **14** (all plankton), **�
 is no Table 3a plankton variable at all.
 
 This pipeline writes Table 3a profiles only. A plankton dataset must be reported as needing
-the biological path, not forced onto a level.
+the biological path, not forced onto a level. The field definitions for both sections are
+extracted — Tables 6a/6b and 7a/7b — and
+[`plankton_biomass.md`](plankton_biomass.md) covers the Taxa-Record model, the Table 8 code
+ranges, the Plankton Grouping Code, and what a plankton writer would still need.
 
 ---
 

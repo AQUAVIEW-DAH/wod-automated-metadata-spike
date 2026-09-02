@@ -1,0 +1,650 @@
+{
+  "table": "WOD online code tables, one per coded metadata field",
+  "source": "Hyperlink annotations embedded in knowledge/wod_readme.pdf, extracted with scripts/extract_code_table_links.py",
+  "pages": [
+    9,
+    13,
+    16,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    31,
+    32,
+    46,
+    49,
+    58,
+    61,
+    69,
+    70,
+    71
+  ],
+  "note": "The manual defines the metadata FIELDS (Tables 4a, 5a, 6a, 7a) but publishes the VALUE code lists online, as a link beside each entry. These are those links, taken from the PDF's own annotations -- they do not survive a text extraction, which is why the 'App' column looks like a dead end. A field absent here has no published code list: its value is a plain measurement or free text, not a code.",
+  "usage": "code_table_link('secondary_header', 29) -> the probe-type code list. Fetch the CSV rather than the HTML when you need the values: same list, parseable. Nothing here fetches them automatically -- they are external, they change between WOD releases, and a cached copy would go stale silently.",
+  "hubs": {
+    "all_wod_code_tables": "https://www.ncei.noaa.gov/access/world-ocean-database/wod-codes.html",
+    "secondary_headers": "https://www.ncei.noaa.gov/access/world-ocean-database/wod-codes.html#second",
+    "variable_specific_headers": "https://www.ncei.noaa.gov/access/world-ocean-database/wod-codes.html#var_sp",
+    "biological_headers": "https://www.ncei.noaa.gov/access/world-ocean-database/wod-codes.html#bio",
+    "taxa_variables": "https://www.ncei.noaa.gov/access/world-ocean-database/wod-codes.html#taxa",
+    "country_codes": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/country-list.html",
+    "principal_investigators": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/primary-investigator-list.html",
+    "originator_flag_sets": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_96_origflagset.html",
+    "depth_dependent_variables": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/depth-dependent-variables.html",
+    "quality_flag_definitions": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/DefinitionQualityFlags.pdf",
+    "taxa_list_itis": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/t_1_taxa_list.html",
+    "range_area_mask": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/MASKS/range_area.msk",
+    "range_basin_list": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/MASKS/range_basin_list.msk"
+  },
+  "links": {
+    "secondary_header": {
+      "1": {
+        "field": "s_1_accession",
+        "name": "Accession Number",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_1_accession.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_1_accession.csv",
+        "manual_pages": [
+          22,
+          23,
+          24,
+          28,
+          31,
+          46
+        ]
+      },
+      "2": {
+        "field": "s_2_project",
+        "name": "Project Code",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_2_project.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_2_project.csv",
+        "manual_pages": [
+          9,
+          16,
+          22,
+          23,
+          24,
+          28
+        ]
+      },
+      "3": {
+        "field": "s_3_platform",
+        "name": "Platform Code",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_3_platform.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_3_platform.csv",
+        "manual_pages": [
+          22,
+          23,
+          24
+        ]
+      },
+      "4": {
+        "field": "s_4_institute",
+        "name": "Institution Code",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_4_institute.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_4_institute.csv",
+        "manual_pages": [
+          9,
+          22,
+          23,
+          24,
+          28,
+          31
+        ]
+      },
+      "9": {
+        "field": "s_9_weather_station",
+        "name": "Ocean Weather Station",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_9_weather_station.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_9_weather_station.csv",
+        "manual_pages": [
+          23,
+          24,
+          69
+        ]
+      },
+      "12": {
+        "field": "s_12_cast_direction",
+        "name": "Cast Direction (down assumed)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_12_cast_direction.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_12_cast_direction.csv",
+        "manual_pages": [
+          23,
+          24,
+          69
+        ]
+      },
+      "14": {
+        "field": "s_14_water_color",
+        "name": "Water Color",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_14_water_color.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_14_water_color.csv",
+        "manual_pages": [
+          23,
+          24,
+          69
+        ]
+      },
+      "16": {
+        "field": "s_16_wave_direction",
+        "name": "Wave Direction (WMO 0877 or NCEI 0110)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_16_wave_direction.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_16_wave_direction.csv",
+        "manual_pages": [
+          23,
+          25,
+          69
+        ]
+      },
+      "17": {
+        "field": "s_17_wave_height",
+        "name": "Wave Height (WMO 1555 or NCEI 0104)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_17_wave_height.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_17_wave_height.csv",
+        "manual_pages": [
+          23,
+          25,
+          69
+        ]
+      },
+      "18": {
+        "field": "s_18_sea_state",
+        "name": "Sea State (WMO 3700 or NCEI 0109)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_18_sea_state.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_18_sea_state.csv",
+        "manual_pages": [
+          23,
+          25,
+          69
+        ]
+      },
+      "19": {
+        "field": "s_19_wind_force",
+        "name": "Wind Force (Beaufort scale or NCEI 0052)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_19_wind_force.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_19_wind_force.csv",
+        "manual_pages": [
+          23,
+          25,
+          69
+        ]
+      },
+      "20": {
+        "field": "s_20_wave_period",
+        "name": "Wave Period (WMO 3155 or NCEI 0378)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_20_wave_period.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_20_wave_period.csv",
+        "manual_pages": [
+          23,
+          25,
+          69
+        ]
+      },
+      "21": {
+        "field": "s_21_wind_direction",
+        "name": "Wind Direction (WMO 0877 or NCEI 0110)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_21_wind_direction.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_21_wind_direction.csv",
+        "manual_pages": [
+          23,
+          25,
+          69
+        ]
+      },
+      "26": {
+        "field": "s_26_weather_condition",
+        "name": "Weather Conditions (WMO 4501/4677)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_26_weather_condition.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_26_weather_condition.csv",
+        "manual_pages": [
+          23,
+          25,
+          69
+        ]
+      },
+      "27": {
+        "field": "s_27_cloud_type",
+        "name": "Cloud Type (WMO 0500 or NCEI 0053)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_27_cloud_type.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_27_cloud_type.csv",
+        "manual_pages": [
+          23,
+          25,
+          69
+        ]
+      },
+      "28": {
+        "field": "s_28_cloud_cover",
+        "name": "Cloud Cover (WMO 2700 or NCEI 0105)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_28_cloud_cover.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_28_cloud_cover.csv",
+        "manual_pages": [
+          25,
+          69
+        ]
+      },
+      "29": {
+        "field": "s_29_probe_type",
+        "name": "Probe Type",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_29_probe_type.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_29_probe_type.csv",
+        "manual_pages": [
+          25,
+          69
+        ]
+      },
+      "32": {
+        "field": "s_32_recorder",
+        "name": "Recorder (WMO 4770)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_32_recorder.html",
+        "manual_pages": [
+          25,
+          69
+        ]
+      },
+      "35": {
+        "field": "s_35_digitization_method",
+        "name": "Digitization Method (NCEI 0612)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_35_digitization_method.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_35_digitization_method.csv",
+        "manual_pages": [
+          25,
+          69
+        ]
+      },
+      "36": {
+        "field": "s_36_digitization_interval",
+        "name": "Digitization Interval (NCEI 0613)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_36_digitization_interval.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_36_digitization_interval.csv",
+        "manual_pages": [
+          25,
+          69
+        ]
+      },
+      "37": {
+        "field": "s_37_data_storage",
+        "name": "Data Treatment and Storage Method (NCEI 0614)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_37_data_storage.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_37_data_storage.csv",
+        "manual_pages": [
+          26,
+          69
+        ]
+      },
+      "40": {
+        "field": "s_40_ref_instrument",
+        "name": "Instrument for reference temperature (NCEI 0615)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_40_ref_instrument.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_40_ref_instrument.csv",
+        "manual_pages": [
+          26,
+          69
+        ]
+      },
+      "41": {
+        "field": "s_41_visibility",
+        "name": "Horizontal visibility (WMO Code 4300)",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_41_visibility.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_41_visibility.csv",
+        "manual_pages": [
+          26,
+          69
+        ]
+      },
+      "54": {
+        "field": "s_54_needs_depth_fix",
+        "name": "Depth fix",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_54_needs_depth_fix.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_54_needs_depth_fix.csv",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/s_54_needs_depth_fix.pdf",
+        "manual_pages": [
+          23,
+          26,
+          61,
+          69
+        ]
+      },
+      "74": {
+        "field": "s_74_ocean_vehicle",
+        "name": "Oceanographic measuring vehicle",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_74_ocean_vehicle.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_74_ocean_vehicle.csv",
+        "manual_pages": [
+          26,
+          69
+        ]
+      },
+      "81": {
+        "field": "s_81_pCO2_calc_method",
+        "name": "Partial pressure of CO2 calculation method",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_81_pCO2_calc_method.html",
+        "csv": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/CSV/s_81_pCO2_calc_method.csv",
+        "manual_pages": [
+          26,
+          70
+        ]
+      },
+      "82": {
+        "field": "s_82_pCO2_equilibrat_type",
+        "name": "Partial pressure of CO2 equilibrator type",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_82_pCO2_equilibrat_type.html",
+        "csv": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/CSV/s_82_pCO2_equilibrat_type.csv",
+        "manual_pages": [
+          26,
+          70
+        ]
+      },
+      "84": {
+        "field": "s_84_argos_fix",
+        "name": "ARGOS fix code",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_84_argos_fix.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_84_argos_fix.csv",
+        "manual_pages": [
+          26,
+          70
+        ]
+      },
+      "91": {
+        "field": "s_91_database_id",
+        "name": "Database ID",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_91_database_id.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_91_database_id.csv",
+        "manual_pages": [
+          26,
+          70
+        ]
+      },
+      "92": {
+        "field": "s_92_ukho_ref",
+        "name": "UKHO Bibliographic Reference Number",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_92_ukho_ref.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_92_ukho_ref.csv",
+        "manual_pages": [
+          26,
+          70
+        ]
+      },
+      "95": {
+        "field": "s_95_depth_unit",
+        "name": "Originator's Depth unit",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_95_depth_unit.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_95_depth_unit.csv",
+        "manual_pages": [
+          26,
+          27,
+          70
+        ]
+      },
+      "96": {
+        "field": "s_96_origflagset",
+        "name": "Originator's flags",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_96_origflagset.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_96_origflagset.csv",
+        "manual_pages": [
+          13,
+          27,
+          49,
+          58,
+          70
+        ]
+      },
+      "97": {
+        "field": "s_97_sampler",
+        "name": "Water Sampler",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_97_sampler.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_97_sampler.csv",
+        "manual_pages": [
+          27,
+          70
+        ]
+      }
+    },
+    "variable_specific_header": {
+      "3": {
+        "field": "v_3_scale",
+        "name": "Scale",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/v_3_scale.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "5": {
+        "field": "v_5_instrument",
+        "name": "Instrument",
+        "pdf": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/PDF/v_5_instrument.pdf",
+        "manual_pages": [
+          28
+        ]
+      },
+      "6": {
+        "field": "v_6_methods",
+        "name": "Methods",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/v_6_methods.html",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/v_6_methods.pdf",
+        "manual_pages": [
+          28,
+          46,
+          71
+        ]
+      },
+      "8": {
+        "field": "v_8_orig_units",
+        "name": "Originator's units",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/v_8_orig_units.html",
+        "manual_pages": [
+          28
+        ]
+      },
+      "10": {
+        "field": "v_10_equilibrator_type",
+        "name": "Equilibrator type",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/v_10_equilibrator_type.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "11": {
+        "field": "v_11_filter_type_and_size",
+        "name": "Filter type and size",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/v_11_filter_type_and_size.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "12": {
+        "field": "v_12_incubation_time",
+        "name": "Incubation time",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/v_12_incubation_time.pdf",
+        "manual_pages": [
+          71
+        ]
+      }
+    },
+    "biological_header": {
+      "4": {
+        "field": "b_4_type_tow",
+        "name": "Type of tow",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/b_4_type_tow.html",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/b_4_type_tow.pdf",
+        "manual_pages": [
+          46,
+          71
+        ]
+      },
+      "6": {
+        "field": "b_6_large_removed",
+        "name": "Large plankters removed",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/b_6_large_removed.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "7": {
+        "field": "b_7_gear_and_flowmeter",
+        "name": "Gear code",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/b_7_gear_and_flowmeter.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "10": {
+        "field": "b_10_preservation_method",
+        "name": "Preservative",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/b_10_preservation_method.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "11": {
+        "field": "b_11_weight_method",
+        "name": "Weight method",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/b_11_weight_method.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "13": {
+        "field": "b_13_count_method",
+        "name": "Count method",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/b_13_count_method.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "19": {
+        "field": "b_19_flowmeter_calibration",
+        "name": "Flowmeter calibration",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/b_19_flowmeter_calibration.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "24": {
+        "field": "b_24_depth_determined",
+        "name": "Depth determination method",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/b_24_depth_determined.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "25": {
+        "field": "b_25_volume_method",
+        "name": "Volume method",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/b_25_volume_method.pdf",
+        "manual_pages": [
+          71
+        ]
+      }
+    },
+    "taxa_variable": {
+      "1": {
+        "field": "t_1_taxa_list",
+        "name": "Variable number",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/t_1_taxa_list.html",
+        "manual_pages": [
+          32,
+          46
+        ]
+      },
+      "5": {
+        "field": "t_5_taxon_lifestage",
+        "name": "Taxon life stage",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_5_taxon_lifestage.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "6": {
+        "field": "t_6_taxon_sex",
+        "name": "Taxon sex code",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_6_taxon_sex.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "7": {
+        "field": "t_7_taxon_presence_abundance",
+        "name": "Taxon present",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_7_taxon_presence_abundance.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "8": {
+        "field": "t_8_taxon_trophic_level",
+        "name": "Taxon trophic mode",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_8_taxon_trophic_level.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "9": {
+        "field": "t_9_taxon_realm",
+        "name": "Taxon realm",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_9_taxon_realm.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "16": {
+        "field": "t_16_taxon_feature",
+        "name": "Taxon feature",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_16_taxon_feature.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "17": {
+        "field": "t_17_taxon_modifier",
+        "name": "Taxon modifier",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_17_taxon_modifier.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "18": {
+        "field": "t_18_size_min",
+        "name": "Size min",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_18_size_min.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "19": {
+        "field": "t_19_size_max",
+        "name": "Size max",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_19_size_max.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "26": {
+        "field": "t_26_count_method",
+        "name": "Count method",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_26_count_method.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "27": {
+        "field": "t_27_cbv_value",
+        "name": "Common Base-unit Value (CBV)",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_27_cbv_value.pdf",
+        "manual_pages": [
+          71
+        ]
+      },
+      "28": {
+        "field": "t_28_cbv_calculation_method",
+        "name": "CBV calculation method",
+        "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_28_cbv_calculation_method.pdf",
+        "manual_pages": [
+          71
+        ]
+      }
+    }
+  }
+}
