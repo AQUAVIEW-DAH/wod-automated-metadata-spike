@@ -211,7 +211,16 @@ class TestKnowledgeRouting:
 
     def test_search_manual_finds_the_deferred_appendices(self):
         """The middle tier: content we deliberately did NOT extract must still be locatable
-        without paging through the PDF."""
+        without paging through the PDF.
+
+        Skips without the page cache, like the other two search_manual tests.
+        knowledge/wod_readme_db/page_text.json is gitignored -- it is rebuildable from the
+        PDF with `uv run python -m wod_etl.reference.index_manual` -- so a fresh clone has
+        no cache and this asserted against an error dict rather than against the manual.
+        """
         from wod_etl.reference import search_manual
         for term in ("Reiniger-Ross", "WMO square"):
-            assert search_manual(term)["hit_count"] > 0, f"search_manual cannot find {term}"
+            result = search_manual(term)
+            if "error" in result:
+                pytest.skip("page cache not built")
+            assert result["hit_count"] > 0, f"search_manual cannot find {term}"
