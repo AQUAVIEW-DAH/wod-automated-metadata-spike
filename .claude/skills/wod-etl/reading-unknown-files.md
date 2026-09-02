@@ -58,6 +58,17 @@ Same shape for every format. `header_block` is `Key: value` text that the mapper
 coordinate found in a NetCDF attribute reaches the contract by the same route as a
 `# Latitude:` comment.
 
+### Three warnings to act on rather than skim
+
+- **Fixed-width column boundaries are inferred**, not declared. They come from where
+  whitespace held across the sampled rows, so a column that is full in the sample and empty
+  later shifts every field after it. Check them against the accession's format description.
+- **A headerless fixed-width file gets `col_0…col_N`.** Nothing downstream can map those to
+  a WOD code. Name them during staging, from the header block or the format description,
+  with units folded in.
+- **NetCDF units are folded into the column name** (`TEMP (degree_Celsius)`) because unit
+  detection reads the raw name and nothing else. Do not strip them.
+
 ---
 
 ## 2. Where does the table start, and what are the columns?

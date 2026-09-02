@@ -38,6 +38,7 @@ classified from its own path, header, columns and depth spacing —
 | `limit` | Process at most N files — use this to prove the shape first. |
 | `resume` | Fold into an existing manifest (default `True`). |
 | `retry_failed` | Also re-attempt items already marked `failed`. |
+| `verify` | Read the written NetCDF back at the end and check every value against the manual's acceptable range for that variable at that depth. **On by default** -- the failure that matters most is the one that passes structural validation. Sets `output_verified`. |
 | `run_qc` | Whether to run WOD's own observed-level QC. Defaults to `RUN_WOD_QC` in [`config.py`](../config.py), which is **off** — QC is applied downstream, and a Table 12 flag written here is one more thing to reconcile. The ORIGINATOR's flag columns are carried through either way, verbatim and untranslated. |
 | `dry_run` | Report what would be processed, and as what; write nothing. |
 | `on_error` | `"skip"` (default) or `"stop"`. |
@@ -71,6 +72,12 @@ shows up immediately on 3 files rather than after 400.
                      "no measurements: every mapped measurement column is empty (...)": 1},
  "unstorable_columns_dropped": {"Conductivity (S/m) (conductivity)": 31},
  "outputs_without_time": null,
+ "output_verified": false,
+ "output_verification": {"passed": false, "finding_counts": {"high": 1, ...},
+                         "findings": [{"finding": "systematically_out_of_range",
+                                       "severity": "high", "variable": "temperature",
+                                       "evidence": "...", "action": "..."}],
+                         "value_ranges": {...}, "flag_distribution": {...}, "text": "..."},
  "manifest_path": "data/staging/manifests/0287423_20260817T101500Z.json"}
 ```
 
@@ -95,6 +102,7 @@ neither done nor skipped, because they can be retried.
 | `skipped_reasons` | Every file that was read and deliberately not processed, with the reason. This is where excluded content and empty files appear. |
 | `unstorable_columns_dropped` | Columns WOD has no code for, dropped by design, each with the reason. Rule 2: never silently drop data. Metadata columns and originator flag columns are **not** here — they are consumed, not dropped. |
 | `outputs_without_time` | Casts written with no date. Validation only warns; you should not. |
+| `output_verified` | **A separate verdict from `status`, and the one that matters.** `status` says the run finished; this says the numbers are possible. A run can be `complete` and unverified -- that is the classic wrong-unit failure, and it is now caught rather than shipped. `None` means nothing was written, or `verify=False`. |
 
 ### Skipped is not failed
 

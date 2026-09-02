@@ -118,19 +118,27 @@ Then open one output and check the values, not just the status. Re-invoking with
 
 ### Verify before you believe it
 
-`status: "complete"` means every file was written, not that the numbers are right. Three
-checks that have each caught real corruption:
+`status` says the run finished. **`output_verified` says the numbers are possible** — the
+run now checks its own output, comparing every value against the manual's acceptable range
+for that variable at that depth. `false` means a high finding: a variable ≥50% out of range
+(a unit or a conversion, not bad data), a flat or negative depth axis, or a file that cannot
+be read back. **`complete` with `output_verified: false` is a run you do not ship.** Each
+finding in `output_verification.findings` carries the worst value, its depth, the bound it
+broke, and what to do.
 
-- **Open a NetCDF and read the ranges.** A variable in the wrong unit still validates.
-- **Check `unmapped_columns` for every dataset**, not once. The run report names the columns
-  WOD cannot store; `unmapped_columns` is where everything else that was dropped shows up.
-- **Cross-check a claim against an independent source in the accession.** Station-list
-  times can be verified against an underway GPS track; positions in a data file against
-  the sibling station list. A "Date time (UTC)" column beside a "Time zone" column is
-  ambiguous until you test it.
+Two gaps it cannot close:
 
-`audit_dataset` in `wod_etl.verify` does the first two at once, per dataset — value ranges,
-dropped columns and the flag distribution. Run it and report it alongside the counts.
+- **It judges what was written, not what should have been.** A dropped column is invisible
+  to it — that is `unmapped_columns`, per dataset, every time.
+- **Its bounds are the union of all 30 ocean basins**, so an unflagged value may still be
+  wrong: nitrate's bound reaches 500 µmol/kg. Open one output and read the ranges.
+
+And one only you can do: **cross-check against an independent source in the accession** —
+station-list times against an underway GPS track, positions against the sibling station
+list. A "Date time (UTC)" column beside a "Time zone" column is ambiguous until you test it.
+
+`audit_dataset` is the wider per-dataset report: mapped and dropped columns across the whole
+set, plus ranges and flags.
 
 ## Reading the result
 
@@ -147,10 +155,10 @@ is skipped with a reason and does not count toward the abort rate. A file that i
 document and still will not read is a **failure**: a silent skip there is how a real cast in
 an unrecognised layout disappears from a run.
 
-**Four fields you must report, none of them in `counts`:** `dataset_types` (what the run
-decided), `skipped_reasons` (everything left out, and why), `unstorable_columns_dropped`
-(data dropped by design — rule 2), `outputs_without_time` (casts with no date; validation
-only warns).
+**Five fields you must report, none of them in `counts`:** `output_verified` (whether the
+values are possible — see below), `dataset_types` (what the run decided), `skipped_reasons`
+(everything left out, and why), `unstorable_columns_dropped` (data dropped by design —
+rule 2), `outputs_without_time` (casts with no date; validation only warns).
 
 Retry the failures once you have addressed the cause:
 `process_accession(url, run_id="<same id>", retry_failed=True)`. Full result schema:
@@ -214,43 +222,26 @@ info["warnings"]                          # never skip these
 the mapper already parses — so a position held in a NetCDF attribute or a `.cnv`
 `* NMEA Latitude =` line reaches the contract by the same route as a `# Latitude:` comment.
 
-Three things it will tell you that you must act on rather than ignore:
+**Read `info["warnings"]`.** Inferred fixed-width boundaries, a `col_0…col_N` headerless
+file, a `.cnv` whose name count does not match its columns — each is reported there and
+nowhere else, and each needs a decision from you.
 
-- **Fixed-width column boundaries are inferred**, not declared. A column full in the sample
-  and empty later shifts every field after it. Check them against the accession's format
-  description.
-- **A headerless fixed-width file gets `col_0…col_N`.** Nothing downstream can map those.
-  Name them during staging, from the header block or the format description, with units
-  folded in.
-- **NetCDF units are folded into the column name** (`TEMP (degree_Celsius)`) because unit
-  detection reads the raw name and nothing else.
-
-**For a file that does not just open — an unknown binary, a layout nobody documented, a
-format you have to work out — follow
-[`reading-unknown-files.md`](reading-unknown-files.md).** It is the six questions to answer
+**For a file that does not just open — an unknown binary, a layout nobody documented —
+follow [`reading-unknown-files.md`](reading-unknown-files.md).** Six questions to answer
 before staging anything: what the file is, where the table starts, where the coordinates and
 time live, what each column is in WOD terms, what the units really are, and whether there is
-any data in it. It ends with the per-folder record to keep.
+any data. It ends with the per-folder record to keep.
 
 ## When you need to look inside one file
 
-Use the phase skills directly. Every one takes and returns JSON-serializable values and
-returns errors instead of raising.
-
-```python
-from wod_etl.staging import read_table, group_rows, write_staged_cast, pressure_to_depth
-from wod_etl.discovery import (list_remote_directory, classify_accession, classify_dataset,
-                              fetch_and_peek_file, sniff_format, download_file, read_any,
-                              profile_raw_data, load_tabular, split_casts)
-from wod_etl.mapping import query_wod_spec, generate_field_mapping
-from wod_etl.qc_transforms import convert_units_and_types, apply_qc_auditing
-from wod_etl.writers import write_ragged_profiles
-from wod_etl.verify import validate_intermediate_netcdf, audit_dataset
-```
+Use the phase skills directly, from `wod_etl.<phase>`. Every one takes and returns
+JSON-serializable values and returns errors instead of raising. The table below is the
+index; each phase README lists its functions.
 
 The order is: triage → list → download → sniff → read → classify → spec → contract →
-convert → (QC, only if asked) → write → validate. `process_one_file(url, None, out_dir,
-run_id)` is that chain for a single file if you want the whole thing without the manifest.
+convert → (QC, only if asked) → write → validate → verify.
+`process_one_file(url, None, out_dir, run_id)` is that chain for a single file, without the
+manifest.
 
 ### Detailed reference per phase
 

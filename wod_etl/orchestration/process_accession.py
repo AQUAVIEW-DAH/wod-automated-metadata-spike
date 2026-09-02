@@ -39,7 +39,7 @@ from wod_etl.discovery import (
 from wod_etl.mapping import generate_field_mapping, query_wod_spec
 from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE, match_variable
 from wod_etl.qc_transforms import apply_qc_auditing, convert_units_and_types
-from wod_etl.verify import validate_intermediate_netcdf
+from wod_etl.verify import validate_intermediate_netcdf, verify_output
 from wod_etl.writers import write_ragged_profiles
 from wod_etl.orchestration import run_manifest as mf
 
@@ -60,6 +60,7 @@ def process_accession(
     dataset_overrides: Optional[Dict[str, str]] = None,
     process_unidentified_as: Optional[str] = None,
     run_qc: Optional[bool] = None,
+    verify: bool = True,
 ) -> Dict[str, Any]:
     """Process every data file in an accession directory.
 
@@ -78,6 +79,12 @@ def process_accession(
                       RUN_WOD_QC, which is OFF: QC is applied downstream, and a flag written
                       here is one more thing to reconcile. The ORIGINATOR's flag columns are
                       carried through either way, verbatim and untranslated.
+    verify         -- read the written NetCDF back at the end and check every value against
+                      the manual's acceptable range for that variable at that depth. On by
+                      default, because the failure that matters most is the one that passes
+                      structural validation: a variable in the wrong unit validates cleanly.
+                      Sets `output_verified`; turn it off only for a run whose output you are
+                      about to discard.
 
     Returns the run summary. Inspect `failures`, `skipped` and the manifest for anything
     that did not complete.
@@ -185,7 +192,53 @@ def process_accession(
     summary = mf.summarize(manifest)
     summary["status"] = "complete" if summary["complete"] else "incomplete"
     summary.update(_run_report(manifest))
+    summary.update(_verify_written_output(out_dir, summary, verify))
     return summary
+
+
+def _verify_written_output(out_dir: Path, summary: Dict[str, Any],
+                           verify: bool) -> Dict[str, Any]:
+    """Read the output back and judge the numbers, not just the structure.
+
+    `status: "complete"` says every file was written and passed CF and ragged-array checks.
+    It says nothing about whether the values are possible, and the expensive failures are
+    exactly the ones that validate cleanly -- a column in the wrong unit, a bottom-depth
+    column on the vertical axis, a variable that is entirely fill. So the run checks its own
+    output rather than waiting to be asked.
+
+    `output_verified` is a SEPARATE verdict from `status` on purpose: one is about the run
+    finishing, the other about the data being possible, and a run can be complete and
+    unverified. Report both.
+    """
+    if not verify:
+        return {"output_verified": None,
+                "output_verification": {"skipped": "verify=False"}}
+    if not summary.get("outputs"):
+        return {"output_verified": None,
+                "output_verification": {"skipped": "no output was written"}}
+
+    try:
+        report = verify_output(str(out_dir))
+    except Exception as e:                           # noqa: BLE001 - unattended run
+        return {"output_verified": False,
+                "output_verification": {"error": f"{type(e).__name__}: {e}"}}
+
+    return {
+        "output_verified": report["passed"],
+        "output_verification": {
+            "passed": report["passed"],
+            "finding_counts": report["finding_counts"],
+            # Only the findings that mean the data cannot be what it claims are lifted into
+            # the summary; the rest stay in `text` so a run report is not drowned by the
+            # handful of extreme levels every real cast has.
+            "findings": [f for f in report["findings"] if f["severity"] in ("high", "medium")],
+            "value_ranges": {n: {"min": v.get("min"), "max": v.get("max"),
+                                 "units": v.get("units")}
+                             for n, v in report["variables"].items()},
+            "flag_distribution": report["flag_distribution"],
+            "text": report["text"],
+        },
+    }
 
 
 # ------------------------------------------------------------------ per file
@@ -537,6 +590,11 @@ def _abort(manifest, reason: str) -> Dict[str, Any]:
     summary["status"] = "aborted"
     summary["abort_reason"] = reason
     summary.update(_run_report(manifest))
+    # An aborted run still wrote files before it stopped, and those are the ones most worth
+    # checking -- whatever went systematically wrong is usually visible in them.
+    summary["output_verified"] = None
+    summary["output_verification"] = {"skipped": "run aborted; verify the partial output "
+                                                 "with verify_output(output_dir)"}
     return summary
 
 

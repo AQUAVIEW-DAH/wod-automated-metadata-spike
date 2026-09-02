@@ -67,6 +67,54 @@ An unreadable file returns `status: "FAIL"` with `fatal_error` rather than raisi
 
 ---
 
+## `verify_output(processed_dir, sample_levels=200_000)`
+
+**Judges the numbers. `process_accession` runs it at the end of every run.**
+
+Structural validation gates each file; this asks whether the values are possible. It reads
+every written NetCDF back and compares each observation against the manual's acceptable
+range for that variable **at that depth** (Appendix 11), then reports findings rather than
+numbers to interpret.
+
+```python
+report = verify_output("data/processed/2-CTD")
+report["passed"], report["finding_counts"], report["findings"]
+print(report["text"])
+```
+
+| Finding | Severity | What it means |
+| --- | --- | --- |
+| `systematically_out_of_range` | high | ≥50% of a variable's levels are impossible. That is a **unit or a conversion**, not bad data |
+| `flat_depth_axis` | high | every level at one depth, so it is not a profile — usually a bottom-depth column on the vertical axis |
+| `negative_depth` | high | depth is positive down; a negative one is an unapplied sign convention |
+| `unreadable_output` | high | the pipeline wrote a file it cannot read back |
+| `all_fill` | medium | the column mapped but held nothing, or the conversion produced NaN throughout |
+| `constant_value` | medium | a stuck sensor, an unrecognised fill value, or per-cast metadata mapped as a measurement |
+| `out_of_range_levels` | medium / low | some extreme levels. Normal in real casts at low severity; worth reading above 2% |
+
+Every finding carries `evidence` (the actual worst value, its depth, and the bound it broke)
+and an `action`. A finding nobody can act on is noise.
+
+**`passed` is false only on a high finding.** A medium finding is a question; a high finding
+means the variable cannot be what it claims.
+
+**Two caveats that matter as much as the findings:**
+
+- **The ranges are the union across all 30 ocean basins**, because assigning a cast to a
+  basin needs `range_area.msk` from the WOD website. That cuts one way only: something
+  flagged here is outside *every* basin's bound and is worth looking at, while something
+  unflagged **may still be wrong**. Nitrate's union bound reaches 500 µmol/kg, so a
+  physically absurd 240 passes.
+- **It cannot see a dropped column.** It judges what was written, not what should have been.
+  That is `unmapped_columns` and `audit_dataset`.
+
+`_suspect_cause` names the conversion a systematic offset resembles — ~1000× for a
+per-litre column in a per-kilogram variable, ~1.8× for Fahrenheit — when the ratio matches
+one within 15%. When it does not, it prints the ratio and says to check Table 3a rather than
+guessing.
+
+---
+
 ## `audit_dataset(staged_dir, dataset_type, processed_dir)`
 
 Recomputes the mapping contract for every staged file and reads back every NetCDF, so the

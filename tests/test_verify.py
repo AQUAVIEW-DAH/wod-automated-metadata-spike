@@ -149,3 +149,101 @@ class TestAuditSurvivesTextMetadata:
             {"10": {"name": "Bottom Depth (meters)", "value": 1409.3}}])
         r = report["value_ranges"]["secondary_header_10_bottom_depth_meters"]
         assert (r["min"], r["max"]) == pytest.approx((1409.3, 3212.4))
+
+
+class TestTheRunVerifiesItsOwnOutput:
+    """A wrong unit passes structural validation. The numbers have to be judged too."""
+
+    def _accession(self, tmp_path, rows, columns="Depth (m),Temperature (deg C),Salinity (PSU)"):
+        acc = tmp_path / "acc" / "1-ctd"
+        acc.mkdir(parents=True)
+        (acc / "cast.csv").write_text(
+            "# Latitude: 34.25\n# Longitude: -120.5\n# Date: 2024-03-04\n"
+            f"{columns}\n{rows}\n")
+        return acc.parent
+
+    def _run(self, src, tmp_path, name):
+        from wod_etl.orchestration import process_accession
+        return process_accession(str(src), output_dir=str(tmp_path / f"out-{name}"),
+                                 raw_dir=str(tmp_path / f"raw-{name}"),
+                                 run_id=f"t_vo_{name}", resume=False)
+
+    def test_plausible_values_verify(self, tmp_path):
+        src = self._accession(tmp_path, "0,15.1,33.4\n1,14.8,33.5\n2,13.9,33.6")
+        res = self._run(src, tmp_path, "ok")
+        assert res["output_verified"] is True
+        assert res["output_verification"]["finding_counts"]["high"] == 0
+
+    def test_a_whole_variable_out_of_range_fails_verification(self, tmp_path):
+        """Fahrenheit in a column labelled Celsius: nothing converts it, and it validates."""
+        src = self._accession(tmp_path, "0,60.5,33.4\n1,60.1,33.5\n2,59.4,33.6")
+        res = self._run(src, tmp_path, "degf")
+        # The run itself is clean -- that is the whole point of checking separately.
+        assert res["status"] == "complete"
+        assert res["output_verified"] is False
+        finding = res["output_verification"]["findings"][0]
+        assert finding["finding"] == "systematically_out_of_range"
+        assert finding["variable"] == "temperature"
+        assert "unit or a conversion" in finding["action"]
+
+    def test_a_flat_depth_axis_fails_verification(self, tmp_path):
+        """Every level at one depth is not a profile, however well-formed the file is."""
+        src = self._accession(tmp_path, "10,15.1,33.4\n10,14.8,33.5\n10,13.9,33.6")
+        res = self._run(src, tmp_path, "flat")
+        assert res["output_verified"] is False
+        kinds = {f["finding"] for f in res["output_verification"]["findings"]}
+        assert "flat_depth_axis" in kinds
+
+    def test_verification_can_be_turned_off(self, tmp_path):
+        src = self._accession(tmp_path, "0,15.1,33.4\n1,14.8,33.5\n2,13.9,33.6")
+        from wod_etl.orchestration import process_accession
+        res = process_accession(str(src), output_dir=str(tmp_path / "off"),
+                                raw_dir=str(tmp_path / "off-raw"), run_id="t_vo_off",
+                                resume=False, verify=False)
+        assert res["output_verified"] is None
+        assert res["output_verification"]["skipped"] == "verify=False"
+
+    def test_no_output_is_not_a_verification_failure(self, tmp_path):
+        """A run that wrote nothing has nothing to verify, which is not the same as bad."""
+        acc = tmp_path / "empty-acc" / "0-docs"
+        acc.mkdir(parents=True)
+        (acc / "readme.txt").write_text("Nothing but prose in this accession, no data.\n")
+        res = self._run(acc.parent, tmp_path, "none")
+        assert res["output_verified"] is None
+        assert "no output" in res["output_verification"]["skipped"]
+
+
+class TestVerifyOutputDirectly:
+    def test_an_empty_directory_passes_with_a_note(self, tmp_path):
+        from wod_etl.verify import verify_output
+        report = verify_output(str(tmp_path))
+        assert report["passed"] is True and report["netcdf_files"] == 0
+        assert report["note"] == "no output to verify"
+
+    def test_every_finding_carries_evidence_and_an_action(self, tmp_path):
+        """A finding nobody can act on is noise."""
+        from wod_etl.orchestration import process_accession
+        from wod_etl.verify import verify_output
+
+        acc = tmp_path / "a" / "1-ctd"
+        acc.mkdir(parents=True)
+        (acc / "cast.csv").write_text(
+            "# Latitude: 34.25\n# Longitude: -120.5\n# Date: 2024-03-04\n"
+            "Depth (m),Temperature (deg C)\n0,60.5\n1,60.1\n2,59.4\n")
+        out = tmp_path / "out"
+        process_accession(str(acc.parent), output_dir=str(out),
+                          raw_dir=str(tmp_path / "r"), run_id="t_vo_ev", resume=False)
+        report = verify_output(str(out))
+        assert report["findings"]
+        for f in report["findings"]:
+            assert f["evidence"] and f["action"]
+            assert f["severity"] in ("high", "medium", "low")
+
+    def test_the_basin_union_caveat_is_stated(self):
+        """The bounds are more permissive than a basin-aware check, and saying so matters:
+        an unflagged value can still be wrong."""
+        from wod_etl.verify.verify_output import render
+        text = render({"processed_dir": "x", "netcdf_files": 0, "casts": 0,
+                       "observations": 0, "findings": [], "variables": {},
+                       "flag_distribution": {}})
+        assert "union across all 30 ocean basins" in text
