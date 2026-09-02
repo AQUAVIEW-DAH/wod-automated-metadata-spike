@@ -5,18 +5,20 @@ VALUE code lists online, as a hyperlink beside each entry. Those links are PDF a
 so they survive neither a text extraction nor a copy-paste -- which is why the "App" column
 looks like a dead end when you read the extracted text.
 
-    uv run python scripts/extract_code_table_links.py
+    uv run python -m wod_etl.reference.extract_code_table_links
 
 Re-run it after replacing wod_readme.pdf with a newer WOD release. Nothing fetches the
 linked pages: they are external, they change between releases, and a cached copy would go
 stale without saying so.
+
+Sits beside index_manual.py for the same reason: both rebuild a file in knowledge/ from the
+PDF, both need the dev-only `pypdf`, and neither is imported by anything at runtime.
 """
 import collections
 import json
 import re
 from pathlib import Path
-
-from pypdf import PdfReader
+from typing import Optional
 
 from wod_etl.config import CODE_TABLES_DIR, WOD_README_PDF
 from wod_etl.reference import (biological_headers, taxa_biomass_variables,
@@ -54,7 +56,9 @@ NAME_OF = {
 
 
 def annotations(pdf_path: Path):
-    """Every (uri, page) hyperlink annotation in the PDF."""
+    """Every (uri, page) hyperlink annotation in the PDF. Requires the dev dep `pypdf`."""
+    from pypdf import PdfReader
+
     reader = PdfReader(str(pdf_path))
     for page_no, page in enumerate(reader.pages, start=1):
         for annot in (page.get("/Annots") or []):
@@ -68,6 +72,14 @@ def annotations(pdf_path: Path):
 
 
 def build(pdf_path: Path) -> dict:
+    """The code_table_links.json payload, or an {"error": ...} dict if it cannot be built."""
+    if not Path(pdf_path).exists():
+        return {"error": f"manual not found at {pdf_path}"}
+    try:
+        import pypdf                                        # noqa: F401
+    except ImportError:
+        return {"error": "pypdf is not installed. It is a dev dependency: `uv sync`."}
+
     found = collections.defaultdict(dict)
     pages_seen = set()
     for uri, page_no in annotations(pdf_path):
@@ -94,7 +106,7 @@ def build(pdf_path: Path) -> dict:
     return {
         "table": "WOD online code tables, one per coded metadata field",
         "source": "Hyperlink annotations embedded in knowledge/wod_readme.pdf, extracted "
-                  "with scripts/extract_code_table_links.py",
+                  "with wod_etl.reference.extract_code_table_links",
         "pages": sorted(pages_seen),
         "note": "The manual defines the metadata FIELDS (Tables 4a, 5a, 6a, 7a) but "
                 "publishes the VALUE code lists online, as a link beside each entry. These "
@@ -112,9 +124,20 @@ def build(pdf_path: Path) -> dict:
     }
 
 
-if __name__ == "__main__":
-    data = build(WOD_README_PDF)
+def write(pdf_path: Optional[Path] = None) -> dict:
+    """Build and write code_table_links.json. Returns a status dict; never raises."""
+    data = build(pdf_path or WOD_README_PDF)
+    if "error" in data:
+        return {"status": "error", **data}
     out = CODE_TABLES_DIR / "code_table_links.json"
     out.write_text(json.dumps(data, indent=2) + "\n")
-    counts = {k: len(v) for k, v in data["links"].items()}
-    print(f"{out}: {counts}, from {len(data['pages'])} pages")
+    return {"status": "written", "path": str(out), "pages_scanned": len(data["pages"]),
+            "counts": {k: len(v) for k, v in data["links"].items()}}
+
+
+if __name__ == "__main__":
+    import sys
+
+    result = write()
+    print(json.dumps(result, indent=2))
+    sys.exit(1 if result["status"] == "error" else 0)

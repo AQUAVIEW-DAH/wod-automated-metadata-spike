@@ -12,3 +12,8 @@ knowledge/wod_readme_db/page_text.json
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# One-off staging and probe scripts. Local working files, not source: each is written
+# for one accession and nothing references it. The reusable extractor lives in
+# wod_etl/reference/extract_code_table_links.py.
+scripts/

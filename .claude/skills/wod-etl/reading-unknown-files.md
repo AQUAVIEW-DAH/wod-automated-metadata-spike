@@ -185,8 +185,10 @@ your report.
   Ask what wrote it. Do not guess a layout: a wrong record length produces numbers, and they
   look like data.
 - **A format the accession documents but nothing here reads.** Write a one-off reader in
-  `scripts/`, emit a staged CSV into `data/staging/`, and point the pipeline at that. The
-  staged copy records where every value came from; `data/raw/` is never edited.
+  `scripts/` — a local scratch directory, gitignored, one file per accession — emit a staged
+  CSV into `data/staging/`, and point the pipeline at that. The staged copy is what carries
+  the provenance, not the script, so record every derived value in its header;
+  `data/raw/` is never edited.
 - **A layout you have now seen twice.** That is a reader, not a script. Add it to
   `wod_etl/discovery/read_any.py` and a signature to `sniff_format.py`.
 

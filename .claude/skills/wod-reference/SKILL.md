@@ -77,7 +77,7 @@ Nothing in this project fetches these. They are external, they change between WO
 and a cached copy would go stale without saying so — so the answer to "what does probe type
 7 mean" is the URL plus, if the user wants the value, a fetch they can see. Rebuild the link
 file after a new WOD release with
-`uv run python scripts/extract_code_table_links.py`.
+`uv run python -m wod_etl.reference.extract_code_table_links`.
 
 ### 2. Prose references — read the relevant one
 

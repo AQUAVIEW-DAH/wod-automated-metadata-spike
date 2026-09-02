@@ -299,10 +299,15 @@ and **skills** (the code). Everything else is scaffolding.
 │   ├── staging/manifests/             One JSON ledger per run
 │   └── processed/                     Output .nc files
 │
-├── scripts/                           One-off extractors, e.g. the code-table links
 ├── tests/                             Unit suites + the layout guard
 ├── README.md
 └── pyproject.toml
+
+not tracked:
+  scripts/                             One-off per-accession staging scripts. Local working
+                                       files -- the staged copy in data/staging/ carries the
+                                       provenance, not the script. The reusable extractor
+                                       lives in wod_etl/reference/ instead.
 ```
 
 **Why instructions and code are separate** — the package is a normal root-level Python

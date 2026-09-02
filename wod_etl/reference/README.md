@@ -148,7 +148,7 @@ can resolve a code.
 Rebuild after replacing the PDF with a newer release:
 
 ```bash
-uv run python scripts/extract_code_table_links.py
+uv run python -m wod_etl.reference.extract_code_table_links
 ```
 
 ### Five namespaces, all keyed on small integers

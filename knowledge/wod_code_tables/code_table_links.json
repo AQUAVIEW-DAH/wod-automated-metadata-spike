@@ -1,6 +1,6 @@
 {
   "table": "WOD online code tables, one per coded metadata field",
-  "source": "Hyperlink annotations embedded in knowledge/wod_readme.pdf, extracted with scripts/extract_code_table_links.py",
+  "source": "Hyperlink annotations embedded in knowledge/wod_readme.pdf, extracted with wod_etl.reference.extract_code_table_links",
   "pages": [
     9,
     13,

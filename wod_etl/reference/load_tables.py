@@ -143,7 +143,7 @@ def code_table_links() -> Dict[str, Any]:
     The manual defines the metadata FIELDS; the VALUE code lists live online, linked beside
     each entry. Those links are PDF annotations and do not survive a text extraction, which
     is why the 'App' column reads like a dead end. Rebuild with
-    `uv run python scripts/extract_code_table_links.py`.
+    `uv run python -m wod_etl.reference.extract_code_table_links`.
     """
     return load_table("code_table_links")
 
