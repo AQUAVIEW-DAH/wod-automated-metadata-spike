@@ -74,13 +74,44 @@ Single-cast wrapper over the above. Use it when you have exactly one cast.
 | --- | --- |
 | Global attributes | `title`, `Conventions`, `featureType=profile`, `WOD_version`, `wod_dataset_type`, `source_file`, `institution`, `references` |
 | Provenance | `unit_conversions`, and `seawater_density_kg_m3` + `seawater_density_provenance` when a conversion used the assumed density |
-| Secondary headers | one `secondary_header_<id>_<name>` attribute per contract entry |
-| Per cast (`casts`) | `lat`, `lon`, `time` (days since 1770-01-01), `cast_id` (`cf_role=profile_id`), `z_row_size` (`sample_dimension=z_obs`) |
-| Per level (`z_obs`) | `z` (`positive=down`, `axis=Z`), `z_qc`, one variable per WOD code, one `<var>_qc` each |
+| Secondary headers | one `secondary_header_<id>_<name>` attribute per Table 4a entry, plus `<same>_code_table` where WOD publishes a code list |
+| Per cast (`casts`) | `lat`, `lon`, `time` (days since 1770-01-01), `cast_id` (`cf_role=profile_id`), `z_row_size` (`sample_dimension=z_obs`), and any secondary header that differs between casts |
+| Per level (`z_obs`) | `z` (`positive=down`, `axis=Z`), `z_qc` when WOD QC ran, one variable per WOD code, and per variable `<var>_qc` and/or `<var>_qc_originator` |
 
 Each measured variable carries `units`, `long_name` (the WOD name), `wod_variable_code`,
-`coordinates = "time lat lon z"` and `ancillary_variables` pointing at its QC array. QC
-arrays carry `flag_values` and `flag_meanings`.
+`coordinates = "time lat lon z"` and `ancillary_variables` pointing at its flag arrays.
+
+### Metadata on each variable
+
+Table 5a variable specific second headers are written as attributes, so the file states what
+the originator declared rather than only what the conversion produced:
+
+| Attribute | From | Why it is there |
+| --- | --- | --- |
+| `originator_units`, `wod_variable_specific_header_8` | the raw column name | A conversion is only auditable against the unit the source declared |
+| `measurement_scale`, `wod_variable_specific_header_3` | `[ITS-90]`, `(PSS-78)` | A temperature is ambiguous without knowing which standard it is on |
+| `originator_column_name` | the raw column name, verbatim | The link back to the source file |
+| `wod_variable_specific_header_<id>` | other Table 5a fields, e.g. 17 for nitrate+nitrite | How WOD records the distinction |
+
+Use `setncattr`, not `setattr`, if you add more: netCDF4 reserves Python attribute names on
+`Variable` — `scale`, `mask`, `name`, `dtype` and others — and rebinding one raises. That is
+why the scale attribute is `measurement_scale`.
+
+### Two kinds of quality flag, and they do not mix
+
+| Variable | Scale | Written when |
+| --- | --- | --- |
+| `<var>_qc` | WOD Table 12 section 2b, with `flag_values` and `flag_meanings` | WOD QC ran (`run_qc=True`) |
+| `<var>_qc_originator` | **the submitter's own**, whatever it is | the source file had a flag column |
+
+The originator array deliberately carries **no** `flag_values`/`flag_meanings` — inventing
+them would assert a scale nobody stated. It carries `source_column`, `wod_secondary_header =
+96`, and a `code_table` URL for the list of WOD flag sets. An originator's `1` may mean
+*good* where WOD's `1` means a failed range check; translating between them is not possible
+without knowing the set, which is what header 96 records.
+
+It is stored as float, not int: some submitters use decimals or letters, and coercing would
+silently rewrite them.
 
 ### Variable names are sanitised
 
@@ -100,6 +131,12 @@ names are prose, so they are converted and the original kept in `long_name`.
 
 - **Depth is not written as a variable.** A mapping with `wod_code == 0` becomes `z`. It
   will not appear in `variables_written`.
+- **No `<var>_qc` is normal.** WOD QC is off by default. The validator distinguishes "carries
+  the originator's flags and no WOD flags" from "no quality flags at all"; only the second
+  is worth chasing.
+- **A secondary header identified but with no value** — header 96 when flag columns exist but
+  the flag set is unnamed — becomes a `<key>_status` attribute saying so, not a variable of
+  pure fill.
 - **The output path is yours to choose.** `process_one_file` uses `<source stem>.nc`; nothing
   enforces that.
 - Missing coordinates are written as NaN rather than refused, so the *validator* is what

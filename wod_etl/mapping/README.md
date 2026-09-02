@@ -71,9 +71,45 @@ e.g. phosphate in a CTD file. It becomes a contract warning, not an error.
 | Function | Use |
 | --- | --- |
 | `match_variable(name)` | Column name → WOD code, or `None`. Returns `0` for a depth column. |
+| `explain_column(name)` | **Why** a column has no code, for the ones that must not be aliased. `None` means "not recognised" — that one may need an alias. |
 | `normalize_name(name)` | `"Temp (deg C)"` → `"temp"`. What matching operates on. |
+| `extract_unit(name)` | `"Temp (deg C)"` → `"deg C"`. What normalisation throws away, kept. |
+| `extract_scale(name)` | `"t090C: Temperature [ITS-90, deg C]"` → `"ITS-90"`. A scale is not a unit. |
 | `resolve_dataset(label, depth_increment_m)` | Dataset routing on its own. |
 | `wod_variables()` / `wod_datasets()` / `wod_secondary_headers()` | Raw tables. |
+
+### Names that look like variables and are not
+
+`NOT_STORED` in [`query_wod_spec.py`](query_wod_spec.py) is the **single registry** of
+columns WOD has no code for. `match_variable` consults it to *refuse* a match, and
+`explain_column` reads the same registry to say why — so the refusal and its explanation
+cannot drift apart. Nothing else in the project keeps a second copy.
+
+```python
+match_variable("Potential Temperature (deg C)")   # -> None
+explain_column("Potential Temperature (deg C)")
+# {"variable": "potential_temperature", "reason": ..., "route": ..., "do_not_alias": True}
+```
+
+**Potential temperature is the one that bites.** It is derived — in-situ temperature
+adjusted for adiabatic compression — and it used to be an alias of code 1. With both columns
+present the cast claimed Temperature twice; with only theta present the cast silently
+reported the wrong quantity. It can be converted back to in-situ if pressure and salinity
+are known, but that is a computation done during [staging](../staging/README.md), not a
+rename.
+
+The registry is checked **before** the alias fallback, because the fallback is what captured
+these: `potential_temperature` contains `temperature`, and the longest-match rule duly
+returned code 1. Exact matches are tried in both directions first, so `nitrate_nitrite`
+still resolves to code 8 rather than being blocked as nitrite.
+
+### Columns with "depth" in the name that are not the depth axis
+
+`Bottom Depth`, `Water Depth`, `Sounding`, `Station Depth`, `Max Depth`, `Sensor Depth`,
+`Depth to bottom` — all matched `depth` inside their own name and were handed to the
+vertical axis, which set every level of the cast to the same value. `NOT_THE_DEPTH_AXIS`
+blocks them. They are not lost: `map_metadata` claims bottom depth as **secondary header
+10**.
 
 **Depth is not a WOD variable.** There is no code for it — code 25 is *Pressure*, a distinct
 measurement. Internally a depth column carries the sentinel code `0`
@@ -81,12 +117,124 @@ measurement. Internally a depth column carries the sentinel code `0`
 
 ---
 
-## `generate_field_mapping(profile_result, spec_result)`
+## `map_metadata(header_text, columns, df=None, dataset_code=None)`
 
-Builds the contract.
+**Everything in a file that is not a measurement value.** `generate_field_mapping` decides
+what each measurement column is; this decides what everything else is — and without it a
+file's bottom depth, probe type, ship, wind speed, sampling gear, measurement scale,
+originator units and originator flags all resolve to no Table 3a code and are dropped. WOD
+has a field for every one of them.
 
 ```python
-contract = generate_field_mapping({**profile, "columns": list(df.columns)}, spec)
+from wod_etl.mapping import map_metadata
+meta = map_metadata(header_text, list(df.columns), df)
+```
+
+Metadata arrives four ways and all four are handled:
+
+| Where it lives | Example | Becomes |
+| --- | --- | --- |
+| A `Key: value` header line | `# Probe type: T-7` | secondary header 29 |
+| A **delimited** header line | `Platform,,5423.,OCL code,KAHAROA` | secondary header 3 |
+| A whole column, constant down the cast | a `Bottom Depth (m)` column | secondary header 10 |
+| Part of a measurement column's own name | `[ITS-90, deg C]` | variable specific headers 3 and 8 |
+
+### The delimited header block
+
+WOD's own CSV export, and several originators copying it, write the block as columns rather
+than as `Key: value`:
+
+```
+Platform     ,,           5423.,OCL code,KAHAROA (R/V; call sign ZM7552; built 1981),
+Bottom depth ,,              36,meters,,
+Instrument   ,Temperature,  464.,WOD code,CTD: SBE 37-IM MicroCAT,
+uncalibrated ,Salinity,       1.,,,
+```
+
+Column 0 is the key, column 2 the value, and the rest a unit **or** a code system plus a
+description. **Column 1 is the variable the key applies to** — empty means the key describes
+the CAST (Table 4a), named means it describes ONE VARIABLE (Table 5a) and says which, so a
+per-variable header can be attached rather than guessed at.
+
+Three things this gets right that a `Key: value` read does not:
+
+- **The value is column 2, not "the next non-empty column".** `Accession Number ,, ,NODC
+  code,,` has no accession number in it; scanning forward reports one reading "NODC code".
+- **A code system is recorded as one.** `464.` under `WOD code` is already a published code:
+  `value_is_already_a_code` says so, which stops a reader treating it as a free-text probe
+  name or looking up a code that is the answer already.
+- **A collision keeps both.** `Originators Cruise ID` and `Platform` both match header 3;
+  the coded value wins and the loser goes to `unresolved` naming the winner and why.
+
+### `unresolved` — nothing goes missing quietly
+
+Every key that looked like metadata and could not be placed is listed, with its value, the
+line it came from, and why:
+
+```json
+[{"key": "Country", "value": "NZ", "matches": null,
+  "note": "no WOD field matched this key. Either it has no WOD home -- report it as not
+           carried -- or the pattern is missing from SECONDARY_HEADER_PATTERNS."}]
+```
+
+**Read it.** A metadata key that vanishes silently is the same failure as a dropped column,
+and it was silent until this existed: on accession 0146739 the old parser reported three
+headers, all three wrong, and named none of the fourteen keys it had skipped.
+
+```json
+{"secondary_headers": {
+   "29": {"name": "Probe Type", "value": "T-7", "source": "header block",
+          "is_coded": true,
+          "code_table": {"csv": "https://.../CODES/CSV/s_29_probe_type.csv"}},
+   "10": {"name": "Bottom Depth (meters)", "value": 2500.0,
+          "source": "column 'Bottom Depth (m)'", "is_coded": false}},
+ "variable_specific_headers": {
+   "t090C: Temperature [ITS-90, deg C]": {
+     "wod_code": 1, "headers": {"8": {"name": "Originator's units", "value": "deg C"},
+                                "3": {"name": "Scale", "value": "ITS-90"}}}},
+ "metadata_columns": [...], "originator_flags": [...], "unresolved": []}
+```
+
+**A varying metadata column records no value.** A secondary header describes the whole cast,
+so a `Bottom Depth` that changes down an underway track is withheld with the reason stated,
+rather than collapsed to one number — that would be a fabrication.
+
+**A header-block value beats a column value.** The first was stated about the cast; the
+second is inferred from the data.
+
+**Every coded field carries its published code list.** The manual defines the metadata
+*fields* and publishes the *value* code lists online, as a link beside each entry — links
+that are PDF annotations and do not survive a text extraction, which is why the "App" column
+reads like a dead end. They are extracted into
+`knowledge/wod_code_tables/code_table_links.json`; see
+[`wod_etl/reference/README.md`](../reference/README.md). `is_coded: false` is a real answer,
+not a gap: bottom depth is metres, not a code.
+
+### Originator quality flags
+
+A column named `Temperature_QC`, `QC_Temperature`, `TEMP_QF` or `Salinity quality flag` is
+paired with the variable it flags — by name, and failing that by resolved WOD code, because
+the flag column says `Temperature` while the measurement column may say
+`t090C: Temperature [ITS-90, deg C]`.
+
+**They are kept verbatim and never translated.** A submitter's `1` may mean *good* where WOD
+Table 12's `1` means a failed range check, so mapping one onto the other invents meaning.
+They are written to their own NetCDF variable, `<var>_qc_originator`, with no
+`flag_values`/`flag_meanings` and a pointer to the code table that names flag *sets*. WOD's
+own field for "which flag set was used" is secondary header 96; when the file does not name
+it, that is recorded as unknown rather than guessed.
+
+Flag columns and metadata columns are **consumed**, not dropped — neither appears in
+`unmapped_columns`.
+
+---
+
+## `generate_field_mapping(profile_result, spec_result, df=None)`
+
+Builds the contract. `df` is optional and used only to read a metadata column's *value*.
+
+```python
+contract = generate_field_mapping({**profile, "columns": list(df.columns)}, spec, df=df)
 ```
 
 ```json
@@ -97,39 +245,55 @@ contract = generate_field_mapping({**profile, "columns": list(df.columns)}, spec
     "role": "depth_axis", "target_unit": "meters", "conversion_needed": "feet_to_meters"},
    {"raw_column": "Temp (deg F)", "wod_code": 1, "wod_name": "Temperature",
     "role": "measurement", "target_unit": "Degrees Celsius",
-    "conversion_needed": "fahrenheit_to_celsius"}],
- "extracted_header_metadata": {"1": {"name": "Accession Number", "value": "0287423"},
-                               "3": {"name": "Platform Code", "value": "STOCS85A"}},
+    "conversion_needed": "fahrenheit_to_celsius",
+    "originator_unit": "deg F", "originator_scale": null,
+    "variable_specific_headers": {"8": {"name": "Originator's units", "value": "deg F"}},
+    "originator_flag_column": "Temp_QC"}],
+ "secondary_headers": {"1": {...}, "3": {...}, "10": {...}, "29": {...}},
+ "metadata_columns": [{"column": "Bottom Depth (m)", "secondary_header": 10, ...}],
+ "originator_flags": [{"flag_column": "Temp_QC", "flags_column": "Temp (deg F)",
+                       "flags_wod_code": 1, "scope": "variable"}],
+ "extracted_header_metadata": {"1": {"name": "Accession Number", "value": "0287423"}},
  "parsed_coordinates": {"latitude": 61.93, "longitude": -172.27,
                         "year": 1985, "month": 6, "day": 12},
  "missing_required_coordinates": [],
  "unmapped_columns": ["Cond"],
+ "dropped_columns": [{"column": "Cond", "variable": "conductivity",
+                      "reason": "...", "route": "...", "do_not_alias": true}],
  "warnings": [],
  "ready_for_transform": true}
 ```
+
+`extracted_header_metadata` is the narrower set the original parser produced and is kept so
+anything reading that key still works. **`secondary_headers` is the one to read** — it
+covers the header block *and* metadata columns, each with its code list.
 
 ### Read these four fields before trusting a run
 
 | Field | What it means |
 | --- | --- |
-| `unmapped_columns` | **Silently dropped from the output file.** A column you expected here means a missing alias. |
+| `unmapped_columns` | **Silently dropped from the output file.** A column you expected here means a missing alias — unless it is also in `dropped_columns`, which means it was refused on purpose. |
+| `dropped_columns` | Columns WOD has no code for, each with the reason and what to do instead. These must **not** be aliased. |
 | `missing_required_coordinates` | The file will fail Phase 4 validation. Lists any of `latitude`, `longitude`, `time`, `depth`. |
 | `ready_for_transform` | `false` = non-empty mapping is missing or coordinates are absent. Do not proceed blind. |
 | `warnings` | Unresolved dataset, two columns claiming one WOD code, a variable not stored in this dataset. |
 
 ### To map a column that landed in `unmapped_columns`
 
-First ask whether WOD stores the variable at all. Some columns *should* stay unmapped, and
-aliasing them to an adjacent code is worse than dropping them:
+First ask whether WOD stores the variable at all. **Check `dropped_columns` before reaching
+for an alias** — anything listed there was refused deliberately, and `explain_column` says
+why. Some columns *should* stay unmapped, and aliasing them to an adjacent code is worse
+than dropping them:
 
 | Column | Why it has no code |
 | --- | --- |
 | conductivity, sigma-t/sigma-theta, sound velocity | not in Table 3a |
-| potential temperature | mapping it to code 1 makes a cast claim Temperature twice |
+| potential temperature | derived, not measured. Mapping it to code 1 makes a cast claim Temperature twice — or report theta as in-situ. Convert it during staging if it is all you have |
 | nitrite | excluded from the online database (manual p.49); code 8 is nitrate **and** nitrate+nitrite, a different measurement |
 | ammonium, turbidity | not in Table 3a |
 | CDOM absorption (m⁻¹) | *not* code 24 — transmissivity/beam attenuation is a different measurement |
 | size-fractionated chlorophyll | one chlorophyll code exists, so only a total maps |
+| bottom depth, water depth, sounding | not a profile variable at all — it is **secondary header 10**, and `map_metadata` already claims it |
 
 If it is a real WOD variable, add an alias to `VARIABLE_ALIASES` in
 [`query_wod_spec.py`](query_wod_spec.py). **Do not rename the source data** — the raw file
@@ -197,10 +361,16 @@ pressure (identical to mbar).
 minutes (`LAT: 61 55.8 N`), and hemisphere suffixes (`33.5 S` → `-33.5`). Dates are read as
 `YYYY-MM-DD`, `YYYYMMDD` or `DD-MM-YYYY`, plus `HH:MM` time.
 
-`extracted_header_metadata` is keyed by **Table 4a secondary header ID**, which is a
-*different namespace* from Table 3a variable codes — ID 29 is "Probe Type" while variable
-code 29 is "Air pressure". Only genuinely numeric headers (10, 22, 23, 24) are coerced to
-float; accession, station and WMO codes stay strings so `0287423` keeps its leading zero.
+`secondary_headers` is keyed by **Table 4a secondary header ID**, which is a *different
+namespace* from Table 3a variable codes — ID 29 is "Probe Type" while variable code 29 is
+"Air pressure". Only genuinely numeric headers are coerced to float
+(`NUMERIC_SECONDARY_HEADERS` in [`map_metadata.py`](map_metadata.py)); accession, station and
+WMO codes stay strings so `0287423` keeps its leading zero.
+
+`SECONDARY_HEADER_PATTERNS` covers the Table 4a fields that turn up in real submissions —
+around fifty of the sixty-seven, including sea state, cloud cover, Secchi depth, probe type,
+recorder, digitisation method, water sampler, WMO id and the ARGOS fields. Add a pattern
+there rather than parsing a key by hand.
 
 ---
 

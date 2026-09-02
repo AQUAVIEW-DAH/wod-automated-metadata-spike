@@ -76,6 +76,21 @@ QC_FILL_VALUE = -1
 CF_CONVENTIONS = "CF-1.8"
 WOD_VERSION = "WOD23"
 
+# --------------------------------------------------------- dataset routing
+# What a file is processed as when nothing identifies it and the caller has asked for
+# unidentified files to be processed anyway. It is an ASSUMPTION, never a classification:
+# process_accession records which files were routed this way so a report can say so.
+DEFAULT_DATASET_TYPE = os.environ.get("WOD_DEFAULT_DATASET_TYPE", "OSD")
+
+# ------------------------------------------------------------------- QC
+# Whether to run WOD's own observed-level quality control (manual Table 12, section III).
+# OFF by default: WOD QC is applied downstream by the data centre, and a flag written here
+# is one more thing to reconcile. The ORIGINATOR's own flag columns are carried through
+# either way -- verbatim, on the submitter's scale, never translated to Table 12.
+#
+# Turn it on with WOD_RUN_QC=1, or per call with process_accession(run_qc=True).
+RUN_WOD_QC = os.environ.get("WOD_RUN_QC", "0").strip().lower() in ("1", "true", "yes", "on")
+
 # ------------------------------------------------------- failure policy
 # How process_accession reacts to a per-file failure during an unattended run.
 #   "skip"  -- record the failure in the manifest and continue (default)
@@ -134,6 +149,8 @@ def describe() -> dict:
         "gradient_depth_split_m": GRADIENT_DEPTH_SPLIT_M,
         "min_gradient_depth_diff_m": MIN_GRADIENT_DEPTH_DIFF_M,
         "assumed_seawater_density_kg_m3": ASSUMED_SEAWATER_DENSITY_KG_M3,
+        "default_dataset_type": DEFAULT_DATASET_TYPE,
+        "run_wod_qc": RUN_WOD_QC,
         "on_file_error": ON_FILE_ERROR,
         "text_encodings": list(TEXT_ENCODINGS),
     }

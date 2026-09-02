@@ -149,6 +149,7 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
                 v.unit_abbrev = var["unit_abbrev"]
             v[:] = data
 
+            ancillary = []
             flags = _concat_flags(casts, total_obs, var=var)
             if flags is not None:
                 qname = f"{name}_qc"
@@ -157,7 +158,37 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
                 q.flag_values = np.array(_OBS_FLAG_VALUES, dtype=np.int8)
                 q.flag_meanings = _OBS_FLAG_MEANINGS
                 q[:] = flags
-                v.ancillary_variables = qname
+                ancillary.append(qname)
+
+            # The originator's own flags, carried through verbatim. They are NOT WOD Table
+            # 12 flags -- a submitter's 1 may mean 'good' where WOD's 1 means a failed range
+            # check -- so they get their own variable, no flag_values/flag_meanings, and an
+            # attribute pointing at the code table that names the scheme. Translating them
+            # would invent meaning; dropping them would lose the only QC the file has.
+            orig, orig_source = _concat_originator_flags(casts, total_obs, var)
+            if orig is not None:
+                oname = f"{name}_qc_originator"
+                o = ds.createVariable(oname, "f4", (OBS_DIM,), fill_value=NETCDF_FILL_VALUE)
+                o.long_name = (f"originator's quality flag for {var['wod_name']}, "
+                               f"as submitted")
+                o.comment = ("Values are the ORIGINATOR's, on the originator's scale. They "
+                             "are not WOD Table 12 flags and must not be read as such. WOD "
+                             "records which flag set was used as secondary header 96.")
+                o.source_column = orig_source
+                o.wod_secondary_header = np.int32(96)
+                o.code_table = (
+                    "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/"
+                    "s_96_origflagset.html")
+                o[:] = orig
+                ancillary.append(oname)
+
+            if ancillary:
+                v.ancillary_variables = " ".join(ancillary)
+
+            # setncattr, not setattr: netCDF4 reserves a set of Python attribute names on
+            # Variable ('scale', 'mask', 'name', 'dtype'...) and rebinding one raises.
+            for attr, value in _variable_metadata(casts, var).items():
+                v.setncattr(attr, value)
 
             written.append({"nc_name": name, "wod_name": var["wod_name"],
                             "wod_code": var["wod_code"], "units": var["units"]})
@@ -252,6 +283,56 @@ def _concat_flags(casts, total_obs, var=None, depth=False) -> Optional[np.ndarra
     return out if found else None
 
 
+def _concat_originator_flags(casts, total, var):
+    """The originator's flag column for one variable, concatenated across casts.
+
+    Kept as float, not int: an originator flag is not always an integer -- some submitters
+    use letters or decimals -- and coercing to int would silently rewrite them.
+    """
+    out = np.full(total, np.nan, dtype=float)
+    at, found, source = 0, False, None
+    for c in casts:
+        n = len(c["df"])
+        mapping = next((m for m in c["contract"].get("column_mapping", [])
+                        if m.get("wod_code") == var["wod_code"]), None)
+        fcol = (mapping or {}).get("originator_flag_column")
+        if fcol and fcol in c["df"].columns:
+            out[at:at + n] = pd.to_numeric(c["df"][fcol], errors="coerce").to_numpy(dtype=float)
+            found = True
+            source = source or fcol
+        at += n
+    return (out, source) if found else (None, None)
+
+
+def _variable_metadata(casts, var) -> Dict[str, Any]:
+    """Table 5a variable specific headers for one variable, as NetCDF attributes.
+
+    The originator's unit and the measurement scale are the two that always matter: a
+    conversion is only auditable against the unit the source declared, and a temperature is
+    ambiguous without knowing whether it is on ITS-90 or IPTS-68.
+    """
+    attrs: Dict[str, Any] = {}
+    for c in casts:
+        mapping = next((m for m in c["contract"].get("column_mapping", [])
+                        if m.get("wod_code") == var["wod_code"]), None)
+        if not mapping:
+            continue
+        if mapping.get("originator_unit") and "originator_units" not in attrs:
+            attrs["originator_units"] = str(mapping["originator_unit"])
+            attrs["wod_variable_specific_header_8"] = str(mapping["originator_unit"])
+        if mapping.get("originator_scale") and "measurement_scale" not in attrs:
+            attrs["measurement_scale"] = str(mapping["originator_scale"])
+            attrs["wod_variable_specific_header_3"] = str(mapping["originator_scale"])
+        for vid, header in (mapping.get("variable_specific_headers") or {}).items():
+            key = f"wod_variable_specific_header_{vid}"
+            if key not in attrs and header.get("value") is not None:
+                attrs[key] = (str(header["value"]) if not isinstance(header["value"], (int, float))
+                              else header["value"])
+        if mapping.get("raw_column") and "originator_column_name" not in attrs:
+            attrs["originator_column_name"] = str(mapping["raw_column"])
+    return attrs
+
+
 def _coord(cast, key) -> float:
     v = cast["contract"].get("parsed_coordinates", {}).get(key)
     try:
@@ -276,8 +357,8 @@ def _cast_times(casts) -> Tuple[np.ndarray, bool]:
 
 
 def _cast_id(cast, index) -> str:
-    meta = cast["contract"].get("extracted_header_metadata", {})
-    platform = str(meta.get("3", {}).get("value", "")) or "unknown"
+    meta = _cast_secondary_headers(cast)
+    platform = str(meta.get("3", {}).get("value") or "") or "unknown"
     return f"{platform}_{index:04d}"[:64]
 
 
@@ -308,15 +389,30 @@ def _write_globals(ds, casts) -> None:
             if lg.get("seawater_density_kg_m3"))
 
 
+def _cast_secondary_headers(cast) -> Dict[str, Any]:
+    """One cast's Table 4a headers, from the full metadata map or the older key.
+
+    `secondary_headers` comes from map_metadata and covers the header block AND metadata
+    columns; `extracted_header_metadata` is the narrower set the original parser produced.
+    Both are read so a contract built by either path still writes its metadata.
+    """
+    contract = cast["contract"]
+    full = contract.get("secondary_headers") or {}
+    legacy = contract.get("extracted_header_metadata") or {}
+    return {**legacy, **full}
+
+
 def _secondary_header_columns(casts):
     """Every Table 4a header seen across the casts, as (id, name, key, values-per-cast)."""
-    per_cast = [c["contract"].get("extracted_header_metadata", {}) or {} for c in casts]
+    per_cast = [_cast_secondary_headers(c) for c in casts]
     sec_ids = sorted({k for m in per_cast for k in m},
                      key=lambda k: (0, int(k)) if str(k).isdigit() else (1, str(k)))
     for sec_id in sec_ids:
         name = next(m[sec_id].get("name", sec_id) for m in per_cast if sec_id in m)
         key = f"secondary_header_{sec_id}_{cf_safe_name(name)}"
-        yield sec_id, name, key, [m.get(sec_id, {}).get("value") for m in per_cast]
+        entry = next(m[sec_id] for m in per_cast if sec_id in m)
+        yield (sec_id, name, key, [m.get(sec_id, {}).get("value") for m in per_cast],
+               entry.get("code_table") or {})
 
 
 def _is_shared(values) -> bool:
@@ -332,15 +428,33 @@ def _write_shared_secondary_headers(ds, casts) -> None:
     variables instead, in _write_varying_secondary_headers. A single-cast file agrees with
     itself on everything and so keeps the all-global layout it has always had.
     """
-    for _sec_id, _name, key, values in _secondary_header_columns(casts):
-        if _is_shared(values):
-            ds.setncattr(key, str(values[0]))
+    for sec_id, _name, key, values, code_table in _secondary_header_columns(casts):
+        if not _is_shared(values):
+            continue
+        ds.setncattr(key, str(values[0]))
+        # A coded value is unusable without the list it is coded against, and WOD publishes
+        # those online rather than in the manual. Carrying the URL means a reader of the
+        # NetCDF alone can resolve the code.
+        url = code_table.get("csv") or code_table.get("html") or code_table.get("pdf")
+        if url:
+            ds.setncattr(f"{key}_code_table", url)
 
 
 def _write_varying_secondary_headers(ds, casts) -> None:
     """Headers that differ between casts, written on the `casts` dimension."""
-    for sec_id, name, key, values in _secondary_header_columns(casts):
+    for sec_id, name, key, values, code_table in _secondary_header_columns(casts):
         if _is_shared(values):
+            continue
+        if all(v is None for v in values):
+            # The header was identified but its value is not in the file -- header 96 when
+            # flag columns are present but the flag SET is not named, for instance. A
+            # variable of pure fill says nothing; an attribute says what is known.
+            ds.setncattr(f"{key}_status",
+                         "present in this file but its value is not stated in the source; "
+                         "it must come from the submitter or the accession documentation")
+            url = code_table.get("csv") or code_table.get("html") or code_table.get("pdf")
+            if url:
+                ds.setncattr(f"{key}_code_table", url)
             continue
         if all(v is None or isinstance(v, (int, float)) for v in values):
             v = ds.createVariable(key, "f8", (CAST_DIM,), fill_value=np.nan)
@@ -351,6 +465,9 @@ def _write_varying_secondary_headers(ds, casts) -> None:
                 v[i] = "" if x is None else str(x)
         v.long_name = str(name)
         v.wod_secondary_header_id = str(sec_id)
+        url = code_table.get("csv") or code_table.get("html") or code_table.get("pdf")
+        if url:
+            v.code_table = url
 
 
 def _cast_var(ds, name, dtype, values, **attrs):

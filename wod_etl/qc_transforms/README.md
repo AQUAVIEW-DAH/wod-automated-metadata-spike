@@ -1,6 +1,7 @@
 # Phase 3 — Conversions and QC
 
-**Put values into WOD standard units, then flag every level against the manual's checks.**
+**Put values into WOD standard units, then — only if asked — flag every level against the
+manual's checks.**
 
 Both functions take `(DataFrame, mapping_contract)` and return `(DataFrame, summary)`. Run
 them in this order — QC thresholds assume standard units.
@@ -9,11 +10,38 @@ them in this order — QC thresholds assume standard units.
 from wod_etl.qc_transforms import convert_units_and_types, apply_qc_auditing
 
 df, transform_log = convert_units_and_types(df, contract)
-df, qc_summary    = apply_qc_auditing(df, contract)
+df, qc_summary    = apply_qc_auditing(df, contract)      # opt-in; see below
 ```
 
 **Nothing is ever deleted.** Bad values are flagged and kept; the manual excludes flagged
 levels later, at interpolation time.
+
+---
+
+## WOD QC is OFF by default
+
+`process_accession` does not call `apply_qc_auditing` unless you ask it to. Quality control
+is applied downstream by the data centre, and a Table 12 flag written here is one more thing
+to reconcile against the one that matters.
+
+```python
+process_accession(url)                 # conversions only, no WOD flags
+process_accession(url, run_qc=True)    # conversions + Table 12 flags
+WOD_RUN_QC=1 uv run python ...         # same, for a whole session
+```
+
+The switch lives in [`config.py`](../config.py) as `RUN_WOD_QC`. Everything below still
+works exactly as documented — it is opt-in, not removed.
+
+**The originator's own flags are carried through either way.** If the file has a
+`Temperature_QC` column, its values reach the output verbatim as
+`temperature_qc_originator`, on the submitter's scale, never translated: an originator's `1`
+may mean *good* where WOD's `1` means a failed range check. WOD's field for *which* flag set
+was used is secondary header 96. See [Phase 2](../mapping/README.md#originator-quality-flags).
+
+With QC off, `qc_summary` is `{"wod_qc": "not run", ...}` naming the originator flag columns
+that were kept. A missing `<var>_qc` in the output is then expected, and the validator says
+so rather than warning that flags are absent.
 
 ---
 

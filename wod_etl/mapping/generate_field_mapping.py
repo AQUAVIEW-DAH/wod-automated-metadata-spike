@@ -6,9 +6,13 @@ it is, what unit conversion it needs, and what metadata the file header carries.
 import re
 from typing import Dict, Any, List, Optional
 
+from wod_etl.mapping.map_metadata import map_metadata
 from wod_etl.mapping.query_wod_spec import (
     DEPTH_SENTINEL_CODE,
     PER_VOLUME_CODES,
+    explain_column,
+    extract_scale,
+    extract_unit,
     match_variable,
     normalize_name,
     wod_secondary_headers,
@@ -74,28 +78,50 @@ _NUMERIC_HEADER_IDS = {10, 22, 23, 24}
 def generate_field_mapping(
     profile_result: Dict[str, Any],
     spec_result: Dict[str, Any],
+    df: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Produce the strict mapping contract used by Phases 3 and 4."""
+    """Produce the strict mapping contract used by Phases 3 and 4.
+
+    `df` is optional and only used to read the VALUE of a metadata column -- a `Bottom
+    Depth` column becomes secondary header 10 when it is constant down the cast. Without it
+    the metadata field is still identified, just without its value.
+    """
     raw_columns = profile_result.get("columns", []) or []
     raw_header_text = profile_result.get("raw_header_block", "") or ""
     variables = wod_variables()
 
+    # Everything that is not a measurement: cast metadata (Table 4a), per-variable metadata
+    # (Table 5a) and the originator's own quality flags. Run first, because it decides which
+    # columns are consumed as metadata and so must not be reported as dropped.
+    metadata = map_metadata(raw_header_text, raw_columns, df,
+                            spec_result.get("wod_dataset_code"))
+    consumed = {m["column"] for m in metadata["metadata_columns"] if m.get("column")}
+    consumed |= {f["flag_column"] for f in metadata["originator_flags"]}
+
     column_mappings: List[Dict[str, Any]] = []
     unmapped_cols: List[str] = []
+    dropped: List[Dict[str, Any]] = []
     warnings: List[str] = []
     seen_codes = set()
 
     for col in raw_columns:
+        if col in consumed:
+            continue
+
         code = match_variable(col)
 
         if code is None:
             unmapped_cols.append(col)
+            reason = explain_column(col)
+            if reason:
+                dropped.append(reason)
             continue
 
         if code == DEPTH_SENTINEL_CODE:
             conv = _detect_unit_conversion(col, code)
             column_mappings.append({
                 "raw_column": col,
+                "originator_unit": extract_unit(col),
                 "wod_code": DEPTH_SENTINEL_CODE,
                 "wod_name": "Depth",
                 "role": "depth_axis",
@@ -121,12 +147,22 @@ def generate_field_mapping(
         conversion = _detect_unit_conversion(col, code)
         mapping = {
             "raw_column": col,
+            # What the originator wrote, kept verbatim. Normalisation drops it in order to
+            # match the name; the conversion applied below is only auditable against it, and
+            # WOD has a field for it: variable specific second header 8.
+            "originator_unit": extract_unit(col),
+            "originator_scale": extract_scale(col),
             "wod_code": code,
             "wod_name": var["name"],
             "role": "measurement",
             "target_unit": var["standard_unit"],
             "unit_abbrev": var["unit_abbrev"],
             "conversion_needed": conversion,
+            "variable_specific_headers":
+                metadata["variable_specific_headers"].get(col, {}).get("headers", {}),
+            "originator_flag_column": next(
+                (f["flag_column"] for f in metadata["originator_flags"]
+                 if f.get("flags_column") == col), None),
         }
         if conversion == "molar_rescale":
             # A parameterised conversion needs its endpoints; the label alone cannot say
@@ -146,6 +182,17 @@ def generate_field_mapping(
 
     extracted = _parse_header_block(raw_header_text)
     parsed_coords = extracted["coordinates"]
+
+    for entry in dropped:
+        warnings.append(f"Column '{entry['column']}' is {entry['variable'].replace('_', ' ')}: "
+                        f"{entry['reason']} {entry['route']}")
+    unresolved_flags = [f for f in metadata["originator_flags"] if f["scope"] != "variable"]
+    if unresolved_flags:
+        warnings.append(
+            "Originator quality flag column(s) "
+            + ", ".join(f"'{f['flag_column']}'" for f in unresolved_flags)
+            + " could not be paired with a variable. They are kept and reported rather than "
+              "dropped; say which variable they belong to once you know.")
 
     # Table 3a: 30 is Latitude, 31 is Longitude. Each requirement must be satisfied by ITS
     # OWN code -- checking membership of the pair let a latitude column stand in for a
@@ -182,10 +229,17 @@ def generate_field_mapping(
         "wod_dataset_code": spec_result.get("wod_dataset_code"),
         "dataset_resolution": spec_result.get("dataset_resolution", {}),
         "column_mapping": column_mappings,
+        # The Table 4a headers the OLD parser found, kept for compatibility with anything
+        # reading this key; `secondary_headers` below is the full set, from the header block
+        # AND from metadata columns, each with its published code list.
         "extracted_header_metadata": extracted["secondary_headers"],
+        "secondary_headers": metadata["secondary_headers"],
+        "metadata_columns": metadata["metadata_columns"],
+        "originator_flags": metadata["originator_flags"],
         "parsed_coordinates": parsed_coords,
         "missing_required_coordinates": missing_coords,
         "unmapped_columns": unmapped_cols,
+        "dropped_columns": dropped,
         "warnings": warnings,
         "ready_for_transform": bool(column_mappings) and not missing_coords,
     }
@@ -269,7 +323,12 @@ def _parse_header_block(raw_header_text: str) -> Dict[str, Any]:
                 continue
             # The key must start the line or follow a delimiter or a column gap -- never sit
             # mid-sentence, where any English use of "cast" or "station" would match.
-            m = re.search(rf"(?:^|[,;|]|\s{{2,}})\s*#?\s*{key_pat}\b[:=\s]+([^\s,;|]+(?:[ \t][^\s,;|]+)?)",
+            # The value runs to the end of the line, a delimiter, or a 2+ space column gap
+            # -- NOT to a fixed word count. A two-word cap silently truncated every longer
+            # value ('University of Alaska Fairbanks' -> 'University of'), and a truncated
+            # institution or platform is indistinguishable from what the originator wrote.
+            m = re.search(rf"(?:^|[,;|]|\s{{2,}})\s*#?\s*{key_pat}\b[:=\s]+"
+                          rf"([^\s,;|][^,;|]*?)(?=\s{{2,}}|[,;|]|$)",
                           line, re.IGNORECASE)
             if not m:
                 continue

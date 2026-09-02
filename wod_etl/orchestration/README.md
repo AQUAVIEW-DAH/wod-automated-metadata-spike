@@ -13,18 +13,24 @@ and why*, and *how do I carry on after a crash*.
 
 ---
 
-## `process_accession(url_or_path, dataset_type="OSD", ...)`
+## `process_accession(url_or_path, dataset_type=None, ...)`
 
 ```python
 result = process_accession(
-    "https://www.ncei.noaa.gov/data/oceans/archive/arc0222/0287423/",
-    dataset_type="XCTD",
-)
+    "https://www.ncei.noaa.gov/data/oceans/archive/arc0222/0287423/")
 ```
+
+**`dataset_type` is optional and normally omitted.** An accession is rarely one instrument:
+one submission routinely holds shipboard CTD, bottle nutrients, an ADCP section and a
+plankton haul, and one label applied to all of them is wrong for most of them. Each file is
+classified from its own path, header, columns and depth spacing —
+[`classify_dataset`](../discovery/README.md#classify_datasetpathnone-columnsnone-header_text-depth_increment_mnone-).
 
 | Parameter | Purpose |
 | --- | --- |
-| `dataset_type` | Instrument hint from the user's instructions. See [dataset routing](../mapping/README.md#dataset-resolution-is-not-a-lookup). |
+| `dataset_type` | **`None` (default) = classify per file.** Pass a code only to FORCE one for the whole run — right when the accession really is one instrument, wrong the moment it is not. An explicit type also overrides an exclusion, on the reasoning that an operator who says "this folder is XBT" has looked at it and the classifier has not. |
+| `dataset_overrides` | `{path_prefix: dataset_type}`, e.g. `{"3-XBT": "XBT", "5-argo": "PFL"}`. The answer to "the accession is mixed and I know what two of the folders are" — everything else is still classified. |
+| `process_unidentified_as` | What to do with a file that is profile-shaped but names no instrument. `None` (default) skips it and says so; set a code to process those under a stated assumption. |
 | `output_dir` / `raw_dir` | Override `data/processed/` and `data/raw/`. |
 | `run_id` | Names the manifest. Reuse it to resume. Auto-generated from the URL + timestamp. |
 | `recursive` | Crawl subdirectories (default `True`). |
@@ -32,19 +38,25 @@ result = process_accession(
 | `limit` | Process at most N files — use this to prove the shape first. |
 | `resume` | Fold into an existing manifest (default `True`). |
 | `retry_failed` | Also re-attempt items already marked `failed`. |
-| `dry_run` | Report what would be processed; write nothing. |
+| `run_qc` | Whether to run WOD's own observed-level QC. Defaults to `RUN_WOD_QC` in [`config.py`](../config.py), which is **off** — QC is applied downstream, and a Table 12 flag written here is one more thing to reconcile. The ORIGINATOR's flag columns are carried through either way, verbatim and untranslated. |
+| `dry_run` | Report what would be processed, and as what; write nothing. |
 | `on_error` | `"skip"` (default) or `"stop"`. |
 
 ### Recommended sequence
 
 ```python
-process_accession(url, dataset_type="CTD", dry_run=True)   # 1. what's there
-process_accession(url, dataset_type="CTD", limit=3)        # 2. prove it on 3 files
-process_accession(url, dataset_type="CTD")                 # 3. the rest
+from wod_etl.discovery import classify_accession
+classify_accession("data/raw/0287423")        # 0. what is even in here
+process_accession(url, dry_run=True)          # 1. what would run, and as what
+process_accession(url, limit=3)               # 2. prove the shape on 3 files
+process_accession(url)                        # 3. the rest
 ```
 
-Step 2 matters: a wrong `dataset_type` or an unusual file format shows up immediately on 3
-files, rather than after 400.
+Step 0 is the triage step and it is not optional — most folders in a real accession are not
+WOD profile data. Step 1 classifies from the **path only**, because nothing is downloaded
+yet; the real run reclassifies from the header, columns and depth spacing, so the types can
+change between the two. Step 2 matters because a wrong routing or an unusual file format
+shows up immediately on 3 files rather than after 400.
 
 ### What comes back
 
@@ -53,7 +65,12 @@ files, rather than after 400.
  "total_items": 50, "counts": {"done": 42, "failed": 3, "skipped": 5},
  "failure_rate": 0.066, "complete": false,
  "outputs": ["data/processed/cast_01.nc", "..."],
- "failures": [{"key": "cast_07.csv", "stage": "load_tabular", "error": "parse failed: ..."}],
+ "failures": [{"key": "cast_07.csv", "stage": "read_any", "error": "parse failed: ..."}],
+ "dataset_types": {"CTD": 31, "OSD": 11},
+ "skipped_reasons": {"not WOD profile data: current velocity": 4,
+                     "no measurements: every mapped measurement column is empty (...)": 1},
+ "unstorable_columns_dropped": {"Conductivity (S/m) (conductivity)": 31},
+ "outputs_without_time": null,
  "manifest_path": "data/staging/manifests/0287423_20260817T101500Z.json"}
 ```
 
@@ -70,6 +87,33 @@ files, rather than after 400.
 the run, `complete` describes whether every item is in a terminal state. Failed items are
 neither done nor skipped, because they can be retried.
 
+**The four run-report fields are the ones to report, and none of them is in `counts`:**
+
+| Field | Why it matters |
+| --- | --- |
+| `dataset_types` | What the run actually decided, per cast. A run you expected to be all CTD coming back `{"CTD": 3, "OSD": 39}` is the depth-increment rule working (manual p.19) — or a mis-routed folder. Check which. |
+| `skipped_reasons` | Every file that was read and deliberately not processed, with the reason. This is where excluded content and empty files appear. |
+| `unstorable_columns_dropped` | Columns WOD has no code for, dropped by design, each with the reason. Rule 2: never silently drop data. Metadata columns and originator flag columns are **not** here — they are consumed, not dropped. |
+| `outputs_without_time` | Casts written with no date. Validation only warns; you should not. |
+
+### Skipped is not failed
+
+The distinction is deliberate and load-bearing.
+
+| Outcome | When | Counts toward abort? |
+| --- | --- | --- |
+| **skipped** | Read successfully and found not to be WOD profile data: a documentation extension, a `pdf`/archive/XML container, an excluded content type (currents, plankton, eDNA), a station-list sidecar with no measured variable, or every measurement column empty. | No |
+| **failed** | Something that should have worked did not: a download error, a file that parses as no known format, no column mapping, a missing latitude/longitude/depth, a write or validation error. | Yes |
+
+An accession that is mostly non-profile data would otherwise trip the 50% abort on a run
+working exactly as intended. Conversely, a file that is *not* a document and still will not
+read is a **failure**, never a skip — a silent skip there is how a real cast in an
+unrecognised layout disappears from a run.
+
+**A missing time does not block.** The validator treats it as a warning, and historical
+casts with a date but no clock time are common, so those casts are written and listed in
+`outputs_without_time`.
+
 ### Failure policy
 
 Per-file failures are recorded and the run continues. Two things stop it:
@@ -85,8 +129,8 @@ Both thresholds live in [`config.py`](../config.py).
 
 `failures` is not decoration. If 3 of 50 files failed, say so and name the stage. The
 `stage` value is the skill that returned the error, so it points straight at the phase:
-`download_file`, `fetch_and_peek_file`, `profile_raw_data`, `split_casts`, `mapping`,
-`generate_netcdf_ragged`, `validate_intermediate_netcdf`, or `unexpected`.
+`download_file`, `sniff_format`, `read_any`, `mapping`, `generate_netcdf_ragged`,
+`validate_intermediate_netcdf`, or `unexpected`.
 
 **`status: "complete"` is not a quality result.** It says every file was written and passed
 structural validation. It does not say the values are right, and this summary cannot tell
@@ -95,43 +139,49 @@ clean run. Three things the manifest never contains, which you have to gather yo
 
 | Not in the summary | How to get it |
 | --- | --- |
-| Which columns were dropped | recompute the contract per file and collect `unmapped_columns` |
+| Which columns were dropped | `unstorable_columns_dropped` covers the ones WOD cannot store; for the rest, recompute the contract per file and collect `unmapped_columns` |
 | Whether the values are plausible | open a NetCDF and read each variable's min/max |
 | The QC flag distribution | read the `*_qc` arrays across the output set |
 
 [`audit_dataset`](../verify/README.md) does all three. Run it for every dataset and report
 it alongside the counts -- the manifest tells you a file was written, not that it is right.
-### One accession is many runs
+### One accession is still many runs
 
-Give each dataset within an accession its own `run_id` and `output_dir`
-(`run_id="osd_7-CTD-bottle"`, `output_dir="data/processed/7-CTD-bottle"`). They need
-different `dataset_type` values, they fail for different reasons, and a single run over the
-whole accession makes the 50%-failure abort meaningless — a folder of imagery would take the
-whole run down with it.
+Per-file classification removes the need to *name* a dataset per folder. It does not remove
+the reason to run them separately: give each dataset within an accession its own `run_id`
+and `output_dir` (`run_id="osd_7-CTD-bottle"`,
+`output_dir="data/processed/7-CTD-bottle"`). They fail for different reasons, they are
+audited separately, and one run over the whole accession makes the 50%-failure abort hard to
+read.
+
+Use `classify_accession`'s `process` list to decide what those runs are.
 
 ---
 
-## `process_one_file(url, dataset_type, out_dir, run_id, raw_root=None)`
+## `process_one_file(url, dataset_type=None, out_dir, run_id, raw_root=None, ...)`
 
-All four phases for a single file, without the manifest. Returns
-`{"ok": bool, "stage": ..., "error": ...}` and never raises. Use it to debug one file.
+Every phase for a single file, without the manifest. Returns
+`{"ok": bool, "stage": ..., "error": ...}` — or `{"skip": True, "reason": ...}` — and never
+raises. Use it to debug one file.
 
 The chain it runs:
 
 ```
-download_file → fetch_and_peek_file → profile_raw_data → split_casts
-   → per cast: load_tabular → query_wod_spec → generate_field_mapping
-                → convert_units_and_types → apply_qc_auditing
+download_file → sniff_format → read_any
+   → per cast: classify_dataset → query_wod_spec → generate_field_mapping (+ map_metadata)
+                → convert_units_and_types → apply_qc_auditing (only if run_qc)
    → write_ragged_profiles → validate_intermediate_netcdf
 ```
 
-Note the depth increment is measured from the loaded data (median positive spacing of the
-depth column) and passed to `query_wod_spec`, which is how CTD/XCTD routing gets decided
-per cast rather than guessed per run.
+The depth increment is measured from the loaded data (median positive spacing of the depth
+column) and feeds both `classify_dataset` and `query_wod_spec`. That is how CTD/XCTD routing
+is decided per cast rather than guessed per run — and why a folder labelled CTD can
+legitimately come back as OSD.
 
-A cast that produces no usable mapping is dropped. If *every* cast drops, the file fails at
-stage `mapping` — check `unmapped_columns` and `missing_required_coordinates` on that file
-by hand.
+A cast is dropped, with a reason recorded in `skipped_casts`, when it is excluded by
+classification, holds no measured variable, has every measurement column empty, maps no
+column to a WOD code, has pressure but no depth, or is missing latitude/longitude. If *every* cast drops, the file
+is skipped or failed depending on which of those it was — see *Skipped is not failed* above.
 
 ---
 
@@ -187,12 +237,29 @@ process_accession(url, dataset_type="CTD", run_id="0287423_20260817T101500Z")
 
 ---
 
-## Skipped files
+## The pre-filter
 
-Extensions in `NON_DATA_EXTENSIONS` (`.xml`, `.pdf`, `.html`, `.json`, images, archives,
-`.sh`) are skipped before any work happens — an accession is mostly metadata alongside its
-measurements. Edit the set in [`config.py`](../config.py) if a real data file is being
-skipped.
+Two things are decided from a file's path before it is downloaded, because both are certain
+from a name alone:
+
+1. An extension in `NON_DATA_EXTENSIONS` (`.xml`, `.pdf`, `.html`, `.json`, images,
+   archives, `.sh`) — documentation, not measurements. Edit the set in
+   [`config.py`](../config.py) if a real data file is being skipped.
+2. A **path** that names content WOD cannot store — `4-adcp/`, `plankton/`. Only a path
+   match pre-filters; a match in a column name or in prose waits until the bytes are in
+   hand, so a readme that lists an accession's other folders cannot exclude the cast files
+   sitting beside it.
+
+**Excluded is not empty.** A folder that cannot become a profile often still holds metadata
+for casts that can: an ADCP section carries bottom depth from bottom-tracking and navigation
+that can supply or verify a cast's position; a multibeam sounding at a cast's position *is*
+that cast's secondary header 10. `classify_dataset`'s exclusion carries a `harvest` field
+saying what to take, and `classify_accession` collects it per folder. The pipeline does not
+harvest automatically — matching two files on position and time is a judgement — so it is
+named for you to do during staging, and cited when you do.
+
+Both are bypassed when `dataset_type` or a matching `dataset_overrides` entry is set: an
+operator who named the folder has looked at it.
 
 ---
 

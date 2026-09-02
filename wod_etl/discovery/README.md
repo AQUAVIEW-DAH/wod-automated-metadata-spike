@@ -11,28 +11,38 @@ cruise, a title row above the header, a cp932 encoding, `**NS`/`*DL` sentinels �
 [Phase 0 — Staging](../staging/README.md) first and point discovery at the staged copy.
 
 ```python
-from wod_etl.discovery import (list_remote_directory, fetch_and_peek_file, profile_raw_data,
-                              download_file, split_casts, load_tabular)
+from wod_etl.discovery import (list_remote_directory, classify_accession, classify_dataset,
+                              fetch_and_peek_file, sniff_format, profile_raw_data,
+                              download_file, read_any, split_casts, load_tabular)
 ```
 
 ## Order of operations
 
 ```
+classify_accession      what is in this accession, and which folders are WOD profile data?
+        ↓
 list_remote_directory   what files exist?
         ↓
 download_file           fetch one to data/raw/
         ↓
-fetch_and_peek_file     read the first 8 KB
+sniff_format            what IS this file? (bytes, not extension)
         ↓
-profile_raw_data        header block? delimiter? column names?
+read_any                → [{cast_id, df, header_block}]   for every format
         ↓
-split_casts             one cast or many?
-        ↓
-load_tabular            full file → DataFrame          → Phase 2
+classify_dataset        which WOD dataset is this cast?   → Phase 2
 ```
+
+`read_any` is the dispatcher. Underneath it, delimited text still goes through
+`profile_raw_data` → `split_casts` → `load_tabular`, which remain callable on their own and
+are documented below; NetCDF, Sea-Bird `.cnv`, fixed-width ASCII and spreadsheets take their
+own readers. Everything comes back in the same shape.
 
 `fetch_and_peek_file` can run on a *remote URL* before downloading, which is the point of
 it: decide whether a 4 GB file is worth fetching by reading 8 KB of it.
+
+**Reading a file that does not just open** is a procedure, not an API call:
+[`.claude/skills/wod-etl/reading-unknown-files.md`](../../.claude/skills/wod-etl/reading-unknown-files.md)
+walks the six questions to answer before staging anything.
 
 ---
 
@@ -68,6 +78,14 @@ res = list_remote_directory(
 Never raises. NCEI returns 503 and read timeouts fairly often; retry before concluding the
 URL is wrong.
 
+**An empty listing is diagnosed, not just reported.** An NCEI metadata landing page, an
+`/archive/accession/<n>` URL and a bare accession number are all valid pages with no data
+files in them, and crawling one returns a perfectly good zero. That now comes back as an
+`error` saying it is not a data directory, plus `accession_number` and a `hint` naming the
+page to open. NCEI renders its file listing client-side, so the data directory URL cannot be
+derived from the accession number — only that page says which `arc<NNNN>` bundle holds it.
+`accession_number(text)` pulls the number out of any of those forms.
+
 **Gotcha** — `filter_extension` only filters *files*. Directories are always returned so
 recursion can work, so a `.csv` filter still shows folders.
 
@@ -92,6 +110,166 @@ truncated file that looks finished. Retries 3 times with backoff. Refuses files 
 
 **Gotcha** — filenames are sanitised to `[A-Za-z0-9._-+]` and truncated to 200 chars, so
 `local_path` may not exactly match the remote name. Use the returned path, don't rebuild it.
+
+---
+
+## `sniff_format(path, num_bytes=65536)`
+
+**What the file is, from its bytes.** Extensions lie: `.dat` is CSV as often as it is
+fixed-width, NetCDF arrives with no extension, and `.txt` is sometimes a Sea-Bird header.
+
+```json
+{"format_family": "netcdf4_hdf5", "reader": "netcdf", "confidence": "high",
+ "readable": true, "is_document": false,
+ "evidence": ["magic bytes b'\\x89HDF\\r\\n\\x1a\\n'"], "size_bytes": 48213}
+```
+
+`reader` is the strategy `read_any` will dispatch to: `netcdf`, `spreadsheet`, `delimited`,
+`fixed_width`, `sea_bird_cnv`, or `none`.
+
+| `format_family` | How it is recognised |
+| --- | --- |
+| `netcdf_classic`, `netcdf_64bit_offset`, `netcdf_64bit_data`, `netcdf4_hdf5` | magic bytes |
+| `spreadsheet_xlsx`, `opendocument`, `archive_zip` | ZIP magic, then the member list |
+| `pdf`, `gzip`, `bzip2`, `xz`, `sqlite`, `access_db` | magic bytes |
+| `sea_bird_cnv` | `*END*` / `# name 0 =` markers |
+| `json`, `xml` | parses as JSON, or opens with a tag |
+| `delimited_text` | one delimiter splits ≥60% of rows into the same field count |
+| `fixed_width_text` | column boundaries hold across every sampled row |
+| `ragged_text` | numeric rows that agree on nothing |
+| `unstructured_text` | rows exist but <50% of their fields are numeric: prose |
+| `binary_unknown` | no configured encoding decodes it |
+
+**Two flags, and they are not the same.** `readable` means there is a table to read.
+`is_document` means the file is documentation or a container *by nature* — PDF, archive,
+XML metadata. A caller should **skip** an `is_document` file and **fail** on anything else
+that will not read: a silent skip is how a real cast in an unrecognised layout disappears
+from a run.
+
+**Gotchas**
+
+- `fixed_width_text` `colspecs` are **inferred** from where whitespace held in the sample.
+  A column that is full in the first rows and empty later shifts every field after it.
+  Verify against the accession's format description.
+- `delimited_text` with `confidence: medium` usually means a units row under the header, or
+  a trailing comment. That is information — look at it.
+- `unstructured_text` is still worth reading during triage. Coordinates and sentinel legends
+  live in readmes.
+
+---
+
+## `read_any(path, sniff=None, profile=None, max_casts=None)`
+
+**One call that reads any supported format into the same shape.**
+
+```python
+casts, info = read_any("data/raw/0287423/2-CTD/cast_01")
+# casts: [{"cast_id": "0", "df": DataFrame, "header_block": "...", "source_note": "..."}]
+```
+
+`header_block` is `Key: value` text in the form `generate_field_mapping` already parses, so
+a position held in a NetCDF attribute or a `.cnv` `* NMEA Latitude =` line reaches the
+mapping contract by the same route as a `# Latitude:` comment.
+
+**Per format**
+
+| Reader | What it does | Watch for |
+| --- | --- | --- |
+| `delimited` | `profile_raw_data` → `split_casts` → `load_tabular`, unchanged | one cast per header block |
+| `netcdf` | one cast per profile; handles 1-D, `N_PROF × N_LEVELS`, and CF contiguous ragged (`row_size` + `sample_dimension`) | units are folded into the column name |
+| `sea_bird_cnv` | names from `# name N =`, data after `*END*` | `=`-style header lines are rewritten to `Key: value` |
+| `fixed_width` | `read_fwf` with sniffed `colspecs` | headerless files get `col_0…col_N` and a warning — nothing can map those |
+| `spreadsheet` | every non-empty sheet becomes one cast | needs an Excel engine; a workbook has no header block |
+
+**Failure** — `([], {"error": ...})`. Never raises. Always read `info["warnings"]`: a
+transposed NetCDF variable, a `.cnv` whose name count does not match its column count, and
+inferred fixed-width boundaries are all reported there and nowhere else.
+
+**NetCDF specifics.** Global attributes and per-profile scalars both go into
+`header_block`, under their original name *and* — for the ones it recognises — again as
+`Latitude:` / `Longitude:` / `Date:` so the mapper can parse them. Nothing is lost and the
+provenance stays visible. Files over 20 million cells are refused rather than loaded.
+
+---
+
+## `classify_dataset(path=None, columns=None, header_text="", depth_increment_m=None, ...)`
+
+**Which WOD dataset this is — or whether it is WOD profile data at all.** This is what
+replaced `dataset_type` as a required argument.
+
+```json
+{"verdict": "profile", "dataset_type": "CTD", "confidence": "high", "score": 9.0,
+ "evidence": ["path matches 'CTD': names CTD", "columns match 't090c': Sea-Bird export"],
+ "candidates": [...], "is_wod_profile_data": true, "exclusion": null,
+ "unstorable_columns": [{"column": "Conductivity (S/m)", "variable": "conductivity", ...}],
+ "possible_exclusions": []}
+```
+
+`verdict` is `profile`, `excluded` or `unidentified`. **They are three different outcomes:**
+
+- `profile` — process it as `dataset_type`.
+- `excluded` — it cannot become a profile. `exclusion.route` says where it belongs instead,
+  and `exclusion.belongs_in_wod` distinguishes plankton (belongs in WOD, other path) from
+  currents and eDNA (not in WOD at all).
+- `unidentified` — profile-shaped, but nothing names an instrument. **Do not guess**; read
+  the folder readme and pass the type explicitly.
+
+**Evidence, weighted.** Path and header text count fully, column names at 0.8, extra context
+at 0.6. Both the raw text and a separator-flattened copy are searched, because `\bglider\b`
+does not match `glider_slocum` — `_` is a word character.
+
+**File-level versus column-level.** Currents, plankton, eDNA, bathymetry, catch and
+contaminants exclude the **file**. Conductivity, sigma-t, sound velocity, nitrite alone,
+ammonium, CDOM, turbidity and potential temperature are **columns WOD does not store**: they
+appear in `unstorable_columns`, are dropped, and never exclude the file. A CTD cast that also
+logs conductivity is still a CTD cast, and excluding it would throw away its temperature too.
+
+**Prose is not evidence about content.** A readme listing an accession's folders mentions
+plankton and ADCP; matches found only in header or context text land in
+`possible_exclusions` for you to check, never in `exclusion`.
+
+---
+
+## `classify_accession(root, max_files=None, peek_bytes=8192)`
+
+**Triage the whole accession before processing any of it.** Reads each file's head, so it is
+cheap enough to run first.
+
+```json
+{"file_count": 41, "folder_count": 9,
+ "process": ["1-ctd", "2-xbt"], "exclude": ["0-about", "3-adcp"], "inspect": ["7-misc"],
+ "folders": {"1-ctd": {"verdict": {"action": "process", "dataset_types": {"CTD": 24}, ...},
+                       "files": [...], "excluded": {}, "no_data": [], "unreadable": []}}}
+```
+
+Each folder gets `process`, `exclude` or `inspect`. Per file it reports the format, the
+dataset type, `empty_columns` and `measurement_density`.
+
+**`measurement_density` ignores station, depth, time and flag columns on purpose.** A
+nutrient file whose station and depth are full and whose three nutrient columns are entirely
+`Not analyzed` scores `0.0`, which is the answer; an overall density would score `0.4` and
+look like data.
+
+### `cross_file_shapes` — one cast split across many files
+
+A folder's files are usually one cast each. Two shapes break that, and neither is visible in
+any single file, because the evidence is the *relationship* between them:
+
+| `shape` | What it is | What to do |
+| --- | --- | --- |
+| `one file per depth level` | identical columns, one or two rows each | `combine_levels`, sort by depth, stage one file |
+| `one file per variable` | disjoint measurement columns sharing a depth or time column | `combine_on_key(key=...)` — and check `info["per_table"]` |
+
+Processed as they stand, the first produces a pile of single-level profiles and the second a
+set of casts each missing most of its variables. Both look like successful runs.
+
+The check is a comparison of the heads already read, so it costs nothing extra. It is a
+flag, not a verdict — **confirm against the folder readme before combining**, and for the
+join, a near-zero key overlap means the files do not actually share a key.
+
+**Limitation** — it reads the first few KB. A folder that looks empty may have data further
+in. Count real values over the whole file before excluding anything, and read every folder's
+readme before acting on a verdict. `inspect` means the evidence did not decide.
 
 ---
 

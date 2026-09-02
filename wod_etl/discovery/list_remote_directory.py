@@ -87,11 +87,64 @@ def list_remote_directory(
             sub = list_remote_directory(full_url, True, filter_extension, visited, _depth + 1)
             items.extend(sub.get("items", []))
 
-    return {
+    result = {
         "source": url_or_path,
         "total_items": len(items),
         "items": items,
         "skipped_navigation_links": skipped_nav,
+    }
+    if not items:
+        result.update(_diagnose_empty(url_or_path))
+    return result
+
+
+# An NCEI accession is usually cited by its metadata landing page or by its bare number, and
+# neither is a directory. Crawled, they yield a valid HTTP 200 with zero data files, which
+# reads downstream as "empty accession -- check the URL" and sends the reader looking for a
+# typo that is not there.
+_LANDING_PAGE = re.compile(
+    r"landing-page|/metadata/|gov\.noaa\.nodc[:.](\d+)|catalog\.data\.gov", re.IGNORECASE)
+_ACCESSION_URL = re.compile(r"/archive/accession/(\d+)", re.IGNORECASE)
+_BARE_ACCESSION = re.compile(r"^\s*0*(\d{5,7})\s*$")
+
+
+def accession_number(text: str):
+    """The NCEI accession number in a URL or a bare string, or None."""
+    for pattern in (_ACCESSION_URL, re.compile(r"gov\.noaa\.nodc[:.](\d+)", re.IGNORECASE),
+                    _BARE_ACCESSION):
+        m = pattern.search(str(text))
+        if m:
+            return m.group(1).lstrip("0") or "0"
+    return None
+
+
+def _diagnose_empty(url_or_path: str) -> Dict[str, Any]:
+    """Say WHY a listing came back empty, when the URL explains it.
+
+    A metadata landing page is not a data directory, and no amount of retrying makes it one.
+    NCEI renders the file listing client-side, so there is no static directory URL to derive
+    -- the reader has to open the accession page and take the data URL off it. Saying that is
+    the whole value here; guessing a URL pattern would be worse than saying nothing.
+    """
+    number = accession_number(url_or_path)
+    is_landing = bool(_LANDING_PAGE.search(url_or_path)) or bool(_ACCESSION_URL.search(url_or_path))
+    if not (is_landing or _BARE_ACCESSION.match(str(url_or_path))):
+        return {"hint": "The page was fetched but held no file links. It may be an index "
+                        "that renders its listing with JavaScript, or a page that is not a "
+                        "directory at all. Open it and check before retrying."}
+
+    where = (f"https://www.ncei.noaa.gov/archive/accession/download/{number}"
+             if number else "the accession's download page")
+    return {
+        "error": "not an accession data directory: this is an NCEI metadata landing page or "
+                 "a bare accession number, so there are no files to list.",
+        "accession_number": number,
+        "hint": f"Open {where} and take the data directory URL from it, then point "
+                f"process_accession at that. NCEI renders the file listing client-side, so "
+                f"the directory URL cannot be derived from the accession number -- it lives "
+                f"under /data/oceans/archive/arc<NNNN>/{number or '<accession>'}/ and only "
+                f"that page says which arc bundle. If the files are already downloaded, "
+                f"point at the local folder instead.",
     }
 
 

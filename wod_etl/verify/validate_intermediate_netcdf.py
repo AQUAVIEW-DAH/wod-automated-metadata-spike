@@ -185,7 +185,17 @@ def _check_qc(ds, errors, warnings, checks):
             continue
         qc = f"{name}_qc"
         if qc not in ds.variables:
-            warnings.append(f"Measured variable '{name}' has no QC flag array '{qc}'")
+            # No WOD flags is normal: QC is off by default and applied downstream. Say which
+            # of the two situations this is, because "no flags at all" and "the originator's
+            # flags only" are different things to a reader.
+            if f"{name}_qc_originator" in ds.variables:
+                warnings.append(
+                    f"Measured variable '{name}' carries the originator's flags "
+                    f"('{name}_qc_originator') and no WOD Table 12 flags. Expected when WOD "
+                    f"QC is off; the two scales are not interchangeable.")
+            else:
+                warnings.append(f"Measured variable '{name}' has no quality flags at all: "
+                                f"neither WOD '{qc}' nor originator flags")
             continue
         q = ds.variables[qc]
         if q.dimensions != v.dimensions:
