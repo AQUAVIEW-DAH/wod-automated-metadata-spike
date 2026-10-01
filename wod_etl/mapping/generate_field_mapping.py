@@ -10,6 +10,7 @@ from wod_etl.mapping.map_metadata import map_metadata
 from wod_etl.mapping.query_wod_spec import (
     DEPTH_SENTINEL_CODE,
     PER_VOLUME_CODES,
+    canonical_unit_text,
     explain_column,
     extract_scale,
     extract_unit,
@@ -253,7 +254,7 @@ def molar_units(raw_col_name: str, wod_code: int):
     variables are per-mass, because WOD is not consistent: nutrients are umol/kg, alkalinity
     and DIC are mmol/l, and the noble gases are nmol/kg.
     """
-    name = str(raw_col_name).lower()
+    name = canonical_unit_text(raw_col_name).lower()
     source = None
     for prefix, basis, pattern in _MOLAR_UNIT_PATTERNS:
         if re.search(pattern, name):
@@ -278,7 +279,7 @@ def _detect_unit_conversion(raw_col_name: str, wod_code: int) -> str:
     Inspects the FULL name including bracketed units, which is where the unit text lives:
     'Temp (deg F)', 'Depth [ft]', 'Oxygen (ml/l)'.
     """
-    name = str(raw_col_name).lower()
+    name = canonical_unit_text(raw_col_name).lower()
     for label, pattern in _UNIT_PATTERNS:
         if re.search(pattern, name):
             if label == "ml_per_l_to_umol_per_kg":

@@ -170,6 +170,29 @@ def normalize_name(name: str) -> str:
     return s
 
 
+# Submitters paste headers out of Word and journal PDFs, so a unit arrives as `µmol kg−1`
+# (U+2212) or `μmol/kg` (Greek mu) as often as plain ASCII. Both read as µmol/kg to a human
+# and as nothing to a regex.
+_UNIT_CHAR_FOLD = str.maketrans({
+    "\u03bc": "\u00b5",                      # Greek mu -> micro sign (identical on screen)
+    **dict.fromkeys("\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u207b", "-"),  # dashes, minus
+    **dict(zip("\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079",
+               "0123456789")),                # superscript digits, as in kg\u207b\u00b9
+    **dict.fromkeys("\u2044\u2215", "/"),            # fraction and division slashes
+    **dict.fromkeys("\u00b7\u2022\u22c5", "."),       # middle dots used as a separator
+    **dict.fromkeys("\u00a0\u2009\u202f", " "),       # non-breaking and thin spaces
+})
+
+
+def canonical_unit_text(text: str) -> str:
+    """Fold typographic unit characters onto one spelling.
+
+    For MATCHING only. `extract_unit` still returns what the originator wrote, because
+    that is what reaches variable specific second header 8.
+    """
+    return str(text).translate(_UNIT_CHAR_FOLD)
+
+
 def extract_unit(name: str) -> Optional[str]:
     """The unit text a raw column name carries, verbatim, or None.
 
@@ -226,7 +249,7 @@ def extract_scale(name: str) -> Optional[str]:
 
 # A bracketed suffix is not always a unit: 'Temperature (secondary sensor)' and
 # 'Salinity (bottle)' are qualifiers. Units are short and made of unit-ish characters.
-_UNIT_LIKE = re.compile(r"^[A-Za-zµ°%/·^\-\d\s.]+$")
+_UNIT_LIKE = re.compile(r"^[A-Za-zµ°‰%/·^\-\d\s.]+$")
 _NOT_UNITS = {"secondary", "primary", "bottle", "ctd", "sensor", "sensors", "corrected",
               "raw", "average", "mean", "adjusted", "calculated", "derived", "unknown",
               "downcast", "upcast", "flag", "flags", "quality", "qc", "note", "notes",
@@ -235,13 +258,15 @@ _NOT_UNITS = {"secondary", "primary", "bottle", "ctd", "sensor", "sensors", "cor
 
 def _looks_like_unit(text: str) -> bool:
     """A bracketed suffix is a unit, a qualifier, or a scale. Only the first is a unit."""
-    text = (text or "").strip()
+    text = canonical_unit_text(text or "").strip()
     if not text or len(text) > 24 or not _UNIT_LIKE.match(text):
         return False
     words = [w for w in re.split(r"[^a-z0-9]+", text.lower()) if w]
+    if not words:
+        return bool(re.fullmatch(r"[µ°‰%]+", text))   # symbol-only units: ‰, %, °
     # A qualifier word anywhere disqualifies it: 'secondary sensor' is not a unit, and
     # neither is 'ITS-90' on its own -- that is a scale, and extract_scale claims it.
-    return bool(words) and not any(w in _NOT_UNITS for w in words)
+    return not any(w in _NOT_UNITS for w in words)
 
 
 def _not_stored_key(norm: str, exact_only: bool = False) -> Optional[str]:

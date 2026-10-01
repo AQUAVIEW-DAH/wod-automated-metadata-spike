@@ -129,6 +129,22 @@ class TestLoadTabular:
         df, info = load_tabular("/nonexistent/x.csv")
         assert df is None and "error" in info
 
+    def test_a_malformed_row_is_reported_not_just_dropped(self, tmp_path):
+        """pandas drops a row whose field count is wrong and warns to stderr, which an
+        unattended run never sees. The loss has to reach the caller."""
+        p = tmp_path / "c.csv"
+        p.write_text("Depth,Temp\n0.0,9.1\nLEGEND,a,b,c,d\n10.0,8.9\n")
+        df, info = load_tabular(str(p), delimiter=",")
+        assert len(df) == 2
+        assert info["malformed_rows_dropped"] == 1
+        assert any("malformed" in w and "3" in w for w in info["warnings"])
+
+    def test_a_clean_file_reports_no_malformed_rows(self, tmp_path):
+        p = tmp_path / "c.csv"
+        p.write_text("Depth,Temp\n0.0,9.1\n10.0,8.9\n")
+        _, info = load_tabular(str(p), delimiter=",")
+        assert "malformed_rows_dropped" not in info
+
 
 class TestSplitCasts:
     def test_single_cast_file_yields_one_cast(self):
@@ -280,3 +296,15 @@ class TestSubdirTraversalGuard:
         from wod_etl.discovery.download_file import _safe_subpath
         resolved = (tmp_path / _safe_subpath(subdir)).resolve()
         assert resolved.is_relative_to(tmp_path.resolve())
+
+
+class TestReaderWarningsReachTheCaller:
+    """load_tabular's warnings used to stop at read_any, which is what the run calls."""
+
+    def test_a_dropped_row_is_visible_through_read_any(self, tmp_path):
+        from wod_etl.discovery import read_any, sniff_format
+        p = tmp_path / "cast.csv"
+        p.write_text("Depth,Temp\n0,9.1\n5,9.0\nLEGEND,a,b,c,d\n10,8.9\n20,8.4\n")
+        casts, info = read_any(str(p), sniff_format(str(p)))
+        assert len(casts[0]["df"]) == 4
+        assert any("malformed" in w for w in info["warnings"])

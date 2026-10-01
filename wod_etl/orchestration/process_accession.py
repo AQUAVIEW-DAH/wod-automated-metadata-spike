@@ -254,6 +254,7 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
     It keeps the raw copy, the output name and the classification evidence distinct for two
     files that share a basename. Defaults to the basename, right for a single ad-hoc file.
     """
+    out_dir = Path(out_dir)          # callers pass a plain string more often than not
     key = key or os.path.basename(url.rstrip("/")) or url
     subdir = "/".join(filter(None, [run_id, os.path.dirname(key)]))
 

@@ -10,6 +10,7 @@ import pytest
 from wod_etl.mapping import generate_field_mapping, query_wod_spec
 from wod_etl.mapping.query_wod_spec import (
     DEPTH_SENTINEL_CODE,
+    extract_unit,
     match_variable,
     normalize_name,
     resolve_dataset,
@@ -500,3 +501,45 @@ class TestEachCoordinateIsCheckedOnItsOwnCode:
         assert "longitude" in contract["missing_required_coordinates"]
         assert "latitude" not in contract["missing_required_coordinates"]
         assert contract["ready_for_transform"] is False
+
+
+MICRO = "\u00b5"      # U+00B5 MICRO SIGN -- what a keyboard and most CSVs produce
+GREEK_MU = "\u03bc"   # U+03BC GREEK SMALL LETTER MU -- what Word and journal PDFs produce
+MINUS = "\u2212"      # U+2212 MINUS SIGN -- pasted exponents, e.g. kg-1
+
+
+class TestTypographicUnitCharacters:
+    """Headers pasted from Word and journals use characters that look ASCII and are not.
+
+    Both failures below were silent: the column mapped to the right WOD code, so nothing
+    looked wrong, but the unit was lost and with it the conversion.
+    """
+
+    @pytest.mark.parametrize("mu", [MICRO, GREEK_MU])
+    @pytest.mark.parametrize("tail", ["/kg", " kg-1", f" kg{MINUS}1"])
+    def test_micromolar_per_mass_is_detected_however_it_is_spelt(self, mu, tail):
+        from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion
+        # DIC is stored in mmol/l, so a micromolar source must rescale. Undetected, the
+        # values were written as if already standard -- a factor of ~1000.
+        assert _detect_unit_conversion(f"DIC ({mu}mol{tail})", 21) == "molar_rescale"
+
+    @pytest.mark.parametrize("mu", [MICRO, GREEK_MU])
+    @pytest.mark.parametrize("tail", ["/L", " L-1", f" L{MINUS}1"])
+    def test_micromolar_per_volume_is_detected_however_it_is_spelt(self, mu, tail):
+        from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion
+        assert _detect_unit_conversion(f"NO3 ({mu}mol{tail})", 8) == "molar_rescale"
+
+    @pytest.mark.parametrize("name", [f"DIC ({MICRO}mol kg{MINUS}1)",
+                                      f"DIC ({GREEK_MU}mol/kg)",
+                                      f"NO3 ({MICRO}mol L{MINUS}1)"])
+    def test_the_unit_is_recorded_verbatim(self, name):
+        """Header 8 is the originator's own text, so the fold is for matching only."""
+        unit = extract_unit(name)
+        assert unit is not None and unit == name[name.index("(") + 1:-1]
+
+    def test_a_symbol_only_unit_is_still_a_unit(self):
+        """Per mille is the Table 3a standard unit for Oxygen-18 and has no letters."""
+        assert extract_unit("d18O (\u2030)") == "\u2030"
+
+    def test_a_qualifier_is_still_not_a_unit(self):
+        assert extract_unit("Temperature (secondary sensor)") is None

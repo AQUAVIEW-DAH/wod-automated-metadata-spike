@@ -118,6 +118,10 @@ def _read_delimited(path, fmt, profile):
         if df is None:
             warnings.append(f"cast {cast['index']}: {load_info.get('error')}")
             continue
+        # The reader's own warnings travel with the cast -- dropped rows are reported here
+        # or nowhere.
+        prefix = f"cast {cast['index']}: " if split["multi_cast"] else ""
+        warnings.extend(prefix + w for w in load_info.get("warnings", []))
         out.append({
             "cast_id": str(cast["index"]),
             "df": df,

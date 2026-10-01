@@ -60,6 +60,7 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
     warnings: collections.Counter = collections.Counter()
     routing: collections.Counter = collections.Counter()
     coord_gaps: collections.Counter = collections.Counter()
+    coord_gap_files: Dict[str, List[str]] = collections.defaultdict(list)
     errors: List[Dict[str, str]] = []
 
     for path in staged:
@@ -76,6 +77,7 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
             warnings[w] += 1
         for k in c["missing_required_coordinates"]:
             coord_gaps[k] += 1
+            coord_gap_files[k].append(Path(path).name)
 
     ncs = sorted(glob.glob(str(Path(processed_dir) / "*.nc")))
     casts = obs = 0
@@ -133,6 +135,7 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
         "mapped_columns": dict(mapped),
         "unmapped_columns": dict(unmapped),
         "missing_coordinates": dict(coord_gaps),
+        "missing_coordinate_files": {k: v for k, v in coord_gap_files.items()},
         "contract_warnings": dict(warnings),
         "contract_errors": errors,
         "value_ranges": ranges,
@@ -149,6 +152,9 @@ def _render(r: Dict[str, Any]) -> str:
          f"  staged {r['staged_files']} files -> {r['netcdf_files']} NetCDF, "
          f"{r['casts']} casts, {r['observations']} levels",
          f"  routing: {r['wod_dataset_routing']}"]
+    if r["netcdf_files"] < r["staged_files"]:
+        L.append(f"  {r['staged_files'] - r['netcdf_files']} staged file(s) produced no "
+                 f"NetCDF -- see MISSING COORDINATES and CONTRACT ERRORS below")
     L.append("  mapped:")
     for k, v in sorted(r["mapped_columns"].items()):
         L.append(f"      {v:5d}x  {k}")
@@ -158,7 +164,14 @@ def _render(r: Dict[str, Any]) -> str:
     if not r["unmapped_columns"]:
         L.append("      (none)")
     if r["missing_coordinates"]:
-        L.append(f"  MISSING COORDINATES: {r['missing_coordinates']}")
+        L.append(f"  MISSING COORDINATES -- these files cannot pass validation and will "
+                 f"write no NetCDF. Supply the missing values from a station list or the "
+                 f"readme via Phase 0 staging (wod_etl/staging/):")
+        for k, n in sorted(r["missing_coordinates"].items()):
+            files = r.get("missing_coordinate_files", {}).get(k, [])
+            shown = ", ".join(files[:5]) + (f", ... (+{len(files) - 5} more)"
+                                            if len(files) > 5 else "")
+            L.append(f"      {k:10} missing in {n:4d} file(s): {shown}")
     if r["all_missing_variables"]:
         L.append("  written but entirely missing:")
         for k, v in sorted(r["all_missing_variables"].items()):

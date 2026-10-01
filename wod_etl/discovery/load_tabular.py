@@ -6,6 +6,7 @@ which is what convert_units_and_types and apply_qc_auditing expect.
 """
 import io
 import re
+import warnings
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 
@@ -83,19 +84,33 @@ def load_tabular(
         info["warnings"].append(f"dropped {commented} interior comment line(s) from the table body")
 
     try:
-        df = pd.read_csv(
-            io.StringIO(body),
-            sep=sep,
-            engine="python",
-            skipinitialspace=True,
-            comment=None,
-            na_values=na_values if na_values is not None else DEFAULT_NA_VALUES,
-            keep_default_na=True,
-            nrows=max_rows,
-            on_bad_lines="warn",
-        )
+        # on_bad_lines="warn" drops malformed rows to stderr, where an unattended run never
+        # sees them. Capture them instead: a dropped row is lost data and must be reported.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            df = pd.read_csv(
+                io.StringIO(body),
+                sep=sep,
+                engine="python",
+                skipinitialspace=True,
+                comment=None,
+                na_values=na_values if na_values is not None else DEFAULT_NA_VALUES,
+                keep_default_na=True,
+                nrows=max_rows,
+                on_bad_lines="warn",
+            )
     except Exception as e:                          # noqa: BLE001 - reported, not raised
         return None, {**info, "error": f"parse failed: {type(e).__name__}: {e}"}
+
+    bad_lines = sorted({int(n) for w in caught
+                        for n in re.findall(r"[Ss]kipping line (\d+)", str(w.message))})
+    if bad_lines:
+        shown = ", ".join(str(n + skip) for n in bad_lines[:10])
+        info["warnings"].append(
+            f"dropped {len(bad_lines)} malformed row(s) whose field count did not match "
+            f"the header, at source line(s) {shown}"
+            f"{', ...' if len(bad_lines) > 10 else ''}")
+        info["malformed_rows_dropped"] = len(bad_lines)
 
     df.columns = [str(c).strip() for c in df.columns]
 

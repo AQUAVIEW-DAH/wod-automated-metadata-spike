@@ -72,7 +72,7 @@ Single-cast wrapper over the above. Use it when you have exactly one cast.
 
 | Group | Contents |
 | --- | --- |
-| Global attributes | `title`, `Conventions`, `featureType=profile`, `WOD_version`, `wod_dataset_type`, `source_file`, `institution`, `references` |
+| Global attributes | `title`, `Conventions`, `featureType=profile`, `WOD_version`, `wod_dataset_type`, `source_file`, `source`; `institution` only when the originator stated one (secondary header 4) |
 | Provenance | `unit_conversions`, and `seawater_density_kg_m3` + `seawater_density_provenance` when a conversion used the assumed density |
 | Secondary headers | one `secondary_header_<id>_<name>` attribute per Table 4a entry, plus `<same>_code_table` where WOD publishes a code list |
 | Per cast (`casts`) | `lat`, `lon`, `time` (days since 1770-01-01), `cast_id` (`cf_role=profile_id`), `z_row_size` (`sample_dimension=z_obs`), and any secondary header that differs between casts |

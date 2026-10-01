@@ -311,6 +311,14 @@ Units that need nothing, and must not be "corrected":
 The rule underneath: **check the direction against Table 3a before converting.** Per-mass
 and per-volume both appear in the standard units, and which one applies is per-variable.
 
+### The unit may not be spelt the way you expect
+
+A header pasted out of Word or a journal PDF writes `µmol kg−1` with a true minus (U+2212),
+or `μmol/kg` with a Greek mu instead of the micro sign — both identical on screen, neither
+matching a plain-ASCII pattern. `canonical_unit_text` folds these onto one spelling before
+any matching, so the conversion is still detected; `extract_unit` keeps the originator's own
+text for variable specific second header 8. Nothing here rewrites the submitter's header.
+
 ---
 
 ## Cruise and position conventions (p. 17)
