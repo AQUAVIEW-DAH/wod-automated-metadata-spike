@@ -4,7 +4,7 @@ One tabular reader does not cover an accession. Submitters write NetCDF, Sea-Bir
 fixed-column ASCII from 1974, an Excel workbook, a CSV named `.dat`, and files with no
 extension at all. This is the procedure for the ones that do not just open.
 
-**Work one folder at a time, and answer all six questions before staging anything.** Each
+**Work one folder at a time, and answer all seven questions before staging anything.** Each
 question names the call that answers it and what a wrong answer costs. Record the answers —
 they are the provenance for every value you derive.
 
@@ -82,13 +82,27 @@ Ask, in this order:
    first lines — always.
 2. **Is there a units row under the header?** `Station,Pressure,Temperature` over
    `,dbar,ITS-90 deg C` is two header rows. **Unit detection reads the full column name and
-   nothing else**, so a units row is invisible to it. Fold it in when staging: `Pressure
-   (dbar)`, not `Pressure`.
-3. **Is there a title row above the header?** Common in exported spreadsheets.
+   nothing else**, so a units row is invisible to it. Fold it in when staging with
+   `fold_unit_row`: `Pressure (dbar)`, not `Pressure`.
+3. **Is there a title row above the header?** Common in exported spreadsheets —
+   `read_table(header_row=1)`.
 4. **Are the columns named at all?** `col_0 … col_N` from a fixed-width read means nothing
    downstream can map them. Name them from the header block or the accession's format
-   description, in the staged copy.
-5. **Do comment lines appear *below* the header?** They parse as rows and become phantom
+   description, in the staged copy:
+
+   ```python
+   from wod_etl.staging import rename_columns, suggest_column_names
+   suggest_column_names(cols, units=units_row)   # what each column resolves to
+   cols, audit = rename_columns(cols, {"col_0": "Depth (m)", "col_1": "Temp (deg C)"})
+   ```
+
+   `rename_columns` refuses any rename that would change the column's WOD code, unit or
+   scale, and prints the fix. Report `audit["renames"]`.
+5. **Did the whole file come back as one column?** `read_table` is comma-only by default,
+   so a tab- or semicolon-separated file collapses to a single column — which reads three
+   phases later as "no measurements in this file", not as a delimiter problem. Pass
+   `read_table(path, delimiter=None)` to sniff it.
+6. **Do comment lines appear *below* the header?** They parse as rows and become phantom
    levels whose depth is the comment text.
 
 ---
@@ -134,7 +148,8 @@ Then, for every name in `unmapped_columns`, decide **which of three things it is
 
 1. **A WOD variable under an instrument's name** — `T090C` is Temperature, `SBEOX0ML/L` is
    Oxygen, `PRDM` is Pressure. Add an alias to `VARIABLE_ALIASES` in
-   `wod_etl/mapping/query_wod_spec.py`. Never rename the source data.
+   `wod_etl/mapping/query_wod_spec.py` when the name will recur; rename the **staged** copy
+   with `rename_columns` when it is this one file. Never edit `data/raw/`.
 2. **A variable WOD does not store** — conductivity, sigma-t, sound velocity, nitrite alone,
    ammonium, CDOM, turbidity, potential temperature. There is no Table 3a code.
    `classify_dataset` lists these in `unstorable_columns`. **Drop it and report the drop.**

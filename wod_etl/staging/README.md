@@ -43,7 +43,7 @@ dataset cannot be staged.
 
 ---
 
-## `read_table(path, header_row=0, encoding=None, drop_blank_rows=True)`
+## `read_table(path, header_row=0, encoding=None, drop_blank_rows=True, delimiter=",")`
 
 Returns `(columns, rows, info)`. Handles what stops `load_tabular` before it starts:
 
@@ -53,14 +53,24 @@ Returns `(columns, rows, info)`. Handles what stops `load_tabular` before it sta
 - **Blank rows** — files saved with `\r\r\n` interleave an empty row between every real
   one. Undetected, this shifts the header and doubles the row count.
 - **A title row above the header** — `header_row` indexes the *non-blank* rows.
+- **The delimiter** — `","` by default. Pass **`delimiter=None`** to sniff it from the
+  header, which is what a tab- or semicolon-separated file needs.
 
 ```json
-{"encoding": "utf-8-sig", "rows_in_file": 1019, "blank_rows_dropped": 510,
- "data_rows": 507, "duplicate_columns": []}
+{"encoding": "utf-8-sig", "delimiter": ",", "rows_in_file": 1019,
+ "blank_rows_dropped": 510, "data_rows": 507, "duplicate_columns": []}
 ```
 
 **Check `blank_rows_dropped` and `duplicate_columns`.** A large blank count confirms the
 double-spacing; duplicates mean a merged header that needs decoding by hand.
+
+**Check `len(columns)` when you did not pass `delimiter=None`.** A tab-separated file read
+as CSV comes back as **one** column per row. That does not look like a delimiter problem
+three phases later — it looks like a file holding no measurements, and it is skipped with
+that reason. Comma remains the default so a file that read correctly before still does,
+and sniffing deliberately never considers whitespace: whitespace also separates
+fixed-width columns, and calling a fixed-width file whitespace-delimited is what produces
+ragged rows and a phantom column. A fixed-width file belongs to `read_any`, not here.
 
 ---
 
@@ -105,6 +115,65 @@ invisible and every value is taken as already-standard. This is what makes `mg/l
 
 ---
 
+## `rename_columns(columns, renames, *, require_unit=True, strict=True)`
+
+Returns `(columns, audit)`. Renames columns in a **staged** header — never in `data/raw/`.
+
+```python
+cols, audit = rename_columns(["LAT", "LON", "Depth (m)"], {"latitude": "Latitude"})
+# (["Latitude", "LON", "Depth (m)"], {...})
+```
+
+Keys may be an exact column name **or a human's name for one**, resolved through
+[`resolve_column`](../mapping/README.md), so the caller does not have to know the column is
+spelt `LAT`.
+
+A column name here is not a label. It is the only carrier of three separate facts —
+`match_variable` reads it for the WOD variable code, `extract_unit` for the originator's
+unit, `extract_scale` for the measurement scale — and nothing else supplies any of them. So
+a rename has three ways to destroy data, and **every one of them still validates**:
+
+| Rename | What is lost | What happens |
+| --- | --- | --- |
+| `Temp (deg F)` → `Temperature` | the unit | Fahrenheit values are read as already-Celsius |
+| `Temperature [ITS-90, deg C]` → `Temperature (deg C)` | the scale | variable specific second header 3 is gone; a temperature is ambiguous without it |
+| `T090C` → `Theta` | the code | code 1 becomes no code; the column is dropped |
+
+Each is refused by default, with the fix printed — the first returns
+`use 'Temperature (deg F)'`. Refused means **nothing is applied**: the columns come back
+unchanged, so a bad rename cannot reach `write_staged_cast`.
+
+Two renames are safe and need no escape hatch, because they only ever add:
+
+- **`col_0` → `Depth (m)`** — naming a headerless fixed-width column. No code becomes a
+  code; that is the point.
+- **`DO` → `DO (mg/L)`** — folding in a unit from a units row or a readme. This is the one
+  rename that genuinely changes behaviour, because it makes the conversion detectable.
+
+`strict=False` applies a judgement call anyway and sets `applied_with_problems`. It still
+refuses the **structural** ones: a query that matches no column, and a collision. A
+collision is not a judgement — two columns under one name loses one of them with nothing
+said — so `audit["blocked"]` names those regardless.
+
+Put `audit["renames"]` in your report. A renamed column is a claim about the source.
+
+### `suggest_column_names(columns, units=None)`
+
+A **proposal**, applied by nothing. Per column: the WOD variable it resolves to, its unit,
+and a suggested name where one is safe.
+
+It deliberately does not offer a canonical name for everything, for two reasons:
+
+- **Sensor-indexed pairs collide.** `t090C` and `t190C` are the primary and secondary
+  temperature sensor and **both resolve to code 1**. There is no single canonical name that
+  keeps both, so they appear under `collisions` and get no suggestion. Canonicalising them
+  would drop a real measurement.
+- **A canonical name changes no output.** The NetCDF variable name comes from the WOD code
+  via `wod_name`, not from the column name. Renaming is for the legibility of the staged
+  file; it is not a precondition for conversion.
+
+---
+
 ## `combine_levels(tables)` and `combine_on_key(tables, key, key_aliases=None)`
 
 One cast is often split across several files. Both shapes produce silently wrong output if
@@ -129,10 +198,24 @@ cols, rows, info = combine_on_key([(c1, r1), (c2, r2)], key="Depth (m)",
                                   key_aliases=["DEPTH", "depth_m"])
 ```
 
-**Check `info["per_table"]`.** A `matched_existing_keys` near zero means the files do not
-share a key and the join produced two disjoint blocks rather than merged levels — which looks
-like success and is not. `colliding_columns` names any variable that appeared in more than one
-table; only the last value survives, so resolve it deliberately.
+**Check `info["per_table"]`.** It reports, per table, its `key_column`,
+`matched_existing_keys`, `distinct_keys` and `duplicate_keys_within_table`. Three failures
+live in there, and all three look like success:
+
+| What you see | What it means |
+| --- | --- |
+| `matched_existing_keys` near zero | the files do not share a key; the join produced two disjoint blocks, not merged levels |
+| `duplicate_keys_within_table` non-zero | **one file repeats a key.** The later row overwrites the earlier one and that measurement is gone |
+| `colliding_columns` non-empty | a variable appeared in more than one table; only the last value survives |
+
+**Judge overlap against `distinct_keys`, not `rows`.** A file that repeats a key has more
+rows than keys, so `matched / rows` reads as healthy overlap on a file that is overwriting
+itself. That is why `distinct_keys` is reported separately.
+
+**Keys are compared as raw text**, so `0`, `0.0` and `00.0` are three different keys — which
+makes the trap bidirectional. Files that genuinely share every depth can report **0%**
+overlap and look unrelated, purely because one wrote `0` and the other `0.0`. Normalise the
+key column before joining when the files spell their depths differently.
 
 ---
 

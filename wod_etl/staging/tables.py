@@ -13,10 +13,11 @@ def read_table(
     header_row: int = 0,
     encoding: Optional[str] = None,
     drop_blank_rows: bool = True,
+    delimiter: Optional[str] = ",",
 ) -> Tuple[List[str], List[List[str]], Dict[str, Any]]:
     """Read a delimited originator file as (columns, rows, info). Never raises on encoding.
 
-    Handles three things that stop `load_tabular` before it starts:
+    Handles four things that stop `load_tabular` before it starts:
 
     - **Encoding.** Tries `config.TEXT_ENCODINGS` in order. Japanese-authored CSVs are
       commonly cp932 and raise UnicodeDecodeError on utf-8.
@@ -24,9 +25,14 @@ def read_table(
       real one, which shifts the header and doubles the row count.
     - **A title row above the header.** `header_row` is an index into the *non-blank*
       rows, so a file whose first line is a dataset title uses `header_row=1`.
+    - **The delimiter.** `","` by default. Pass `delimiter=None` to sniff it from the
+      header instead, which is what a folder of tab- or semicolon-separated files needs:
+      read as CSV they come back as one column per row, which then reads downstream as a
+      file with no measurements rather than as the wrong delimiter.
 
-    `info` reports the encoding used, the row counts before and after cleaning, and any
-    duplicate column names -- all of which change how the file should be read.
+    `info` reports the encoding used, the delimiter, the row counts before and after
+    cleaning, and any duplicate column names -- all of which change how the file should
+    be read.
     """
     path = Path(path)
     encodings = (encoding,) if encoding else TEXT_ENCODINGS
@@ -43,22 +49,58 @@ def read_table(
         text = path.read_text(encoding="latin-1", errors="replace")
         used = "latin-1 (lossy)"
 
-    raw = list(csv.reader(text.splitlines()))
+    lines = text.splitlines()
+    sep = delimiter if delimiter is not None else _sniff_delimiter(lines)
+    raw = list(csv.reader(lines, delimiter=sep))
     kept = [r for r in raw if any(c.strip() for c in r)] if drop_blank_rows else raw
     if header_row >= len(kept):
         return [], [], {"error": f"header_row {header_row} is past the end of the file "
-                                 f"({len(kept)} non-blank rows)", "encoding": used}
+                                 f"({len(kept)} non-blank rows)", "encoding": used,
+                        "delimiter": sep}
 
     columns = [c.strip() for c in kept[header_row]]
     rows = kept[header_row + 1:]
     dupes = [c for c, n in collections.Counter(c for c in columns if c).items() if n > 1]
     return columns, rows, {
         "encoding": used,
+        "delimiter": sep,
         "rows_in_file": len(raw),
         "blank_rows_dropped": len(raw) - len(kept),
         "data_rows": len(rows),
         "duplicate_columns": dupes,
     }
+
+
+# Whitespace is deliberately absent: it is also what separates fixed-width columns, and
+# calling a fixed-width file whitespace-delimited is the failure that produces ragged rows
+# and a phantom column. A fixed-width file belongs to read_any, not here.
+_CANDIDATE_DELIMITERS = (",", "\t", ";", "|")
+
+
+def _sniff_delimiter(lines: List[str], sample: int = 20) -> str:
+    """The delimiter that splits the most sampled lines into the same field count > 1.
+
+    Comma wins ties, so a file this would have read correctly before still does.
+
+    **It counts raw characters, including inside quoted fields**, which is where it can be
+    fooled: a semicolon-separated European file whose numbers use a decimal comma
+    (`1,5;2,3;4,5`) has more commas than semicolons on every line, both perfectly
+    consistent, so comma wins and the columns come back wrong. Check `len(columns)` against
+    what the file should have, and pass an explicit `delimiter` when it disagrees.
+    """
+    body = [l for l in lines if l.strip()][:sample]
+    if not body:
+        return ","
+    best, best_score = ",", (0.0, 0)
+    for sep in _CANDIDATE_DELIMITERS:
+        counts = [l.count(sep) for l in body]
+        modal = max(set(counts), key=counts.count)
+        if modal < 1:
+            continue
+        score = (counts.count(modal) / len(counts), modal)
+        if score > best_score:
+            best, best_score = sep, score
+    return best
 
 
 def clean_sentinels(
@@ -204,10 +246,25 @@ def combine_on_key(
         cols, rows, info = combine_on_key([(c1, r1), (c2, r2)], key="Depth (m)")
 
     The join is an outer join in first-appearance order of the key, so a level present in
-    only one file survives with the rest of its row empty. `info["key_overlap"]` reports
-    how many key values each table shared with the result -- a near-zero overlap means the
-    files do not actually share a key and the join is meaningless, which is the failure
-    worth catching.
+    only one file survives with the rest of its row empty. `info["per_table"]` reports, for
+    each table, its `key_column`, how many of its keys `matched_existing_keys` already
+    contributed by an earlier table, its `distinct_keys`, and its
+    `duplicate_keys_within_table`.
+
+    **Two failures worth catching, and both need `per_table` to see.** A near-zero
+    `matched_existing_keys` means the files do not actually share a key and the join is
+    meaningless -- which looks like success, because every row survives in its own block.
+    A non-zero `duplicate_keys_within_table` means one file repeats a key: the later row
+    overwrites the earlier one and that measurement is gone. Divide by `distinct_keys`
+    rather than by `rows` when judging overlap, or a file that overwrites itself reads as
+    healthy.
+
+    **Keys are compared as raw text**, so `0`, `0.0` and `00.0` are three different keys.
+    That makes the trap bidirectional: files that genuinely share every depth can report
+    **zero** overlap purely because one wrote `0` and the other `0.0`. Normalise the key
+    column yourself before calling this when the files spell their depths differently --
+    format every key to the same number of decimals -- and check `per_table` afterwards to
+    confirm the overlap is what you expected.
     """
     names = [key] + list(key_aliases or [])
     order: List[str] = []
@@ -229,23 +286,35 @@ def combine_on_key(
                 collisions.append(c)
             else:
                 out_columns.append(c)
+        # A key already in `merged` means one of two very different things: an earlier
+        # table contributed it (a genuine match, which is what overlap measures) or THIS
+        # table already used it (a duplicate, whose row is about to be overwritten and
+        # lost). Counting both as `matched` inflated the very metric that exists to catch
+        # a bad join, so the two are tracked apart.
         matched = 0
+        seen_here: set = set()
+        duplicates = 0
         for r in rows:
             if ki >= len(r):
                 continue
             k = r[ki].strip()
             if not k:
                 continue
+            if k in seen_here:
+                duplicates += 1
+            elif k in merged:
+                matched += 1
             if k not in merged:
                 merged[k] = {}
                 order.append(k)
-            else:
-                matched += 1
+            seen_here.add(k)
             for j, c in enumerate(cols):
                 if j == ki or not c:
                     continue
                 merged[k][c] = (r[j].strip() if j < len(r) else "")
         overlap.append({"key_column": kcol, "matched_existing_keys": matched,
+                        "distinct_keys": len(seen_here),
+                        "duplicate_keys_within_table": duplicates,
                         "rows": len(rows)})
 
     out_rows = [[k] + [merged[k].get(c, "") for c in out_columns[1:]] for k in order]

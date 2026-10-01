@@ -117,6 +117,40 @@ measurement. Internally a depth column carries the sentinel code `0`
 
 ---
 
+## `resolve_column(query, columns)`
+
+**Which of these columns does a human's name for one of them refer to?** "Rename the
+latitude column" does not say the column is spelt `LAT`, and the caller should not have to
+know.
+
+```python
+resolve_column("latitude", ["LAT", "LON", "Depth (m)"])
+# {"column": "LAT", "wod_code": 30, "matched_by": "wod_code",
+#  "confidence": "high", "candidates": ["LAT"], "ambiguous": False, "note": None}
+```
+
+Four tiers, tried in order, and the one that fired is named in `matched_by`:
+
+| Tier | Test | Catches |
+| --- | --- | --- |
+| `exact` | string equality | the caller already knew the name |
+| `normalized` | `normalize_name` equality | `latitude` → `Latitude (degree N)` |
+| `wod_code` | both resolve to the same WOD code | `latitude` → `LAT`, `oxygen` → `Sbeox0ML/L` |
+| `substring` | normalised substring, `confidence: "low"` | last resort, flagged as such |
+
+**It refuses to choose between two candidates.** Two or more hits at the winning tier gives
+`column: None`, `ambiguous: True` and the candidates listed. That is the real Sea-Bird case:
+`t090C` and `t190C` are the primary and secondary temperature sensor and **both resolve to
+code 1**, so "the temperature column" genuinely does not identify one of them. Picking one
+would drop a real measurement.
+
+A query landing on a column WOD does not store is refused with `explain_column`'s reason, so
+asking for "the temperature column" cannot quietly return a *potential* temperature.
+
+Renaming what it finds is Phase 0's job — [`rename_columns`](../staging/README.md).
+
+---
+
 ## `map_metadata(header_text, columns, df=None, dataset_code=None)`
 
 **Everything in a file that is not a measurement value.** `generate_field_mapping` decides
@@ -296,8 +330,14 @@ than dropping them:
 | bottom depth, water depth, sounding | not a profile variable at all — it is **secondary header 10**, and `map_metadata` already claims it |
 
 If it is a real WOD variable, add an alias to `VARIABLE_ALIASES` in
-[`query_wod_spec.py`](query_wod_spec.py). **Do not rename the source data** — the raw file
-is the provenance record.
+[`query_wod_spec.py`](query_wod_spec.py). **Never rename anything in `data/raw/`** — the
+raw file is the provenance record.
+
+**An alias is not a rename, and the choice between them matters.** An alias teaches the
+whole pipeline that `T090C` means Temperature: it applies to every accession from now on
+and touches no data. A rename edits one staged copy of one file, via
+[`rename_columns`](../staging/README.md) in Phase 0. Add the alias when the vendor's name
+will recur; rename when *this* file's header is wrong, missing, or missing its unit.
 
 Instrument exports are the usual reason a real variable goes unmapped: Sea-Bird writes
 `T090C`, `Sal00`, `PrDM`, `Sbeox0ML/L`, `FlSP` and `DepSM` rather than English names, and

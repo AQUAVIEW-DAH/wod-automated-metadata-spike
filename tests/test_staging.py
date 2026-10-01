@@ -286,3 +286,64 @@ class TestCompactTimeFields:
     def test_punctuated_forms_are_untouched(self):
         assert parse_timestamp("2023-03-03", "21:02") == dt.datetime(2023, 3, 3, 21, 2)
         assert parse_timestamp("2023/6/1") == dt.datetime(2023, 6, 1)
+
+
+class TestReadTableDelimiters:
+    """read_table was csv.reader with the excel dialect, so it was comma-only. A folder of
+    tab-separated one-level-per-file casts came back as one column per row, which reads
+    downstream as a file holding no measurements rather than as the wrong delimiter."""
+
+    def test_comma_is_still_the_default(self, tmp_path):
+        p = tmp_path / "c.csv"
+        p.write_text("Depth (m),Temp (deg C)\n0,12.1\n10,11.4\n")
+        cols, rows, info = read_table(p)
+        assert cols == ["Depth (m)", "Temp (deg C)"]
+        assert info["delimiter"] == ","
+
+    @pytest.mark.parametrize("sep,name", [("\t", "tab"), (";", "semicolon"), ("|", "pipe")])
+    def test_sniffs_the_delimiter_when_asked(self, tmp_path, sep, name):
+        p = tmp_path / "c.dat"
+        p.write_text(f"Depth (m){sep}Temp (deg C)\n0{sep}12.1\n10{sep}11.4\n")
+        cols, rows, info = read_table(p, delimiter=None)
+        assert cols == ["Depth (m)", "Temp (deg C)"], f"{name} not split"
+        assert info["delimiter"] == sep
+        assert rows == [["0", "12.1"], ["10", "11.4"]]
+
+    def test_a_tab_file_read_as_csv_collapses_to_one_column(self, tmp_path):
+        """The failure this exists to prevent, pinned so the default cannot drift."""
+        p = tmp_path / "c.dat"
+        p.write_text("Depth (m)\tTemp (deg C)\n0\t12.1\n10\t11.4\n")
+        cols, _, _ = read_table(p)                      # default comma
+        assert len(cols) == 1
+
+
+class TestCombineOnKeyReportsRowsItOverwrites:
+    """A key repeated WITHIN one table overwrote the earlier row and incremented
+    `matched_existing_keys` at the same time -- so the metric that exists to catch a bad
+    join was inflated by the data loss it should have reported."""
+
+    def test_a_within_table_duplicate_is_counted_separately(self):
+        t1 = (["Depth", "Temp"], [["0", "12.1"], ["0", "12.4"], ["10", "11.0"]])
+        t2 = (["Depth", "Sal"], [["0", "34.1"], ["10", "34.2"]])
+        _, rows, info = combine_on_key([t1, t2], key="Depth")
+        first = info["per_table"][0]
+        assert first["duplicate_keys_within_table"] == 1
+        assert first["matched_existing_keys"] == 0      # nothing preceded it
+        assert first["distinct_keys"] == 2
+        assert len(rows) == 2                           # the overwrite is real
+
+    def test_a_genuine_cross_table_match_still_counts(self):
+        t1 = (["Depth", "Temp"], [["0", "12.1"], ["10", "11.0"]])
+        t2 = (["Depth", "Sal"], [["0", "34.1"], ["10", "34.2"]])
+        _, _, info = combine_on_key([t1, t2], key="Depth")
+        assert info["per_table"][1]["matched_existing_keys"] == 2
+        assert info["per_table"][1]["duplicate_keys_within_table"] == 0
+
+    def test_overlap_against_distinct_keys_not_rows(self):
+        """matched/rows read as healthy on a file that overwrites itself; the fix is to
+        divide by distinct_keys, which this makes possible."""
+        t1 = (["Depth", "Temp"], [["0", "1"], ["0", "2"], ["0", "3"]])
+        t2 = (["Depth", "Sal"], [["0", "34.1"]])
+        _, _, info = combine_on_key([t1, t2], key="Depth")
+        assert info["per_table"][0]["distinct_keys"] == 1
+        assert info["per_table"][0]["duplicate_keys_within_table"] == 2

@@ -76,10 +76,14 @@ rest — a sidecar station list, one table holding the whole cruise, a title row
 header, pressure but no depth, `**NS`/`*DL` sentinels — build a derived copy first:
 
 ```python
-from wod_etl.staging import (read_table, clean_sentinels, group_rows,
+from wod_etl.staging import (read_table, clean_sentinels, group_rows, rename_columns,
                              parse_coordinate, parse_timestamp,
                              pressure_to_depth, write_staged_cast)
 ```
+
+To rename a column — including "call the latitude column Latitude" — use `rename_columns`
+on the staged copy. It resolves the column from your name for it and refuses any rename
+that would change its WOD code, unit or scale, each of which the name alone carries.
 
 Read [`wod_etl/staging/README.md`](../../../wod_etl/staging/README.md) for the API and
 [`knowledge/accession_field_guide.md`](../../../knowledge/accession_field_guide.md) for the

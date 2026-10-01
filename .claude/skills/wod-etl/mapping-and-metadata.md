@@ -21,11 +21,48 @@ Everything downstream reads it. Six keys matter:
 
 Plus the three metadata keys, below.
 
-### Adding an alias
+### Adding an alias, or renaming a column
 
-If a column you expect is in `unmapped_columns` and **not** in `dropped_columns`, add it to
-`VARIABLE_ALIASES` in `wod_etl/mapping/query_wod_spec.py`. Never rename the source data —
-the raw file is the provenance record.
+If a column you expect is in `unmapped_columns` and **not** in `dropped_columns`, you have
+two options and they are not interchangeable. Never touch `data/raw/` with either — the raw
+file is the provenance record.
+
+| | Alias | Rename |
+| --- | --- | --- |
+| Where | `VARIABLE_ALIASES` in `wod_etl/mapping/query_wod_spec.py` | `rename_columns` in `wod_etl.staging`, on the staged copy |
+| Scope | every accession, forever | this one file |
+| Touches data | no | the staged header only |
+| Use when | the vendor's name will recur (`T090C`, `PrDM`) | *this* file's header is wrong, missing, or missing its unit |
+
+**Renaming, when you do it:**
+
+```python
+from wod_etl.staging import rename_columns
+cols, audit = rename_columns(cols, {"latitude": "Latitude"})   # -> LAT becomes Latitude
+```
+
+The key can be a human's name for the column — `resolve_column` finds that the latitude
+column is spelt `LAT`. It **refuses to guess between two**: `t090C` and `t190C` both resolve
+to code 1 (primary and secondary sensor), so "the temperature column" is ambiguous and comes
+back as such rather than picking one.
+
+The column name carries three facts and **nothing else supplies any of them** — the WOD
+code, the originator's unit, the measurement scale. So these are refused by default, with
+the fix printed, and nothing is applied when one fails:
+
+- `Temp (deg F)` → `Temperature` — the unit is gone and the values read as already-Celsius
+- `Temperature [ITS-90, deg C]` → `Temperature (deg C)` — the scale is gone
+- `T090C` → `Theta` — code 1 becomes no code
+
+Two renames only ever add, and are always allowed: naming `col_0` → `Depth (m)` from a
+format description, and folding a unit in (`DO` → `DO (mg/L)`), which is the one rename that
+changes behaviour because it makes the conversion detectable.
+
+**Do not canonicalize column names as a habit.** `suggest_column_names` will propose it, but
+the output NetCDF variable name comes from the WOD code, not the column name, so
+canonicalising changes no output — and on a Sea-Bird cast it would collapse `t090C` and
+`t190C` onto one name and drop a sensor. Report `audit["renames"]`: a rename is a claim
+about the source.
 
 Instrument exports are the usual cause. Sea-Bird writes `T090C`, `Sal00`, `PrDM`,
 `Sbeox0ML/L`, `FlSP` and `DepSM` rather than English names, and the trailing digits are the

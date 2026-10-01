@@ -11,11 +11,13 @@ differently and a declarative joiner would be a liability; compose these instead
 from wod_etl.staging.parse import parse_coordinate, parse_timestamp, pressure_to_depth
 from wod_etl.staging.tables import (read_table, clean_sentinels, group_rows,
                                     fold_unit_row, combine_levels, combine_on_key)
+from wod_etl.staging.columns import rename_columns, suggest_column_names
 from wod_etl.staging.write_cast import write_staged_cast
 
 __all__ = [
     "parse_coordinate", "parse_timestamp", "pressure_to_depth",
     "read_table", "clean_sentinels", "group_rows",
     "fold_unit_row", "combine_levels", "combine_on_key",
+    "rename_columns", "suggest_column_names",
     "write_staged_cast",
 ]

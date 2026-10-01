@@ -327,6 +327,82 @@ def match_variable(column_name: str) -> Optional[int]:
     return best[0] if best else None
 
 
+def resolve_column(query: str, columns: List[str]) -> Dict[str, Any]:
+    """Which of these columns does a human's name for one of them refer to?
+
+    "Rename the latitude column to Latitude" does not say that the column is spelt `LAT`,
+    and the caller should not have to know. This answers that, and **refuses to choose
+    between two candidates** rather than picking one.
+
+        resolve_column("latitude", ["LAT", "LON", "Depth (m)"])
+        # {"column": "LAT", "wod_code": 30, "matched_by": "wod_code",
+        #  "confidence": "high", "ambiguous": False, ...}
+
+    Four tiers, tried in order and reported in `matched_by`:
+
+    | tier         | test                                        | catches                  |
+    | ---          | ---                                         | ---                      |
+    | `exact`      | string equality                             | the caller knew the name |
+    | `normalized` | `normalize_name` equality                   | `latitude` -> `LATITUDE` |
+    | `wod_code`   | both resolve to the same WOD variable code  | `latitude` -> `LAT`      |
+    | `substring`  | normalised substring, `confidence: "low"`   | last resort              |
+
+    Two or more hits at the winning tier gives `column: None` and `ambiguous: True` with
+    the candidates listed. That is the real case for a Sea-Bird cast: `t090C` and `t190C`
+    are the primary and secondary temperature sensor and **both resolve to code 1**, so
+    "the temperature column" genuinely does not identify one of them.
+
+    A query that lands on a column WOD does not store is refused with `explain_column`'s
+    reason, so asking for "the temperature column" cannot quietly return a potential
+    temperature.
+    """
+    cols = [c for c in columns if c and c.strip()]
+    out: Dict[str, Any] = {"query": query, "column": None, "wod_code": None,
+                           "matched_by": None, "confidence": "none",
+                           "candidates": [], "ambiguous": False, "note": None}
+    if not query or not cols:
+        out["note"] = "nothing to match" if cols else "no columns given"
+        return out
+
+    nq = normalize_name(query)
+    q_code = match_variable(query)
+
+    tiers = [
+        ("exact", [c for c in cols if c == query], "high"),
+        ("normalized", [c for c in cols if normalize_name(c) == nq], "high"),
+        ("wod_code", [c for c in cols if q_code is not None
+                      and match_variable(c) == q_code] if q_code is not None else [], "high"),
+        ("substring", [c for c in cols if nq and nq in normalize_name(c)], "low"),
+    ]
+
+    for tier, hits, confidence in tiers:
+        hits = list(dict.fromkeys(hits))          # de-dup, keep order
+        if not hits:
+            continue
+        out["candidates"] = hits
+        out["matched_by"] = tier
+        if len(hits) > 1:
+            out["ambiguous"] = True
+            out["note"] = (f"{len(hits)} columns match {query!r} at the {tier} tier: "
+                           f"{hits}. Name the one you mean. Sensor-indexed pairs such as "
+                           f"t090C/t190C resolve to the same WOD code by design -- they "
+                           f"are the primary and secondary sensor, not duplicates.")
+            return out
+        column = hits[0]
+        refusal = explain_column(column)
+        if refusal is not None:
+            out["candidates"] = hits
+            out["note"] = (f"{query!r} resolves to column {column!r}, which WOD does not "
+                           f"store: {refusal['reason']} {refusal['route']}")
+            return out
+        out.update({"column": column, "wod_code": match_variable(column),
+                    "confidence": confidence})
+        return out
+
+    out["note"] = f"no column matches {query!r}. Columns present: {cols}"
+    return out
+
+
 def resolve_dataset(dataset_type: str, depth_increment_m: Optional[float] = None) -> Dict[str, Any]:
     """Resolve an instrument/dataset label to a real WOD dataset code (Table 2).
 
