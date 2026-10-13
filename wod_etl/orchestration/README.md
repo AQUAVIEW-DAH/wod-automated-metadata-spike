@@ -13,6 +13,126 @@ and why*, and *how do I carry on after a crash*.
 
 ---
 
+## Run it yourself: `wod-etl`
+
+For a person, with no coding agent: one command per accession, resumable, that says what to
+do when it needs you.
+
+```bash
+uv run wod-etl run <accession>          # landing-page URL, number, data URL, folder, .tar.gz
+uv run wod-etl run <accession> --from process --yes    # redo from a stage
+uv run wod-etl status <accession>       # where it stopped, what is open, where the files are
+```
+
+`python -m wod_etl` is the same command. From Python: `pipeline.run_pipeline(source)`.
+An input with no accession number in it (a folder called `survey_2024`) needs
+`--accession-id`.
+
+### Stages
+
+| # | Stage | Does | Pauses or fails when |
+| --- | --- | --- | --- |
+| 1 | resolve | turns the input into a listing: a landing page or number via `resolve_accession_url`, the latest version of a versioned accession, a tarball extracted | NCEI does not answer (rerun later), or the input is not an accession |
+| 2 | fetch | mirrors a remote accession into `data/raw/<acc>/`, re-fetching a file whose listed date changed; a local folder is used in place | a download fails (rerun -- finished files are kept) |
+| 3 | triage | `classify_accession` → `data/runs/<acc>/triage.json` | |
+| 4 | decide | proposes recipes and questions in `decisions.toml`, runs the cross-checks, validates the answers | **any question is open (exit 2)** |
+| 5 | stage | runs the confirmed recipes into `data/staging/<acc>/pipeline/{profiles,taxa}/` | a recipe cannot run |
+| 6 | process | `process_accession` on the files that need no staging and on the staged casts | a transient failure (exit 1, rerun retries it); a file that will never read becomes a question (exit 2) |
+| 7 | taxa | `process_taxa` on the staged hauls | a haul fails validation |
+| 8 | verify | `verify_output` over the written profiles | -- (a high finding gives exit 3) |
+| 9 | report | `report.md` + `report.json`, **always**, however the run ended | |
+
+### Resume: what a rerun redoes
+
+Each stage records a **fingerprint** of its inputs in `state.json` -- the input string, the
+listing, the files it reads (size and nanosecond mtime), and the part of `decisions.toml` it
+reads. A rerun:
+
+- **skips** a stage that is done and whose fingerprint is unchanged;
+- **reruns from scratch** a stage whose fingerprint changed, clearing only what it owns: an
+  edited unit restages and reprocesses the casts; a plankton-only edit reruns stage → taxa
+  and leaves the profiles alone;
+- **resumes** a stage that failed with unchanged inputs: the process stage retries only the
+  files that failed (its manifests are `<acc>_direct` and `<acc>_staged`, so per-file resume
+  works across invocations);
+- after Ctrl-C (exit 130) resets the interrupted stage and continues it.
+
+A code change does not invalidate anything (the output would silently change under you);
+the run says the commit moved and suggests `--from process`. A `.lock` stops two runs of
+one accession at once; a lock left by a dead process is taken over.
+
+### `decisions.toml`
+
+Written once, then **only appended to** -- nothing typed into it is ever rewritten. Every
+item has a stable id, so nothing is proposed twice. The proposals carry `TO DO` comments.
+
+| Section | Holds | Blocks the run until |
+| --- | --- | --- |
+| `[metadata]` | keys written into every staged header: `Platform`, `Cruise`, `Instrument`... | -- |
+| `[profiles.<name>]` | a recipe that stages casts (below) | `confirmed = true`, no `UNIT?` left, the station list locates every cast |
+| `[taxa.<name>]` | a recipe that stages plankton hauls (below) | never: unconfirmed recipes are reported as pending |
+| `[files."<path or pattern>"]` | `action = "skip"`, `"process"` (+ `process_as = "OSD"`), `"taxa"` | an `inspect` file or a file that failed for good has an action |
+| `[[cross_check]]` | another source of positions/dates: `name`, `file`, `tolerance_km`, `compare`; for a PDF table also `page`, `row_pattern`, `columns` | -- |
+| `[track]` | `bounding_box` (proposed from NCEI's `_lonlat.txt`), `outlier_factor` | -- |
+| `[conflicts."<id>"]` | a disagreement: `values`, `values_hash`, `resolution`, `note` | `resolution` is `"keep"`, `"ack"`, a source's name, or `{ date = ..., latitude = ..., longitude = ... }` |
+
+A `[files]` key may be a pattern -- `data/0-data/par/*.txt` -- and look-alike files are
+proposed as one: thirty daily files are one question. A conflict whose values change after
+it was settled is open again (`values_hash`). Every resolution is written into the staged
+notes, so it reaches the NetCDF's `comment`.
+
+**Profile recipes** (`kind`):
+
+| kind | Fields |
+| --- | --- |
+| `long` | `files`, `keys` (cast key + depth key), `key_aliases`, `cast_key`, `variable`, `value`, `columns` (variable → staged name **with its unit**), `station_list`; optional `depth_column`, `time_zone`, `on_conflict = "first"`, `station_map`, `skip_casts`, `dataset_type`, `metadata`, `notes` |
+| `per_file` | `files` (one cast each), `station_pattern` (regex on the file name → station), `station_list`, `header_row`, `columns` (renames); optional as above |
+| `script` | `script`: a Python file that writes staged casts into `$WOD_STAGING_OUT` (`$WOD_ACCESSION`, `$WOD_DATA_ROOT` are set). For what no recipe describes: pressure to depth, re-occupied stations, odd layouts. Its hash is fingerprinted. |
+
+**Taxa recipes**: `matrix` (`file`, `header_rows`, `label_columns`, `header_names`,
+`cast_header`, `taxon_column`, `stage_column`, `sample_biological` keyed by sample header,
+`blank`) or `long` (`file`, `cast_key`, `taxon_columns`, `fallback_taxon_column`,
+`stage_column`, `count_column`, `missing_values`); both take `station_list`, `unit`,
+`upper_depth`, `lower_depth`, `biological_header`, `notes`.
+
+### When it fails
+
+Every problem carries **what** failed, **why**, and **how to fix it** -- printed at the end
+of the run, written to `report.md`, and logged. `remedies.py` adds the decisions key to set
+or the command to run to the explanations the library already gives (a listing's `hint`, a
+file's skip reason, a finding's `action`). A bug (an exception in a stage) is logged with its
+traceback and reported as a bug, not a data problem.
+
+### The accession run log
+
+`data/runs/<acc>/run.log` (text) and `events.jsonl` (the same events as JSON) record every
+run against the accession -- `wod-etl`, **and any agent or script calling the library**:
+`process_accession`, `process_taxa`, `classify_accession` and the staged writers open the log
+themselves when they can tell the accession (`accession=`, or from the path). Each run opens
+with a banner (invocation id, actor, arguments, git commit, configuration) and closes with
+how it ended. Wrap a hand-written staging script to log it too:
+
+```python
+from wod_etl.runlog import accession_log
+with accession_log("0303928", actor="agent"):
+    ...
+```
+
+### Files
+
+```
+data/runs/<acc>/        run.log  events.jsonl  state.json  decisions.toml  triage.json
+                        report.md  report.json  listing.json  work/ (raw copies per run)
+data/raw/<acc>/         the mirror of a remote accession
+data/staging/<acc>/pipeline/{profiles,taxa}/      staged by recipes (cleared on rerun)
+data/processed/<acc>/pipeline/{profiles,taxa}/    the output
+```
+
+The pipeline never touches anything else: folders an agent staged by hand under
+`data/staging/<acc>/` are left alone.
+
+---
+
 ## `process_accession(url_or_path, dataset_type=None, ...)`
 
 ```python
@@ -42,6 +162,11 @@ classified from its own path, header, columns and depth spacing —
 | `run_qc` | Whether to run WOD's own observed-level QC. Defaults to `RUN_WOD_QC` in [`config.py`](../config.py), which is **off** — QC is applied downstream, and a Table 12 flag written here is one more thing to reconcile. The ORIGINATOR's flag columns are carried through either way, verbatim and untranslated. |
 | `dry_run` | Report what would be processed, and as what; write nothing. |
 | `on_error` | `"skip"` (default) or `"stop"`. |
+| `include` | Process only these keys (paths relative to the listed root); `include_missing` names any not found. `wod-etl` uses it to process the files that need no staging in place. |
+| `accession` | Which accession's run log to write to (`data/runs/<acc>/`). Worked out from the source when omitted; with none, nothing is logged. |
+
+The result also carries `listing` -- how the input became a listing (`resolution`, `version`,
+`extracted_from`) -- and each failed file's `traceback` is kept in the manifest.
 
 ### Recommended sequence
 
@@ -198,7 +323,7 @@ is skipped or failed depending on which of those it was — see *Skipped is not 
 
 ---
 
-## `process_taxa(source, output_dir)` — biological data
+## `process_taxa(source, output_dir, accession=None)` — biological data
 
 Plankton counts and biomass are not profiles, and `process_accession` skips them with a
 route here. Stage each haul with `wod_etl.staging.write_staged_haul` (reshape a count matrix

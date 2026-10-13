@@ -110,12 +110,22 @@ def _copy_local(src: str, dest: Path, overwrite: bool) -> Dict[str, Any]:
         return {"status": "cached", "source": src, "local_path": str(src_p),
                 "size_bytes": src_p.stat().st_size, "sha256": _sha256(src_p),
                 "note": "source is already inside the raw directory"}
+    note = None
     if dest.exists() and not overwrite:
-        return {"status": "cached", "source": src, "local_path": str(dest),
-                "size_bytes": dest.stat().st_size, "sha256": _sha256(dest)}
+        # A copy is only current if it still matches its source. Returning it regardless
+        # meant a staged file regenerated under the same run id was never read again: the
+        # run reprocessed the stale copy and reported success.
+        s, d = src_p.stat(), dest.stat()
+        if s.st_size == d.st_size and int(s.st_mtime) <= int(d.st_mtime):
+            return {"status": "cached", "source": src, "local_path": str(dest),
+                    "size_bytes": d.st_size, "sha256": _sha256(dest)}
+        note = "the source changed since the cached copy was made; copied again"
     shutil.copy2(src_p, dest)
-    return {"status": "copied", "source": src, "local_path": str(dest),
-            "size_bytes": dest.stat().st_size, "sha256": _sha256(dest)}
+    out = {"status": "copied", "source": src, "local_path": str(dest),
+           "size_bytes": dest.stat().st_size, "sha256": _sha256(dest)}
+    if note:
+        out["note"] = note
+    return out
 
 
 def _filename_for(url_or_path: str) -> str:

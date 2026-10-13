@@ -22,11 +22,15 @@ Two verdicts matter and they are different:
   * `dataset_type: None` -- it looks like profile data but nothing identifies the
     instrument. `candidates` holds what it might be; do not guess silently.
 """
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from wod_etl import runlog
 from wod_etl.config import HIGH_RES_DEPTH_INCREMENT_M
+
+log = logging.getLogger(__name__)
 
 # --------------------------------------------------------------- signals
 # Each entry is (regex, weight, what the match tells you). Weights are relative and only
@@ -452,7 +456,8 @@ FILE_ACTIONS = ("process", "stage", "sidecar", "exclude", "document", "inspect")
 
 
 def classify_accession(root: str, max_files: Optional[int] = None,
-                       peek_bytes: int = 8192) -> Dict[str, Any]:
+                       peek_bytes: int = 8192,
+                       accession: Optional[str] = None) -> Dict[str, Any]:
     """Classify every file under an accession root: a verdict per FILE, grouped by folder.
 
     This is the triage step: what is in this accession, which files hold WOD profile data,
@@ -463,7 +468,26 @@ def classify_accession(root: str, max_files: Optional[int] = None,
     archives a submission as one `data/0-data` folder holding CTD casts, station lists,
     plankton sheets and cruise reports together, so a folder-level verdict of 'process'
     describes three files of seventeen. The folder verdicts are still returned, as a summary.
+
+    Logged to the accession's run log (`accession`, or worked out from `root`).
     """
+    with runlog.accession_log_for(root, accession, actor="library",
+                                  arguments={"call": "classify_accession", "root": str(root)}):
+        report = _classify_accession(root, max_files, peek_bytes)
+        if report.get("error"):
+            runlog.event(log, logging.ERROR, f"triage failed: {report['error']}",
+                         kind="triage", error=report["error"])
+        else:
+            counts = {a: len(report.get(f"{a}_files") or []) for a in FILE_ACTIONS}
+            runlog.event(log, logging.INFO,
+                         f"triage of {root}: {report['file_count']} file(s), "
+                         + ", ".join(f"{n} {a}" for a, n in counts.items() if n),
+                         kind="triage", counts=counts,
+                         shapes=report.get("cross_file_shapes"))
+        return report
+
+
+def _classify_accession(root, max_files, peek_bytes) -> Dict[str, Any]:
     base = Path(root)
     if not base.exists():
         return {"root": str(root), "error": f"no such directory: {root}", "folders": {},

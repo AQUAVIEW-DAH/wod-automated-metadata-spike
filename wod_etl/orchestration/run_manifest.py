@@ -12,13 +12,12 @@ Statuses
     skipped  -- deliberately not processed; `reason` says why
 """
 import json
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from wod_etl.config import MANIFEST_DIR
+from wod_etl.io_util import write_json_atomic
 
 PENDING, RUNNING, DONE, FAILED, SKIPPED = "pending", "running", "done", "failed", "skipped"
 TERMINAL = {DONE, SKIPPED}
@@ -71,17 +70,7 @@ def load_manifest(run_id: str) -> Optional[Dict[str, Any]]:
 def save_manifest(manifest: Dict[str, Any]) -> Path:
     """Write atomically so an interrupted run never leaves a half-written ledger."""
     manifest["updated_at"] = _now()
-    p = manifest_path(manifest["run_id"])
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as fh:
-            json.dump(manifest, fh, indent=2, default=str)
-        os.replace(tmp, p)
-    except Exception:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-    return p
+    return write_json_atomic(manifest_path(manifest["run_id"]), manifest)
 
 
 def resume_or_create(run_id: str, source: str, items: List[Dict[str, Any]],

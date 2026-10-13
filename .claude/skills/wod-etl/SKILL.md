@@ -166,9 +166,10 @@ an unrecognised layout disappears from a run.
 `outputs_without_time_of_day` (a date, no clock time: `GMT_time` is fill) and
 `coded_headers_not_resolved` (coded metadata kept as text -- no unique code matched).
 
-Retry the failures once you have addressed the cause:
-`process_accession(url, run_id="<same id>", retry_failed=True)`. Full result schema:
-[`wod_etl/orchestration/README.md`](../../../wod_etl/orchestration/README.md).
+Retry failures after fixing the cause: `process_accession(url, run_id="<same id>",
+retry_failed=True)`. Every run is logged to `data/runs/<acc>/run.log`; a person runs the
+same workflow with `uv run wod-etl run <acc>`
+([`orchestration/README.md`](../../../wod_etl/orchestration/README.md)).
 
 ## The dataset is decided per file
 

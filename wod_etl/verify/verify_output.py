@@ -24,6 +24,7 @@ wrong. `high` severity means the whole variable is out of range, which is a unit
 conversion, not bad data.
 """
 import glob
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -117,6 +118,11 @@ def verify_output(processed_dir, sample_levels: int = 200_000) -> Dict[str, Any]
     # finding is a question; a high finding is a variable that cannot be what it claims.
     report["passed"] = report["finding_counts"]["high"] == 0
     report["text"] = render(report)
+    log = logging.getLogger(__name__)
+    for f in report["findings"]:
+        log.log(logging.WARNING if f["severity"] == "high" else logging.INFO,
+                "verify %s [%s] %s: %s", processed_dir, f["severity"],
+                f["variable"] or f["file"] or "-", f["evidence"])
     return report
 
 

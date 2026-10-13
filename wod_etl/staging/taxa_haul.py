@@ -28,11 +28,15 @@ name is checked against the manual's tables, and anything that is not a Table 6a
 is reported rather than dropped.
 """
 import csv
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from wod_etl import runlog
 from wod_etl.reference import biological_headers, missing_biological_fields
+
+log = logging.getLogger(__name__)
 
 HAUL_MARKER = "Record type: WOD taxa-records"
 
@@ -175,6 +179,13 @@ def write_staged_haul(
             w.writerow(r)
 
     missing = missing_biological_fields(stated)
+    with runlog.accession_log_for(output_path, banner=False):
+        runlog.event(log, logging.INFO,
+                     f"staged haul {output_path}: {len(rows)} Taxa-Record(s)"
+                     + (f"; not stated: {', '.join(missing)}" if missing else ""),
+                     kind="staged_haul", path=str(output_path), records=len(rows),
+                     missing_biological_fields=missing, notes=all_notes,
+                     sources=list(sources or []))
     return {"output_path": str(output_path), "records": len(rows), "columns": columns,
             "unmapped_columns": [c for c, f in zip(columns, fields) if f is None],
             "unknown_biological_fields": [str(k) for k in unknown] or None,

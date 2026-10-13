@@ -44,3 +44,24 @@ def no_retry_backoff(monkeypatch):
     from wod_etl import http_util
 
     monkeypatch.setattr(http_util, "HTTP_BACKOFF_SECONDS", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def isolated_runs_dir(tmp_path, monkeypatch):
+    """Accession logs, pipeline state and decisions go to a per-test folder, and no log
+    handler outlives the test that attached it."""
+    import logging
+
+    from wod_etl import config
+
+    d = tmp_path / "runs"
+    d.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(config, "RUNS_DIR", d)
+    logger = logging.getLogger("wod_etl")
+    before, level = list(logger.handlers), logger.level
+    yield d
+    for h in list(logger.handlers):
+        if h not in before:
+            logger.removeHandler(h)
+            h.close()
+    logger.setLevel(level)

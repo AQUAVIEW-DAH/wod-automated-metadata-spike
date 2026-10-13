@@ -152,3 +152,22 @@ class TestLocalArchives:
         res = list_remote_directory(str(z), recursive=True)
         assert res["refused_members"] == ["../escape.csv"]
         assert not (raw / "escape.csv").exists() and not (tmp_path / "escape.csv").exists()
+
+
+class TestAccessionFor:
+    @pytest.mark.parametrize("text,expected", [
+        ("0303928", "0303928"), ("303928", "0303928"),
+        ("https://www.ncei.noaa.gov/access/metadata/landing-page/bin/iso"
+         "?id=gov.noaa.nodc:303535", "0303535"),
+        ("https://www.ncei.noaa.gov/archive/accession/0303535", "0303535"),
+        ("https://www.ncei.noaa.gov/data/oceans/archive/arc0238/0303535/2.2/", "0303535"),
+        ("data/raw/0303928", "0303928"),
+        ("data/staging/0303928/CTD_20261012", "0303928"),
+        ("downloads/0303928.tar.gz", "0303928"),
+        ("data/raw/0303928/data/0-data/U2015-015_CTD_Temp.csv", "0303928"),
+        ("data/raw/t1", None), ("", None),
+    ])
+    def test_every_form_gives_the_zero_padded_id(self, text, expected):
+        from wod_etl.discovery import accession_for
+
+        assert accession_for(text) == expected

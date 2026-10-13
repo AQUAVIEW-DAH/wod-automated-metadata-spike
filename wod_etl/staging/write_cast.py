@@ -1,7 +1,12 @@
 """Write one staged cast in the form Phase 1 can read."""
 import csv
+import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+
+from wod_etl import runlog
+
+log = logging.getLogger(__name__)
 
 # Keys Phase 1's header parser recognises as coordinates. Written bare, without the
 # comment marker, because that is the `Key: value` form it scans for.
@@ -73,6 +78,15 @@ def write_staged_cast(
             w.writerow(list(row))
             n += 1
 
+    # Logged to the accession's run log when the path names one: a staged cast is a
+    # judgement, and its notes are the record of it.
+    with runlog.accession_log_for(output_path, banner=False):
+        runlog.event(log, logging.INFO,
+                     f"staged {output_path}: {n} level(s) at {latitude}, {longitude} on {date}"
+                     + (f" {time}" if time else ""),
+                     kind="staged_cast", path=str(output_path), rows=n, columns=list(columns),
+                     metadata=metadata or {}, notes=list(notes or []),
+                     sources=list(sources or []))
     return {"output_path": str(output_path), "header_lines": len(lines),
             "columns": list(columns), "data_rows": n}
 

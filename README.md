@@ -25,7 +25,7 @@ its values are coded against.
 
 ```bash
 uv sync            # runtime + dev dependencies, into .venv
-uv run pytest -q   # 323 tests
+uv run pytest -q   # the test suite
 ```
 
 Run everything with `uv run` from the project root.
@@ -36,11 +36,45 @@ Run everything with `uv run` from the project root.
 | `beautifulsoup4` | parsing Apache/NGINX directory indexes |
 | `pandas`, `numpy` | tabular parsing, conversions, QC |
 | `netCDF4` | reading and writing `.nc` |
-| `pypdf`, `pytest` | dev only — manual extraction and tests |
+| `pypdf` | reading tables out of cruise-report PDFs, and the manual |
+| `pytest` | dev only — tests |
 
 ---
 
-## Quick start
+## Run an accession yourself
+
+No coding agent needed. One command runs every stage for one accession:
+
+```bash
+uv run wod-etl run 0303928                        # an accession number
+uv run wod-etl run "https://www.ncei.noaa.gov/access/metadata/landing-page/bin/iso?id=gov.noaa.nodc:303535"
+uv run wod-etl run data/raw/0303928               # a folder already on disk, or a .tar.gz
+uv run wod-etl status 0303928                     # where it stopped, and what is open
+```
+
+It resolves and downloads the accession, triages every file, stages what it can, writes the
+WOD NetCDF and verifies it. **When a judgement is needed** -- which unit a table is in, what
+an unlabelled file is, which of two sources has a station's date right -- it pauses and
+writes the questions, pre-filled with its proposals, into
+`data/runs/<accession>/decisions.toml`. Answer them and run the same command again: it
+continues from where it stopped, and redoes only what your answers changed.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | finished, output verified |
+| 1 | a stage failed -- the message says what failed, why, and how to fix it |
+| 2 | paused: answer the questions in decisions.toml, then rerun |
+| 3 | finished, but verification flagged the output (see report.md) |
+| 130 | interrupted -- rerun to continue |
+
+Everything about an accession lives in `data/runs/<accession>/`: `run.log` (every run,
+person or agent, appended), `report.md` (the summary to read first), `decisions.toml` and
+`state.json`. Outputs go to `data/processed/<accession>/pipeline/`. The full reference is
+[*Run it yourself* in the orchestration README](wod_etl/orchestration/README.md#run-it-yourself-wod-etl).
+
+---
+
+## Quick start (Python, or a coding agent)
 
 A folder of files that carry their own coordinates goes straight through:
 
@@ -295,6 +329,7 @@ and **skills** (the code). Everything else is scaffolding.
 │   └── wod_readme_db/page_text.json   Page cache for search_manual (rebuildable)
 │
 ├── data/                              ← DATA. A run's working area.
+│   ├── runs/<accession>/              run.log, report.md, decisions.toml, state.json
 │   ├── raw/<run_id>/                  Downloaded files — the provenance record
 │   ├── staging/manifests/             One JSON ledger per run
 │   └── processed/                     Output .nc files

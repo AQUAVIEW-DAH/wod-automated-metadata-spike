@@ -33,12 +33,14 @@ RAW_DIR = DATA_DIR / "raw"
 STAGING_DIR = DATA_DIR / "staging"
 PROCESSED_DIR = DATA_DIR / "processed"
 MANIFEST_DIR = STAGING_DIR / "manifests"
+# One folder per accession: its run log, pipeline state, decisions file and report.
+RUNS_DIR = DATA_DIR / "runs"
 
 KNOWLEDGE_DIR = ROOT / "knowledge"
 CODE_TABLES_DIR = KNOWLEDGE_DIR / "wod_code_tables"
 WOD_README_PDF = KNOWLEDGE_DIR / "wod_readme.pdf"
 
-for _d in (RAW_DIR, STAGING_DIR, PROCESSED_DIR, MANIFEST_DIR):
+for _d in (RAW_DIR, STAGING_DIR, PROCESSED_DIR, MANIFEST_DIR, RUNS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 # ------------------------------------------------------------------ HTTP
@@ -164,6 +166,7 @@ def describe() -> dict:
         "raw_dir": str(RAW_DIR),
         "staging_dir": str(STAGING_DIR),
         "processed_dir": str(PROCESSED_DIR),
+        "runs_dir": str(RUNS_DIR),
         "user_agent": USER_AGENT,
         "http_timeout": HTTP_TIMEOUT,
         "http_retries": HTTP_RETRIES,

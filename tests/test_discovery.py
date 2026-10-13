@@ -308,3 +308,32 @@ class TestReaderWarningsReachTheCaller:
         casts, info = read_any(str(p), sniff_format(str(p)))
         assert len(casts[0]["df"]) == 4
         assert any("malformed" in w for w in info["warnings"])
+
+
+class TestALocalCopyIsOnlyReusedWhileCurrent:
+    """A staged file regenerated under the same run id was never read again: the cached copy
+    in raw/<run_id>/ was returned as long as it existed."""
+
+    def test_an_unchanged_source_is_cached(self, tmp_path):
+        from wod_etl.discovery import download_file
+
+        src = tmp_path / "cast.csv"
+        src.write_text("Depth (m),Temp (deg C)\n0,20\n")
+        first = download_file(str(src), dest_dir=str(tmp_path / "raw"))
+        again = download_file(str(src), dest_dir=str(tmp_path / "raw"))
+        assert first["status"] == "copied" and again["status"] == "cached"
+
+    def test_a_changed_source_is_copied_again(self, tmp_path):
+        import os
+
+        from wod_etl.discovery import download_file
+
+        src = tmp_path / "cast.csv"
+        src.write_text("Depth (m),Temp (deg C)\n0,20\n")
+        download_file(str(src), dest_dir=str(tmp_path / "raw"))
+        src.write_text("Depth (m),Temp (deg C)\n0,20\n10,19\n")
+        later = os.stat(src).st_mtime + 5
+        os.utime(src, (later, later))
+        res = download_file(str(src), dest_dir=str(tmp_path / "raw"))
+        assert res["status"] == "copied" and "changed" in res["note"]
+        assert (tmp_path / "raw" / "cast.csv").read_text().endswith("10,19\n")

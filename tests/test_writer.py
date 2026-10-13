@@ -323,3 +323,35 @@ class TestProcessOneFileAcceptsAStringPath:
                                raw_root=str(tmp_path / "raw"))
         assert res["ok"], res
         assert Path(res["output_path"]).is_file()
+
+
+class TestIncludeAndTracebacks:
+    def test_include_processes_only_the_named_keys(self, tmp_path):
+        d = tmp_path / "acc"
+        d.mkdir()
+        cast = "# LAT: 61.9\n# LON: -172.2\n# DATE: 2023-06-20\nDepth (m),Temp (deg C)\n0,20\n10,18\n"
+        (d / "a.csv").write_text(cast)
+        (d / "b.csv").write_text(cast)
+        res = process_accession(str(d), dataset_type="CTD", output_dir=str(tmp_path / "out"),
+                                raw_dir=str(tmp_path / "raw"), run_id="t_include",
+                                resume=False, include=["a.csv", "zzz.csv"])
+        assert res["total_items"] == 1 and res["counts"] == {"done": 1}
+        assert res["include_missing"] == ["zzz.csv"]
+
+    def test_an_unexpected_exception_keeps_its_traceback(self, tmp_path, monkeypatch):
+        import importlib
+        import json
+
+        # The package re-exports the function under the module's name; patch the module.
+        pa = importlib.import_module("wod_etl.orchestration.process_accession")
+
+        def boom(*a, **k):
+            raise RuntimeError("kaboom")
+        monkeypatch.setattr(pa, "process_one_file", boom)
+        d = tmp_path / "acc"
+        d.mkdir()
+        (d / "a.csv").write_text("Depth (m),Temp (deg C)\n0,20\n")
+        res = process_accession(str(d), output_dir=str(tmp_path / "out"),
+                                raw_dir=str(tmp_path / "raw"), run_id="t_tb", resume=False)
+        item = json.loads(Path(res["manifest_path"]).read_text())["items"]["a.csv"]
+        assert item["stage"] == "unexpected" and "kaboom" in item["traceback"]

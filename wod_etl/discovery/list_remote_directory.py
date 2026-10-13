@@ -4,6 +4,7 @@ Parses the size and last-modified text that servers print beside each link, and 
 follow links that leave the starting directory -- NCEI's "Parent Directory" link is an
 absolute path rather than '../', so a naive filter walks upward into the whole archive.
 """
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -14,6 +15,8 @@ from bs4 import BeautifulSoup
 
 from wod_etl.config import HTTP_RETRIES, RAW_DIR
 from wod_etl.http_util import get_with_retries
+
+log = logging.getLogger(__name__)
 
 _SIZE_RE = re.compile(r"^([\d.]+)\s*([KMGT]?)B?$", re.IGNORECASE)
 _DATE_FORMATS = [
@@ -55,6 +58,8 @@ def list_remote_directory(
             return {"source": url_or_path, "total_items": 0, "items": [],
                     "error": resolved["error"], "hint": resolved.get("hint"),
                     "accession_number": resolved.get("accession_number")}
+        log.info("resolved %s to the data directory %s (bundle %s)", url_or_path,
+                 resolved["url"], resolved.get("arc"))
         listing = list_remote_directory(resolved["url"], recursive, filter_extension)
         listing["resolved_from"] = url_or_path
         listing["resolution"] = resolved
@@ -79,6 +84,8 @@ def list_remote_directory(
     if _depth == 0 and recursive:
         latest = _latest_version(soup, url_or_path)
         if latest:
+            log.info("versioned accession: listing version %s of %s", latest["chosen"],
+                     latest["available"])
             listing = list_remote_directory(latest["url"], True, filter_extension, visited, 1)
             listing["source"] = latest["url"]
             listing["version"] = latest
@@ -149,6 +156,36 @@ def accession_number(text: str):
         if m:
             return m.group(1).lstrip("0") or "0"
     return None
+
+
+_ACCESSION_COMPONENT = re.compile(
+    r"^0*(\d{5,7})(?:\.(?:tar\.gz|tgz|tar\.bz2|tar|zip))?$", re.IGNORECASE)
+
+
+def accession_for(text_or_path) -> Optional[str]:
+    """The accession id as NCEI writes it -- seven digits, zero-padded -- or None.
+
+    Works on everything an accession is cited as or stored under: a landing page, an
+    `/archive/accession/<n>` or `/archive/arc0238/<n>/` URL, a bare number, a tarball name,
+    and a local path such as `data/staging/0303928/CTD_20261012`. `accession_number` returns
+    the number with its leading zeros stripped (`303928`) and finds nothing in a path; this is
+    the one to key files and folders by.
+    """
+    text = str(text_or_path or "").strip()
+    if not text:
+        return None
+    number = accession_number(text)
+    if number is None:
+        m = _ARCHIVE_PATH.search(text)
+        number = m.group(2) if m else None
+    if number is None:
+        parts = [p for p in re.split(r"[\\/]+", text) if p]
+        for part in reversed(parts):
+            m = _ACCESSION_COMPONENT.match(part)
+            if m:
+                number = m.group(1)
+                break
+    return number.lstrip("0").zfill(7) if number else None
 
 
 def _is_accession_reference(text: str) -> bool:

@@ -10,9 +10,10 @@ from .run_manifest import (
 )
 from .process_accession import process_accession, process_one_file
 from .process_taxa import process_taxa
+from .pipeline import run_pipeline, status
 
 __all__ = [
-    "process_accession", "process_one_file", "process_taxa",
+    "process_accession", "process_one_file", "process_taxa", "run_pipeline", "status",
     "create_manifest", "load_manifest", "save_manifest", "resume_or_create",
     "pending_items", "mark", "summarize", "list_runs", "new_run_id",
     "PENDING", "RUNNING", "DONE", "FAILED", "SKIPPED", "TERMINAL",

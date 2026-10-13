@@ -5,12 +5,15 @@ session's triage once stalled on a landing page that was simply busy. Transient 
 network errors are retried with backoff; a 404 or any other client error is not, because
 retrying it only delays the real answer.
 """
+import logging
 import time
 from typing import Optional
 
 import httpx
 
 from wod_etl.config import HTTP_BACKOFF_SECONDS, HTTP_RETRIES, HTTP_TIMEOUT, USER_AGENT
+
+log = logging.getLogger(__name__)
 
 # Statuses that mean "try again shortly", not "this URL is wrong".
 RETRY_STATUSES = {429, 500, 502, 503, 504}
@@ -35,6 +38,8 @@ def get_with_retries(url: str, *, retries: Optional[int] = None,
             try:
                 resp = client.get(url, headers={"User-Agent": USER_AGENT})
                 if resp.status_code in RETRY_STATUSES and attempt < attempts:
+                    log.warning("HTTP %s from %s; retrying (%d/%d)", resp.status_code, url,
+                                attempt, attempts)
                     last = httpx.HTTPStatusError(f"{resp.status_code} on attempt {attempt}",
                                                  request=resp.request, response=resp)
                     time.sleep(backoff * attempt)
@@ -44,6 +49,8 @@ def get_with_retries(url: str, *, retries: Optional[int] = None,
                 return resp
             except (httpx.TimeoutException, httpx.TransportError) as e:
                 last = e
+                log.warning("%s from %s (attempt %d/%d)", type(e).__name__, url, attempt,
+                            attempts)
                 if attempt < attempts:
                     time.sleep(backoff * attempt)
                     continue

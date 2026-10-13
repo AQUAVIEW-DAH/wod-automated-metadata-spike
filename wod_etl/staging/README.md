@@ -24,6 +24,12 @@ is the provenance record, and the staged file records where each added value cam
 Skip this phase when a file already has coordinates and a clean single-row header. Most
 CTD and float files do. Bottle, nutrient, plankton and underway submissions usually don't.
 
+These are **primitives**: an agent composes them in a script for each accession. A person
+running `wod-etl run` describes the common shapes in `decisions.toml` instead, and
+`wod_etl/orchestration/recipes.py` runs them on these same functions -- see
+[*Run it yourself*](../orchestration/README.md#run-it-yourself-wod-etl). Everything staged
+either way is logged to the accession's `data/runs/<acc>/run.log`.
+
 ---
 
 ## Does this file need staging?

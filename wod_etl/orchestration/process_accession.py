@@ -13,6 +13,7 @@ each file is classified from its own path, header, columns and depth spacing, an
 cannot become a WOD profile -- currents, plankton, empty columns, documentation -- are
 skipped with a stated reason rather than failing four phases later.
 """
+import logging
 import os
 import re
 import traceback
@@ -43,6 +44,9 @@ from wod_etl.qc_transforms import apply_qc_auditing, convert_units_and_types
 from wod_etl.verify import validate_intermediate_netcdf, verify_output
 from wod_etl.writers import write_ragged_profiles
 from wod_etl.orchestration import run_manifest as mf
+from wod_etl import runlog
+
+log = logging.getLogger(__name__)
 
 
 def process_accession(
@@ -62,6 +66,8 @@ def process_accession(
     process_unidentified_as: Optional[str] = None,
     run_qc: Optional[bool] = None,
     verify: bool = True,
+    include: Optional[List[str]] = None,
+    accession: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Process every data file in an accession directory.
 
@@ -86,10 +92,50 @@ def process_accession(
                       structural validation: a variable in the wrong unit validates cleanly.
                       Sets `output_verified`; turn it off only for a run whose output you are
                       about to discard.
+    include        -- process only these keys (paths relative to the listed root). Everything
+                      else in the listing is left out of the manifest entirely. Keys asked for
+                      and not found are returned in `include_missing`. The accession pipeline
+                      uses this to process the files that need no staging in place.
+    accession      -- the accession this run belongs to, for its log in data/runs/<acc>/.
+                      Worked out from the source when omitted; with none, nothing is logged.
 
     Returns the run summary. Inspect `failures`, `skipped` and the manifest for anything
     that did not complete.
     """
+    args = {k: v for k, v in locals().items()}
+    owned = runlog.active() is None
+    loggable = {k: v for k, v in args.items()
+                if k == "url_or_path" or v not in (None, False, {}, [])}
+    with runlog.accession_log_for(url_or_path, accession, actor="library",
+                                  arguments={"call": "process_accession", **loggable}) as ctx:
+        result = _process_accession(**args)
+        _log_summary(result)
+        if owned and ctx is not None:
+            ctx["status"] = result.get("status")
+    return result
+
+
+def _process_accession(
+    url_or_path: str,
+    dataset_type: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    raw_dir: Optional[str] = None,
+    run_id: Optional[str] = None,
+    recursive: bool = True,
+    filter_extension: Optional[str] = None,
+    limit: Optional[int] = None,
+    resume: bool = True,
+    retry_failed: bool = False,
+    dry_run: bool = False,
+    on_error: str = ON_FILE_ERROR,
+    dataset_overrides: Optional[Dict[str, str]] = None,
+    process_unidentified_as: Optional[str] = None,
+    run_qc: Optional[bool] = None,
+    verify: bool = True,
+    include: Optional[List[str]] = None,
+    accession: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The body of `process_accession`, run inside the accession's log."""
     out_dir = Path(output_dir) if output_dir else PROCESSED_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     raw_root = Path(raw_dir) if raw_dir else RAW_DIR
@@ -97,6 +143,8 @@ def process_accession(
     listing = list_remote_directory(url_or_path, recursive=recursive,
                                     filter_extension=filter_extension)
     if listing.get("error"):
+        runlog.event(log, logging.ERROR, f"could not list {url_or_path}: {listing['error']}",
+                     kind="listing_error", hint=listing.get("hint"))
         # `hint` is the actionable half when the URL itself is the problem -- a metadata
         # landing page rather than a data directory. Dropping it leaves only "error".
         return {"status": "error", "stage": "list_remote_directory",
@@ -105,6 +153,14 @@ def process_accession(
                 "accession_number": listing.get("accession_number")}
 
     candidates = [i for i in listing.get("items", []) if not i["is_dir"]]
+    include_missing = None
+    if include is not None:
+        wanted = {str(k).replace("\\", "/").strip("/") for k in include}
+        root0 = listing.get("source") or url_or_path
+        candidates = [i for i in candidates
+                      if _item_key(root0, i["path"], i["name"]) in wanted]
+        found = {_item_key(root0, i["path"], i["name"]) for i in candidates}
+        include_missing = sorted(wanted - found) or None
     if limit:
         candidates = candidates[:limit]
     if not candidates:
@@ -135,6 +191,14 @@ def process_accession(
                 if resume else mf.create_manifest(rid, url_or_path, items, config))
 
     todo = mf.pending_items(manifest, retry_failed=retry_failed)
+    runlog.event(log, logging.INFO,
+                 f"run {rid}: {len(manifest['items'])} file(s) listed under "
+                 f"{listing.get('source') or url_or_path}; {len(todo)} to process"
+                 + (" (dry run)" if dry_run else ""),
+                 kind="run_start", run_id=rid, source=listing.get("source"),
+                 listing={k: listing.get(k) for k in ("resolution", "version",
+                                                      "extracted_from") if listing.get(k)},
+                 to_process=len(todo))
     if dry_run:
         return _dry_run(rid, url_or_path, todo, manifest, dataset_type, dataset_overrides)
 
@@ -145,6 +209,8 @@ def process_accession(
         pre = _prefilter(key, dataset_type, dataset_overrides)
         if pre is not None:
             mf.mark(manifest, key, mf.SKIPPED, **pre)
+            runlog.event(log, logging.INFO, f"skipped {key}: {pre['reason']}", kind="file",
+                         key=key, status="skipped", reason=pre["reason"])
             continue
 
         mf.mark(manifest, key, mf.RUNNING)
@@ -165,6 +231,8 @@ def process_accession(
             # data aborts a run that is working exactly as intended.
             mf.mark(manifest, key, mf.SKIPPED, reason=result["reason"],
                     evidence=result.get("evidence"), stage=result.get("stage"))
+            runlog.event(log, logging.INFO, f"skipped {key}: {result['reason']}", kind="file",
+                         key=key, status="skipped", reason=result["reason"])
             continue
 
         attempted += 1
@@ -179,10 +247,22 @@ def process_accession(
                     format_family=result.get("format_family"),
                     casts_without_time_of_day=result.get("casts_without_time_of_day"),
                     coded_headers_not_resolved=result.get("coded_headers_not_resolved"))
+            runlog.event(log, logging.INFO,
+                         f"done {key}: {result['casts']} cast(s), {result['observations']} "
+                         f"level(s) as {result.get('dataset_types')} -> {result['output_path']}",
+                         kind="file", key=key, status="done", output=result["output_path"],
+                         dataset_types=result.get("dataset_types"))
         else:
             failed += 1
+            # The traceback of an unexpected exception is the one thing that says where the
+            # code broke; it used to be built here and then dropped.
             mf.mark(manifest, key, mf.FAILED, stage=result["stage"], error=result["error"],
-                    detail=result.get("detail"))
+                    detail=result.get("detail"), traceback=result.get("traceback"))
+            runlog.event(log, logging.WARNING,
+                         f"FAILED {key} at {result['stage']}: {result['error']}", kind="file",
+                         key=key, status="failed", stage=result["stage"],
+                         error=result["error"], detail=result.get("detail"),
+                         traceback=result.get("traceback"))
             if on_error == "stop":
                 return _abort(manifest, f"on_error='stop' and {key} failed at "
                                         f"{result['stage']}")
@@ -199,6 +279,12 @@ def process_accession(
     summary["status"] = "complete" if summary["complete"] else "incomplete"
     summary.update(_run_report(manifest))
     summary.update(_verify_written_output(out_dir, summary, verify))
+    if include is not None:
+        summary["include_missing"] = include_missing
+    # How the input was turned into a listing: a landing page resolved, a version chosen, an
+    # archive extracted. It used to be returned only when the listing failed.
+    summary["listing"] = {k: listing[k] for k in ("resolved_from", "resolution", "version",
+                                                  "extracted_from") if listing.get(k)} or None
     return summary
 
 
@@ -686,7 +772,30 @@ def _run_report(manifest) -> Dict[str, Any]:
             "coded_headers_not_resolved": unresolved_codes or None}
 
 
+def _log_summary(result: Dict[str, Any]) -> None:
+    """One closing line per run, with the fields a report must carry."""
+    if result.get("status") in ("error", "empty", "dry_run"):
+        runlog.event(log, logging.INFO, f"process_accession ended: {result.get('status')}",
+                     kind="run_end", status=result.get("status"),
+                     error=result.get("error"), hint=result.get("hint"))
+        return
+    verification = result.get("output_verification") or {}
+    level = (logging.WARNING if result.get("status") != "complete"
+             or result.get("output_verified") is False else logging.INFO)
+    runlog.event(log, level,
+                 f"process_accession ended: {result.get('status')}, {result.get('counts')}, "
+                 f"output_verified={result.get('output_verified')}",
+                 kind="run_end", status=result.get("status"), counts=result.get("counts"),
+                 failures=result.get("failures"), dataset_types=result.get("dataset_types"),
+                 skipped_reasons=result.get("skipped_reasons"),
+                 output_verified=result.get("output_verified"),
+                 findings=verification.get("findings"),
+                 abort_reason=result.get("abort_reason"),
+                 manifest=result.get("manifest_path"))
+
+
 def _abort(manifest, reason: str) -> Dict[str, Any]:
+    runlog.event(log, logging.ERROR, f"run aborted: {reason}", kind="abort", reason=reason)
     summary = mf.summarize(manifest)
     summary["status"] = "aborted"
     summary["abort_reason"] = reason

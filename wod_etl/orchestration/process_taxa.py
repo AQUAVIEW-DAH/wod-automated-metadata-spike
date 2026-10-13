@@ -16,8 +16,11 @@ One output file per staged haul file, like the profile path. Nothing raises: a h
 fails is listed under `failures` with the stage, and the rest continue.
 """
 import glob
+import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+from wod_etl import runlog
 
 from wod_etl.mapping.taxa import map_haul
 from wod_etl.orchestration.process_accession import _output_stem
@@ -25,9 +28,30 @@ from wod_etl.staging.taxa_haul import is_staged_haul, read_staged_haul
 from wod_etl.verify.validate_taxa_netcdf import validate_taxa_netcdf
 from wod_etl.writers.generate_netcdf_taxa import write_taxa_netcdf
 
+log = logging.getLogger(__name__)
 
-def process_taxa(source, output_dir) -> Dict[str, Any]:
-    """Every staged haul under `source` (a file or a folder) to Taxa-Record NetCDF."""
+
+def process_taxa(source, output_dir, accession: Optional[str] = None) -> Dict[str, Any]:
+    """Every staged haul under `source` (a file or a folder) to Taxa-Record NetCDF.
+
+    Logged to the accession's run log (`accession`, or worked out from `source`).
+    """
+    owned = runlog.active() is None
+    with runlog.accession_log_for(source, accession, actor="library",
+                                  arguments={"call": "process_taxa", "source": str(source),
+                                             "output_dir": str(output_dir)}) as ctx:
+        result = _process_taxa(source, output_dir)
+        runlog.event(log, logging.WARNING if result["failures"] else logging.INFO,
+                     f"process_taxa ended: {result['status']}, {len(result['outputs'])} "
+                     f"haul(s) written, {len(result['failures'])} failed, "
+                     f"{result['taxa_records']} Taxa-Record(s)",
+                     kind="taxa_end", **{k: v for k, v in result.items() if k != "note"})
+        if owned and ctx is not None:
+            ctx["status"] = result["status"]
+        return result
+
+
+def _process_taxa(source, output_dir) -> Dict[str, Any]:
     src = Path(source)
     files = ([str(src)] if src.is_file() else
              sorted(p for p in glob.glob(str(src / "**" / "*.csv"), recursive=True)
@@ -64,6 +88,8 @@ def process_taxa(source, output_dir) -> Dict[str, Any]:
             continue
         outputs.append(str(out))
         n_records += w["taxa_records"]
+        runlog.event(log, logging.INFO, f"wrote {out}: {w['taxa_records']} Taxa-Record(s)",
+                     kind="haul", file=f, output=str(out), records=w["taxa_records"])
         for name, t in haul["taxa"].items():
             if t["status"] == "matched_higher_rank":
                 higher_rank[name] = t["note"]
@@ -77,6 +103,10 @@ def process_taxa(source, output_dir) -> Dict[str, Any]:
         for c in haul["unmapped_columns"]:
             unmapped[c] = unmapped.get(c, 0) + 1
 
+    for fail in failures:
+        runlog.event(log, logging.WARNING,
+                     f"FAILED haul {fail['file']} at {fail['stage']}: {fail['error']}",
+                     kind="haul", status="failed", **fail)
     return {
         "status": ("empty" if not files else "complete" if not failures else "incomplete"),
         "staged_files": len(files), "outputs": outputs, "failures": failures,
