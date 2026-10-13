@@ -543,3 +543,33 @@ class TestTypographicUnitCharacters:
 
     def test_a_qualifier_is_still_not_a_unit(self):
         assert extract_unit("Temperature (secondary sensor)") is None
+
+
+class TestFluorescenceIsDecidedByItsUnit:
+    """It used to depend on a hand rename to 'Chlorophyll' during staging."""
+
+    @pytest.mark.parametrize("col", ["Fluorescence (ug/l)", "fluorescence (mg/m^3)",
+                                     "Fluor [ppb]", "Fl (µg/L)", "FlSP", "flECO-AFL"])
+    def test_a_concentration_is_chlorophyll(self, col):
+        assert match_variable(col) == 11
+
+    @pytest.mark.parametrize("col", ["Fluorescence (RFU)", "chl_fluorescence (V)",
+                                     "Fluorometer (volts)", "fluorescence"])
+    def test_a_raw_signal_or_no_unit_is_dropped_with_a_reason(self, col):
+        from wod_etl.mapping import explain_column
+
+        assert match_variable(col) is None
+        why = explain_column(col)
+        assert why["variable"] == "fluorescence" and why["do_not_alias"]
+
+    def test_fluoride_is_not_fluorescence(self):
+        assert match_variable("Fluoride (umol/kg)") is None
+
+    def test_the_contract_says_it_is_fluorometer_derived(self):
+        profile = {"source": "x", "raw_header_block": "LAT: 21\nLON: 142\nDATE: 2015-11-09",
+                   "columns": ["Depth (m)", "Fluorescence (ug/l)"]}
+        spec = query_wod_spec("CTD", profile["columns"], depth_increment_m=1.0)
+        contract = generate_field_mapping(profile, spec)
+        chl = next(m for m in contract["column_mapping"] if m["wod_code"] == 11)
+        assert "in-situ fluorometer" in chl["comment"]
+        assert any("not extracted chlorophyll" in w for w in contract["warnings"])

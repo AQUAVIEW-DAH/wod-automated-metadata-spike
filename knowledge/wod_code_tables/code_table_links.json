@@ -23,7 +23,7 @@
     71
   ],
   "note": "The manual defines the metadata FIELDS (Tables 4a, 5a, 6a, 7a) but publishes the VALUE code lists online, as a link beside each entry. These are those links, taken from the PDF's own annotations -- they do not survive a text extraction, which is why the 'App' column looks like a dead end. A field absent here has no published code list: its value is a plain measurement or free text, not a code.",
-  "usage": "code_table_link('secondary_header', 29) -> the probe-type code list. Fetch the CSV rather than the HTML when you need the values: same list, parseable. Nothing here fetches them automatically -- they are external, they change between WOD releases, and a cached copy would go stale silently.",
+  "usage": "code_table_link('secondary_header', 29) -> the probe-type code list. Fetch the CSV rather than the HTML when you need the values: same list, parseable. wod_etl.reference.code_lists fetches and caches them with the date retrieved -- they are external and change between WOD releases, so every lookup says which copy it used.",
   "hubs": {
     "all_wod_code_tables": "https://www.ncei.noaa.gov/access/world-ocean-database/wod-codes.html",
     "secondary_headers": "https://www.ncei.noaa.gov/access/world-ocean-database/wod-codes.html#second",

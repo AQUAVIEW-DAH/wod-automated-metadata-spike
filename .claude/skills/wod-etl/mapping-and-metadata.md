@@ -129,13 +129,16 @@ every one. `generate_field_mapping` runs `map_metadata` for you.
 
 | Contract key | What it holds |
 | --- | --- |
-| `secondary_headers` | Table 4a **cast** metadata, from header lines and from metadata columns, each with the URL of its published code list |
-| `column_mapping[].variable_specific_headers` | Table 5a **per-variable** metadata: originator's units (8), scale (3), nitrate+nitrite (17) |
+| `secondary_headers` | Table 4a **cast** metadata, from header lines and from metadata columns, each with the URL of its published code list and a `code_lookup` |
+| `column_mapping[].variable_specific_headers` | Table 5a **per-variable** metadata: originator's units (8), scale (3), instrument (5), nitrate+nitrite (17) |
+| `character_data` | the originator's cruise code and PI (manual p.30) -- **not** secondary header 3 |
 | `originator_flags` | the submitter's own flag columns, paired with the variables they flag |
+| `provenance_notes`, `source_files` | the staged header's `# Note:` and `# Source:` lines -- they become `comment` and `source_files_raw` |
 
 Metadata arrives four ways, all handled:
 
-1. a `Key: value` header line — `# Probe type: T-7` → header 29
+1. a `Key: value` header line — `# Probe type: T-7` → header 29; `# Instrument: SBE 911plus`
+   → header 5 on **every** measured variable; `# Cruise: SHU1505` → `character_data`
 2. a **delimited** header line — `Platform,,5423.,OCL code,KAHAROA` → header 3
 3. a **whole column** constant down the cast — a `Bottom Depth (m)` column → header 10
 4. part of a measurement column's own name — `[ITS-90, deg C]` → scale *and* originator unit
@@ -164,10 +167,12 @@ guessed.
   cast, so a bottom depth changing down an underway track is withheld with the reason
   stated. If the variation is *between* casts, split the file per cast during staging.
 - **`is_coded: false` is an answer, not a gap.** Bottom depth is metres, not a code.
-- **A coded value is unusable without its list.** WOD publishes those online, linked from the
-  manual: `code_table_link("secondary_header", 29)`, or ask `wod-reference`. Nothing here
-  fetches them — they change between releases — so the URL is what you get, and what goes
-  into the output.
+- **A coded field holds a code, not a name.** Every coded value is looked up in WOD's
+  published list (fetched once, cached with its retrieval date). Exactly one entry named that
+  -> the code is written, the text kept beside it. Anything else -- two vessels called SHUNYO
+  MARU, no entry for `deg C`, the list unreachable -- leaves the field unwritten and puts the
+  text in `<field>_originator_text` with the reason. **Each of those needs a human choice**:
+  report `coded_headers_not_resolved`, and resolve it in the staged header with the code.
 
 Metadata columns and flag columns are **consumed**, not dropped. Neither appears in
 `unmapped_columns`.
@@ -177,6 +182,8 @@ Metadata columns and flag columns are **consumed**, not dropped. Neither appears
 Every key that looked like metadata and could not be placed, with its value, the line it came
 from, and why: no WOD field matched, or it is a Table 5a header with no variable named, or it
 lost a collision to another key claiming the same header, or its value column was empty.
+`Key: value` lines are covered too, and every unplaced key reaches the NetCDF as
+`metadata_not_placed`.
 
 **A metadata key that vanishes silently is the same failure as a dropped column.** On
 accession 0146739 the parser once reported three headers, all three wrong, and named none of

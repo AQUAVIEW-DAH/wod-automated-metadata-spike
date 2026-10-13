@@ -137,6 +137,25 @@ def classify_taxa_code(code: int) -> Dict[str, Any]:
 
 
 # ------------------------------------------------------- online code tables
+def missing_biological_fields(stated_ids) -> List[str]:
+    """The key Table 6a fields a haul does not state, as `"<id> <name>"`.
+
+    Which fields are key is a project judgement (`config.KEY_BIOLOGICAL_FIELD_IDS`); their
+    names come from Table 6a. For an alternative group -- volume filtered or tow distance --
+    every member is listed when none is stated.
+    """
+    from wod_etl.config import KEY_BIOLOGICAL_FIELD_IDS
+
+    stated = {int(i) for i in stated_ids}
+    names = biological_headers()
+    out: List[str] = []
+    for entry in KEY_BIOLOGICAL_FIELD_IDS:
+        group = entry if isinstance(entry, tuple) else (entry,)
+        if not stated & set(group):
+            out += [f"{i} {names[i]['name']}" for i in group]
+    return out
+
+
 def code_table_links() -> Dict[str, Any]:
     """Every WOD online code-table link, plus the hub URLs.
 

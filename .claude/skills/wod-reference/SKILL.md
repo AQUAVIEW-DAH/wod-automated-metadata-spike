@@ -47,7 +47,7 @@ loads these files; so should you. See
 [`wod_etl/reference/README.md`](../../../wod_etl/reference/README.md) for each loader's
 return shape.
 
-### 1b. The value code lists — a link, not a lookup
+### 1b. The value code lists — a link, and a lookup
 
 Every table above defines metadata **fields**. The **values** those fields take are code
 lists WOD publishes online, linked from beside each entry in the manual. Those links are PDF
@@ -73,10 +73,11 @@ Namespaces: `secondary_header` (4a), `variable_specific_header` (5a), `biologica
 **`None` is an answer, not a gap.** A field with no code list carries a plain measurement or
 free text — bottom depth is metres. **Prefer the CSV** to the HTML: same list, parseable.
 
-Nothing in this project fetches these. They are external, they change between WOD releases,
-and a cached copy would go stale without saying so — so the answer to "what does probe type
-7 mean" is the URL plus, if the user wants the value, a fetch they can see. Rebuild the link
-file after a new WOD release with
+To resolve a value, `wod_etl.reference.code_lists.lookup_code(namespace, id, value)` fetches
+the CSV once, caches it **with its retrieval date** (refetched after 30 days) and returns
+`matched` only for exactly one entry -- otherwise `ambiguous`, `no_match` or `unavailable`,
+with the candidates. Every result names the copy it was checked against: the lists change
+between WOD releases. Rebuild the link file after a new WOD release with
 `uv run python -m wod_etl.reference.extract_code_table_links`.
 
 ### 2. Prose references — read the relevant one
@@ -87,7 +88,7 @@ file after a new WOD release with
 | What are the parts of a WOD cast? Which numbering is this code from? | [`knowledge/cast_structure.md`](../../../knowledge/cast_structure.md) |
 | How is QC done? What does this flag mean? Which unit conversion applies? What can WOD not store? | [`knowledge/wod_code_tables/standardization_rules.md`](../../../knowledge/wod_code_tables/standardization_rules.md) |
 | How do submissions actually arrive? What does `49-46.9858N` mean? How do I stage this? | [`knowledge/accession_field_guide.md`](../../../knowledge/accession_field_guide.md) |
-| How does WOD store plankton? What is a Taxa-Record? Why can't this pipeline write one? | [`knowledge/plankton_biomass.md`](../../../knowledge/plankton_biomass.md) |
+| How does WOD store plankton? What is a Taxa-Record? How does the plankton path write one? | [`knowledge/plankton_biomass.md`](../../../knowledge/plankton_biomass.md) |
 
 ### 3. `search_manual` — the cached full text
 

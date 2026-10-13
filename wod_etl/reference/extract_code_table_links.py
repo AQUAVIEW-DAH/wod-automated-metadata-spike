@@ -116,9 +116,9 @@ def build(pdf_path: Path) -> dict:
                 "measurement or free text, not a code.",
         "usage": "code_table_link('secondary_header', 29) -> the probe-type code list. Fetch "
                  "the CSV rather than the HTML when you need the values: same list, "
-                 "parseable. Nothing here fetches them automatically -- they are external, "
-                 "they change between WOD releases, and a cached copy would go stale "
-                 "silently.",
+                 "parseable. wod_etl.reference.code_lists fetches and caches them with the "
+                 "date retrieved -- they are external and change between WOD releases, so "
+                 "every lookup says which copy it used.",
         "hubs": HUBS,
         "links": links,
     }

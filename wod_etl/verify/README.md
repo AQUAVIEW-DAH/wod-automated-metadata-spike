@@ -90,7 +90,9 @@ print(report["text"])
 | `unreadable_output` | high | the pipeline wrote a file it cannot read back |
 | `all_fill` | medium | the column mapped but held nothing, or the conversion produced NaN throughout |
 | `constant_value` | medium | a stuck sensor, an unrecognised fill value, or per-cast metadata mapped as a measurement |
+| `duplicate_cast_id` | high | two casts in the run share a `cast_id` -- one cast to any tool that merges the files |
 | `out_of_range_levels` | medium / low | some extreme levels. Normal in real casts at low severity; worth reading above 2% |
+| `near_zero_offset` | low | values below a lower bound of **zero** by at most a tenth of the variable's own 99th percentile: a fluorometer dark count, an analyser blank. Kept as submitted, **not** counted as out of range, and never clipped |
 
 Every finding carries `evidence` (the actual worst value, its depth, and the bound it broke)
 and an `action`. A finding nobody can act on is noise.
@@ -144,6 +146,18 @@ means a check is being misapplied, not that the data is bad.
 
 `contract_for(path, dataset_type)` is the single-file version, for when you want one file's
 contract without auditing the set.
+
+---
+
+## `validate_taxa_netcdf(path)` — the gate for Taxa-Record files
+
+The structural check for `write_taxa_netcdf` output (plankton), which has no depth axis or
+Appendix 11 range to judge. **Errors** -- the file is not output: a required variable missing,
+`taxa_row_size` not summing to the records, a record with no depth range or an upper depth
+below its lower, a record with no measurement, a negative count, a "per UNIT" field with no
+originator's unit (Table 7a field 20). **Warnings** -- what a report must say: records whose
+taxon did not resolve to a WOD variable number, and the key Biological Header fields not
+stated (`missing_biological_fields`).
 
 ---
 

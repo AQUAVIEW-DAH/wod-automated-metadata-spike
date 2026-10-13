@@ -93,8 +93,8 @@ Tables 6a/6b and 7a/7b are now extracted — `table_6a_biological_headers.json` 
 `table_7a_taxa_biomass.json`, loadable through `wod_etl.reference` — so the record shape can
 be described precisely without opening the PDF.
 [`../plankton_biomass.md`](../plankton_biomass.md) is the full picture: the Taxa-Record
-model, the sign-selects-the-unit trap, what to report today, and what a future plankton tool
-still needs.
+model, the sign-selects-the-unit trap, what to report, and the plankton path
+(`wod_etl.orchestration.process_taxa`) that writes it.
 
 ### It has no WOD home at all
 
@@ -305,7 +305,8 @@ Units that need nothing, and must not be "corrected":
 - `mg m⁻³` for chlorophyll — identical to the standard µg/l.
 - `hPa` for air pressure — identical to the standard mbar.
 - `ppb` from a chlorophyll fluorometer — conventionally read as µg/l; say so rather than
-  scaling it.
+  scaling it. Fluorescence in RFU, volts or counts is **not** a concentration and is dropped:
+  the unit decides, not the name (`fluorescence_rule` in `wod_etl/mapping/query_wod_spec.py`).
 - `µmol/kg` for oxygen and nutrients — already standard.
 
 The rule underneath: **check the direction against Table 3a before converting.** Per-mass

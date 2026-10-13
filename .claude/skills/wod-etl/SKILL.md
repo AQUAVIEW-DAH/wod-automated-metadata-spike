@@ -9,8 +9,8 @@ when_to_use: Requests like process this accession, convert these casts to NetCDF
 Turn raw ocean profile files into standardized NetCDF that passes WOD and CF checks. Run it
 unattended: every file's outcome is recorded, failures do not stop the run.
 
-Setup: `uv sync` once, then run everything with `uv run python ...` from the repo root.
-Requirements are a shell, Python 3.12+ and the ability to read files.
+Setup: `uv sync` once, then run everything with `uv run python ...` from the repo root
+(Python 3.12+).
 
 ## An accession is not a dataset
 
@@ -19,10 +19,10 @@ only a few are WOD profile data, plus readmes, cruise reports and imagery. Point
 `process_accession` at the accession root and reading the pass count is how you ship
 plausible, wrong output.
 
-**Point it at the data directory, not the citation.** A landing page, an
-`/archive/accession/<n>` URL and a bare accession number all hold no data. The listing says
-so and names the page to open: NCEI renders its file index client-side, so the directory URL
-cannot be derived from the number.
+**A citation resolves to its data.** A landing page, an `/archive/accession/<n>` URL or a
+bare number is resolved to the data directory -- the latest version when the accession is
+versioned (`1.1/`, `2.2/`) -- and a downloaded `.tar.gz`/`.zip` is extracted under
+`data/raw/`. `resolution` and `version` in the listing say where it went.
 
 **Work through it in three steps.**
 
@@ -34,12 +34,13 @@ Start here, always, before processing anything:
 from wod_etl.discovery import classify_accession
 
 report = classify_accession("data/raw/0287423")
-report["process"], report["exclude"], report["inspect"]
+report["files"]          # one verdict per FILE: process/stage/sidecar/exclude/document/inspect
 ```
 
-It reads every file's head and gives each folder a verdict with its evidence: the format,
-the dataset type, which columns are empty, why anything was excluded, and what is still
-worth taking from it. **`inspect` means the evidence did not decide.**
+It reads every file's head and gives each **file** an `action` with its evidence: the format,
+the dataset type, empty columns, why anything was excluded, and what is still worth taking
+from it. NCEI archives everything under one `data/0-data`, so act on the per-file verdicts;
+the folder verdicts only summarise. **`inspect` means the evidence did not decide.**
 
 It answers the first two triage questions; the third is yours:
 
@@ -51,14 +52,14 @@ It answers the first two triage questions; the third is yours:
 2. **Is there any data?** `measurement_density: 0.0` means station and depth are full and
    every measurement is `Not analyzed`/`***NA`. **It reads only the first few KB** — count
    real values over the whole file before excluding anything.
-3. **Where do its coordinates live?** In the data file, a sibling station list, or only in
-   prose in a readme. This decides whether it needs Phase 0, and no tool can answer it.
+3. **Where do its coordinates live?** In the data file, a station list (flagged `sidecar`),
+   or only in prose in a readme -- that last one is yours to find.
 
 **Check `cross_file_shapes`.** When a folder's files are identical columns with one row
-each, or disjoint variables sharing a depth column, they are *parts* of one cast. Processed
-as they stand you get a pile of single-level profiles, or casts missing most of their
-variables — both look like successful runs. Combine with `combine_levels` or
-`combine_on_key` in staging, confirming against the readme first.
+each, or disjoint variables sharing a depth column, they are *parts* of one cast; a
+`parm,value` table names its variable in a cell. Processed as they stand these give
+single-level profiles, half-empty casts, or nothing. Combine with `combine_levels`,
+`combine_on_key` or `pivot_long` in staging, confirming against the readme first.
 
 **Excluding a folder is not the same as having nothing to take from it.** The verdict's
 `harvest` field names what to keep: bottom depth and navigation from an ADCP section, a
@@ -76,8 +77,9 @@ rest — a sidecar station list, one table holding the whole cruise, a title row
 header, pressure but no depth, `**NS`/`*DL` sentinels — build a derived copy first:
 
 ```python
-from wod_etl.staging import (read_table, clean_sentinels, group_rows, rename_columns,
-                             parse_coordinate, parse_timestamp,
+from wod_etl.staging import (read_table, read_station_list, join_station_list, pivot_long,
+                             melt_matrix, group_rows, clean_sentinels, rename_columns,
+                             reconcile_stations, check_track, extract_pdf_rows,
                              pressure_to_depth, write_staged_cast)
 ```
 
@@ -102,9 +104,8 @@ result = process_accession(
 )
 ```
 
-Run it with `uv run python ...` from the project root. That call does discovery, download,
-format identification, dataset classification, column and metadata mapping, unit conversion,
-writing and validation for every file. It does **not** run WOD QC unless you ask
+That call does discovery, download, format identification, dataset classification, column
+and metadata mapping, unit conversion, writing and validation for every file. It does **not** run WOD QC unless you ask
 (`run_qc=True`).
 
 **Do not pass `dataset_type` unless you mean to force it.** It is optional, and omitting it
@@ -137,9 +138,10 @@ Two gaps it cannot close:
 - **Its bounds are the union of all 30 ocean basins**, so an unflagged value may still be
   wrong: nitrate's bound reaches 500 µmol/kg. Open one output and read the ranges.
 
-And one only you can do: **cross-check against an independent source in the accession** —
-station-list times against an underway GPS track, positions against the sibling station
-list. A "Date time (UTC)" column beside a "Time zone" column is ambiguous until you test it.
+And before staging: **check every position and date against the accession's other
+sources** -- `reconcile_stations` across the station list, trawl log and report tables
+(`extract_pdf_rows`), `check_track` along the cruise. A conflict is a question for the
+submitter; record your choice in the staged notes.
 
 `audit_dataset` is the wider per-dataset report: mapped and dropped columns across the whole
 set, plus ranges and flags.
@@ -159,10 +161,10 @@ is skipped with a reason and does not count toward the abort rate. A file that i
 document and still will not read is a **failure**: a silent skip there is how a real cast in
 an unrecognised layout disappears from a run.
 
-**Five fields you must report, none of them in `counts`:** `output_verified` (whether the
-values are possible — see below), `dataset_types` (what the run decided), `skipped_reasons`
-(everything left out, and why), `unstorable_columns_dropped` (data dropped by design —
-rule 2), `outputs_without_time` (casts with no date; validation only warns).
+**Fields you must report, none of them in `counts`:** `output_verified`, `dataset_types`,
+`skipped_reasons`, `unstorable_columns_dropped` (rule 2), `outputs_without_time` (no date),
+`outputs_without_time_of_day` (a date, no clock time: `GMT_time` is fill) and
+`coded_headers_not_resolved` (coded metadata kept as text -- no unique code matched).
 
 Retry the failures once you have addressed the cause:
 `process_accession(url, run_id="<same id>", retry_failed=True)`. Full result schema:
@@ -260,7 +262,7 @@ inputs, output schema, failure modes and gotchas.
 | 3 — QC transforms | [`wod_etl/qc_transforms/README.md`](../../../wod_etl/qc_transforms/README.md) | interpreting flags, checking a threshold, questioning a conversion |
 | 4 — Writers | [`wod_etl/writers/README.md`](../../../wod_etl/writers/README.md) | you need the NetCDF layout, or a write fails |
 | Verification | [`wod_etl/verify/README.md`](../../../wod_etl/verify/README.md) | validation fails, or you need to check a finished dataset is *right* rather than merely well-formed |
-| Orchestration | [`wod_etl/orchestration/README.md`](../../../wod_etl/orchestration/README.md) | resuming a run, reading the manifest, tuning failure policy |
+| Orchestration | [`wod_etl/orchestration/README.md`](../../../wod_etl/orchestration/README.md) | resuming a run, reading the manifest, tuning failure policy, writing plankton (`process_taxa`) |
 | Reference | [`wod_etl/reference/README.md`](../../../wod_etl/reference/README.md) | looking up a WOD code, unit, flag or threshold in code — the loader for `knowledge/` |
 
 ## Mapping, metadata and flags
@@ -276,7 +278,8 @@ trusting a run, and report both. Conductivity, sigma-t, sound velocity, nitrite 
 ammonium, CDOM and turbidity have no Table 3a code — mapping one onto an adjacent code is
 worse than dropping it. **Potential temperature is not an alias of temperature**: theta is
 derived, so aliasing it makes a cast claim Temperature twice, or report the wrong quantity
-outright. `explain_column(name)` says which and why.
+outright. Fluorescence maps to Chlorophyll only in a concentration unit; RFU or volts are
+dropped. `explain_column(name)` says which and why.
 
 **2. A cast is not only its numbers.** The probe, ship, bottom depth, sampling gear, wind,
 measurement scale, originator's units and the originator's own flags all have WOD fields and
@@ -339,13 +342,10 @@ that drops characters.
 6. **Report honestly.** If 3 of 50 files failed, say so and name the stage. If a dataset
    was excluded, say which and on what evidence. If a spec question was ambiguous, say
    which way you resolved it and flag it for confirmation.
-7. **Say what you could not do.** A dataset that belongs in WOD but not through this path
-   is not a success and not a failure — it is an **unfinished item that needs naming**.
-   Plankton biomass is the standing case: it belongs in WOD, through the Biological Header
-   (Table 6a) and Taxa-Records (Table 7a), and nothing here writes one. `classify_dataset`
-   excludes it with `belongs_in_wod: True` so it reaches `skipped_reasons` rather than
-   vanishing — but the report is yours to write. While you have the accession open, capture
-   what only the submitter can tell you: gear and tow type, mesh size, water volume filtered
-   or tow distance, preservative, counting and weighing method.
-   [`knowledge/plankton_biomass.md`](../../../knowledge/plankton_biomass.md) is the whole
-   picture, including what a future plankton tool still needs.
+7. **Say what you could not do.** Plankton is not a profile: stage each haul with
+   `write_staged_haul`, then write Taxa-Records with `process_taxa`
+   ([`plankton_biomass.md`](../../../knowledge/plankton_biomass.md)). Report its
+   `unresolved_taxa`, `taxa_resolved_at_higher_rank` and `missing_biological_fields` -- gear,
+   tow, mesh, volume filtered, preservative, count method: only the submitter has them, so
+   ask while the accession is open. Anything that belongs in WOD and was not written is an
+   **unfinished item that needs naming**, not a success.

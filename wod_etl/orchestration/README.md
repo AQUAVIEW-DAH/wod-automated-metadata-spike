@@ -54,9 +54,10 @@ process_accession(url)                        # 3. the rest
 ```
 
 Step 0 is the triage step and it is not optional — most folders in a real accession are not
-WOD profile data. Step 1 classifies from the **path only**, because nothing is downloaded
-yet; the real run reclassifies from the header, columns and depth spacing, so the types can
-change between the two. Step 2 matters because a wrong routing or an unusual file format
+WOD profile data. Step 1 triages a **local** file from its head -- format, header, columns --
+exactly as `classify_file` does, and returns `would_process`, `would_skip`, `needs_staging`
+(long-format files, which fail in a real run) and `undecided`. A **remote** file is judged by
+its path only, because nothing is downloaded yet, and each item's `decided_by` says which. Step 2 matters because a wrong routing or an unusual file format
 shows up immediately on 3 files rather than after 400.
 
 ### What comes back
@@ -72,6 +73,8 @@ shows up immediately on 3 files rather than after 400.
                      "no measurements: every mapped measurement column is empty (...)": 1},
  "unstorable_columns_dropped": {"Conductivity (S/m) (conductivity)": 31},
  "outputs_without_time": null,
+ "outputs_without_time_of_day": ["SHU1505_st01.csv", "..."],
+ "coded_headers_not_resolved": {"secondary header 3 = 'Shunyo-Maru'": "ambiguous ..."},
  "output_verified": false,
  "output_verification": {"passed": false, "finding_counts": {"high": 1, ...},
                          "findings": [{"finding": "systematically_out_of_range",
@@ -86,7 +89,7 @@ shows up immediately on 3 files rather than after 400.
 | `complete` | Every item reached `done` or `skipped`. |
 | `incomplete` | Some items are still `failed` — retryable. |
 | `aborted` | Stopped early. Read `abort_reason`. |
-| `error` | Could not even list the source. Check the URL. |
+| `error` | Could not even list the source -- after retries, and after resolving a landing page or accession number to its data directory. Read `error` and `hint`. |
 | `empty` | Listing succeeded but held no files. Check `filter_extension`. |
 | `dry_run` | Nothing was written. |
 
@@ -102,6 +105,8 @@ neither done nor skipped, because they can be retried.
 | `skipped_reasons` | Every file that was read and deliberately not processed, with the reason. This is where excluded content and empty files appear. |
 | `unstorable_columns_dropped` | Columns WOD has no code for, dropped by design, each with the reason. Rule 2: never silently drop data. Metadata columns and originator flag columns are **not** here — they are consumed, not dropped. |
 | `outputs_without_time` | Casts written with no date. Validation only warns; you should not. |
+| `outputs_without_time_of_day` | Casts with a date and no clock time. Written date-only (`GMT_time` fill) -- a reader who looks only at `time` sees 00:00. Say so, and say what zone the date is in if the source says. |
+| `coded_headers_not_resolved` | Coded metadata kept as the originator's text because no unique code matched: `{"secondary header 3 = 'Shunyo-Maru'": "ambiguous in s_3_platform: 4959 ...; 10793 ..."}`. Each needs a human choice. |
 | `output_verified` | **A separate verdict from `status`, and the one that matters.** `status` says the run finished; this says the numbers are possible. A run can be `complete` and unverified -- that is the classic wrong-unit failure, and it is now caught rather than shipped. `None` means nothing was written, or `verify=False`. |
 
 ### Skipped is not failed
@@ -193,6 +198,36 @@ is skipped or failed depending on which of those it was — see *Skipped is not 
 
 ---
 
+## `process_taxa(source, output_dir)` — biological data
+
+Plankton counts and biomass are not profiles, and `process_accession` skips them with a
+route here. Stage each haul with `wod_etl.staging.write_staged_haul` (reshape a count matrix
+with `melt_matrix` first), then:
+
+```python
+from wod_etl.orchestration import process_taxa
+result = process_taxa("data/staging/0303928/plankton", "data/processed/0303928/plankton")
+```
+
+Each staged haul goes through the same phase packages a cast does --
+`staging.read_staged_haul` -> `mapping.map_haul` -> `writers.write_taxa_netcdf` ->
+`verify.validate_taxa_netcdf` -- one NetCDF per haul. Nothing raises: a haul that fails is in
+`failures` with its stage.
+
+**Report four lists, none of them in a count:**
+
+| Field | Meaning |
+| --- | --- |
+| `unresolved_taxa` | name -> records with no WOD variable number; they keep only the originator's name |
+| `taxa_resolved_at_higher_rank` | names resolved one rank up -- the species (or more) is lost |
+| `missing_biological_fields` | key Table 6a field -> hauls lacking it. Only the submitter has these: ask while the accession is open |
+| `unmapped_columns` | staged columns that are not Table 7a fields, not written |
+
+**Still not done:** a biomass record's Table 8 code (which carries its unit, Appendix 5.8) is
+not chosen automatically -- stage it with that code as the `Taxon`.
+
+---
+
 ## The manifest (`run_manifest.py`)
 
 One JSON file per run, at `data/staging/manifests/<run_id>.json`. Written **atomically**
@@ -252,7 +287,9 @@ from a name alone:
 
 1. An extension in `NON_DATA_EXTENSIONS` (`.xml`, `.pdf`, `.html`, `.json`, images,
    archives, `.sh`) — documentation, not measurements. Edit the set in
-   [`config.py`](../config.py) if a real data file is being skipped.
+   [`config.py`](../config.py) if a real data file is being skipped. NCEI's own bundle files
+   are skipped by name too: `NCEI-Readme.txt` and `journal.txt` would otherwise FAIL as
+   unreadable prose, and `<accession>_lonlat.txt` would be processed as a two-column table.
 2. A **path** that names content WOD cannot store — `4-adcp/`, `plankton/`. Only a path
    match pre-filters; a match in a column name or in prose waits until the bytes are in
    hand, so a readme that lists an accession's other folders cannot exclude the cast files

@@ -11,7 +11,8 @@ cruise, a title row above the header, a cp932 encoding, `**NS`/`*DL` sentinels �
 [Phase 0 — Staging](../staging/README.md) first and point discovery at the staged copy.
 
 ```python
-from wod_etl.discovery import (list_remote_directory, classify_accession, classify_dataset,
+from wod_etl.discovery import (list_remote_directory, resolve_accession_url,
+                              classify_accession, classify_file, classify_dataset,
                               fetch_and_peek_file, sniff_format, profile_raw_data,
                               download_file, read_any, split_casts, load_tabular)
 ```
@@ -75,16 +76,27 @@ res = list_remote_directory(
 - Recursion is depth-capped at 8 and tracks visited URLs, so a symlink loop cannot hang it.
 
 **Failure** — network problems come back as `{"error": "...", "total_items": 0, "items": []}`.
-Never raises. NCEI returns 503 and read timeouts fairly often; retry before concluding the
-URL is wrong.
+Never raises. Every request goes through `wod_etl.http_util.get_with_retries`: 429 and 5xx
+responses and timeouts are retried `HTTP_RETRIES` times with backoff, a 404 is not.
 
-**An empty listing is diagnosed, not just reported.** An NCEI metadata landing page, an
-`/archive/accession/<n>` URL and a bare accession number are all valid pages with no data
-files in them, and crawling one returns a perfectly good zero. That now comes back as an
-`error` saying it is not a data directory, plus `accession_number` and a `hint` naming the
-page to open. NCEI renders its file listing client-side, so the data directory URL cannot be
-derived from the accession number — only that page says which `arc<NNNN>` bundle holds it.
+**A citation is resolved to its data directory before anything is listed.** An NCEI
+metadata landing page, an `/archive/accession/<n>` URL and a bare accession number hold no
+files. `resolve_accession_url(text)` reads the landing page -- whose file listing renders
+client-side, but whose static HTML still carries the FTP link
+`ftp://ftp-oceans.ncei.noaa.gov/nodc/archive/arc0238/0303535/` -- and returns the HTTPS
+directory under `/data/oceans/archive/`. The listing records it under `resolution`. When the
+landing page cannot be read, the result is an `error` plus a `hint` naming the page to open.
 `accession_number(text)` pulls the number out of any of those forms.
+
+**A versioned accession is narrowed to its latest version.** Newer accessions hold `1.1/`,
+`2.2/`... each a full copy of the bundle; a recursive crawl of the root processed every file
+once per version. With `recursive=True` only the highest version is listed, and `version`
+says which and what else exists. Point at a version's URL to take another.
+
+**A local archive is extracted.** A `.tar`, `.tar.gz`, `.tgz` or `.zip` is unpacked once under
+`data/raw/<name>/` and that folder is listed (`extracted_from`). A member that would land
+outside the target -- an absolute path, `..`, a link -- is refused and listed in
+`refused_members`.
 
 **Gotcha** — `filter_extension` only filters *files*. Directories are always returned so
 recursion can work, so a `.csv` filter still shows folders.
@@ -139,6 +151,11 @@ fixed-width, NetCDF arrives with no extension, and `.txt` is sometimes a Sea-Bir
 | `ragged_text` | numeric rows that agree on nothing |
 | `unstructured_text` | rows exist but <50% of their fields are numeric: prose |
 | `binary_unknown` | no configured encoding decodes it |
+
+**Delimiters are counted outside quotes.** A station list whose last column is a quoted
+remark (`"CTD, trawl, NORPAC"`) has a different raw comma count on every row; counted as csv
+does, it is a table. A `LAT: 21.0` line above a staged table is not a data row, so a staged
+cast of three levels still sniffs as delimited.
 
 **Two flags, and they are not the same.** `readable` means there is a table to read.
 `is_document` means the file is documentation or a container *by nature* — PDF, archive,
@@ -205,6 +222,12 @@ replaced `dataset_type` as a required argument.
  "possible_exclusions": []}
 ```
 
+`is_wod_profile_data` has **three** values: `True` needs evidence for a profile (a named
+instrument or a depth axis), `False` is an exclusion, and `None` means nothing decided it --
+such a file used to default to `True`, so a plankton matrix and NCEI's bounding-box file
+passed triage as profile data. `long_format` is set for a `parm,value` table, with the
+`pivot_long` call to make.
+
 `verdict` is `profile`, `excluded` or `unidentified`. **They are three different outcomes:**
 
 - `profile` — process it as `dataset_type`.
@@ -215,8 +238,19 @@ replaced `dataset_type` as a required argument.
   the folder readme and pass the type explicitly.
 
 **Evidence, weighted.** Path and header text count fully, column names at 0.8, extra context
-at 0.6. Both the raw text and a separator-flattened copy are searched, because `\bglider\b`
-does not match `glider_slocum` — `_` is a word character.
+at 0.6. The raw text, a separator-flattened copy and a CamelCase-split copy are searched,
+because `\bglider\b` does not match `glider_slocum` (`_` is a word character) and `\btrawl\b`
+cannot match inside `TrawlInfo`.
+
+**Exclusions are scored, not tried in order.** Each category -- plankton, fish catch,
+currents, eDNA, bathymetry, contaminants -- sums weighted signals from the path and the
+columns, and the strongest wins; `alternatives` lists the rest. A word both biological
+categories use (`species`, `taxa`, `genus`, `family`) counts for both, so a file whose only
+evidence is a `Species` column comes back `biological sample: plankton or fish catch
+(ambiguous)` with `belongs_in_wod: None` -- first-match-wins had labelled trawl catch as
+plankton. A file of station, latitude and longitude columns with nothing measured is a
+**sidecar** (`exclusion.kind == "sidecar"`): it locates casts; join it with
+`read_station_list`. A haul staged by `wod_etl.staging.write_staged_haul` is recognised by its marker line.
 
 **File-level versus column-level.** Currents, plankton, eDNA, bathymetry, catch and
 contaminants exclude the **file**. Conductivity, sigma-t, sound velocity, nitrite alone,
@@ -230,20 +264,39 @@ plankton and ADCP; matches found only in header or context text land in
 
 ---
 
-## `classify_accession(root, max_files=None, peek_bytes=8192)`
+## `classify_accession(root, max_files=None, peek_bytes=8192)` and `classify_file(path, rel=None)`
 
 **Triage the whole accession before processing any of it.** Reads each file's head, so it is
-cheap enough to run first.
+cheap enough to run first. **The per-file verdict is the answer**: NCEI archives a
+submission as one `data/0-data` folder holding casts, station lists, plankton sheets and
+reports together, so a folder verdict describes a mixture.
 
 ```json
-{"file_count": 41, "folder_count": 9,
- "process": ["1-ctd", "2-xbt"], "exclude": ["0-about", "3-adcp"], "inspect": ["7-misc"],
- "folders": {"1-ctd": {"verdict": {"action": "process", "dataset_types": {"CTD": 24}, ...},
-                       "files": [...], "excluded": {}, "no_data": [], "unreadable": []}}}
+{"file_count": 23, "folder_count": 3,
+ "files": [{"path": "data/0-data/SHU1505_StationInfo.csv", "action": "sidecar", ...},
+           {"path": "data/0-data/U2015-015_CTD_Temp.csv", "action": "stage",
+            "long_format": {"variable_column": "parm", ...}, ...}],
+ "process_files": [], "stage_files": [...], "sidecar_files": [...], "exclude_files": [...],
+ "document_files": [...], "inspect_files": [],
+ "folders": {"data/0-data": {"verdict": {"action": "stage", "files_by_action": {...}}, ...}}}
 ```
 
-Each folder gets `process`, `exclude` or `inspect`. Per file it reports the format, the
-dataset type, `empty_columns` and `measurement_density`.
+| `action` | means |
+| --- | --- |
+| `process` | profile data with a dataset type |
+| `stage` | profile data that must be reshaped first (long format) |
+| `sidecar` | a station list -- join it into the casts it locates |
+| `exclude` | not a profile; `exclusion` and `belongs_in_wod` say why and where |
+| `document` | documentation, metadata, or an NCEI bundle file |
+| `inspect` | the evidence did not decide |
+
+**NCEI's own bundle files are recognised by name** -- `NCEI-Readme.txt`, `journal.txt`,
+`<accession>.md5`, `*-ISO-19115-2.xml`, `*_preview.jpg`, the confirmation e-mails and
+`<accession>_lonlat.txt`, which is two numeric columns that sniff as a table. `ncei_bundle`
+says what each is for. `process_accession` skips them before downloading.
+
+`classify_file` is the same triage for one local file; the dry run uses it. Per file the
+result also carries the dataset type, `empty_columns` and `measurement_density`.
 
 **`measurement_density` ignores station, depth, time and flag columns on purpose.** A
 nutrient file whose station and depth are full and whose three nutrient columns are entirely
@@ -259,6 +312,7 @@ any single file, because the evidence is the *relationship* between them:
 | --- | --- | --- |
 | `one file per depth level` | identical columns, one or two rows each | `combine_levels`, sort by depth, stage one file |
 | `one file per variable` | disjoint measurement columns sharing a depth or time column | `combine_on_key(key=...)` — and check `info["per_table"]` |
+| `long format` / `long format, one file per variable` | the variable named in a cell (`parm,value`); `variables_sampled` lists what each file holds | `pivot_long` with every file together, then `group_rows` per cast |
 
 Processed as they stand, the first produces a pile of single-level profiles and the second a
 set of casts each missing most of its variables. Both look like successful runs.

@@ -103,6 +103,22 @@ these: `potential_temperature` contains `temperature`, and the longest-match rul
 returned code 1. Exact matches are tried in both directions first, so `nitrate_nitrite`
 still resolves to code 8 rather than being blocked as nitrite.
 
+### Fluorescence is decided by its unit
+
+WOD has no fluorescence variable; it has Chlorophyll (code 11, µg/l), and a fluorometer
+calibrated to a concentration is how most profile chlorophyll is measured. So
+`fluorescence_rule` in [`query_wod_spec.py`](query_wod_spec.py) decides from the UNIT:
+
+| Column | Result |
+| --- | --- |
+| `Fluorescence (ug/l)`, `Fluor [ppb]`, `fluorescence (mg/m^3)` | code 11, with a `comment` on the variable: fluorometer-derived, not extracted chlorophyll-a |
+| `FlSP`, `flECO-AFL` (Sea-Bird calibrated channels), no unit | code 11, same comment |
+| `Fluorescence (RFU)`, `chl_fluorescence (V)`, `Fluorometer (volts)` | no code; `explain_column` says it is a raw signal -- dropped and reported |
+| `fluorescence`, no unit | no code; find the unit and put it in the staged column name |
+
+This used to depend on renaming the column `Chlorophyll` during staging, which hid the
+decision. Do not rename it any more: stage `Fluorescence (<unit>)` and let the rule decide.
+
 ### Columns with "depth" in the name that are not the depth axis
 
 `Bottom Depth`, `Water Depth`, `Sounding`, `Station Depth`, `Max Depth`, `Sensor Depth`,
@@ -169,6 +185,8 @@ Metadata arrives four ways and all four are handled:
 | Where it lives | Example | Becomes |
 | --- | --- | --- |
 | A `Key: value` header line | `# Probe type: T-7` | secondary header 29 |
+| A cast-level Table 5a line | `# Instrument: SBE 911plus` | variable specific header 5 on **every** measured variable |
+| A cruise or PI line | `# Cruise: SHU1505` | `character_data` (manual p.30), **not** the platform |
 | A **delimited** header line | `Platform,,5423.,OCL code,KAHAROA` | secondary header 3 |
 | A whole column, constant down the cast | a `Bottom Depth (m)` column | secondary header 10 |
 | Part of a measurement column's own name | `[ITS-90, deg C]` | variable specific headers 3 and 8 |
@@ -213,7 +231,13 @@ line it came from, and why:
 
 **Read it.** A metadata key that vanishes silently is the same failure as a dropped column,
 and it was silent until this existed: on accession 0146739 the old parser reported three
-headers, all three wrong, and named none of the fourteen keys it had skipped.
+headers, all three wrong, and named none of the fourteen keys it had skipped. `Key: value`
+lines go through the same net: a key no pattern matches, and a second key for a header
+already held, both land here -- and reach the NetCDF as `metadata_not_placed`.
+
+A known key joined to its value by a bare space only counts when the value holds no
+separator of its own: `Cast duration: 30` is header 11, not cast number `duration: 30`, and
+`Weather observer: K.` is not header 26.
 
 ```json
 {"secondary_headers": {
@@ -243,6 +267,19 @@ reads like a dead end. They are extracted into
 `knowledge/wod_code_tables/code_table_links.json`; see
 [`wod_etl/reference/README.md`](../reference/README.md). `is_coded: false` is a real answer,
 not a gap: bottom depth is metres, not a code.
+
+**Every coded value is looked up in that list.** `Platform: Shunyo-Maru` is not a code;
+WOD's platform list holds two vessels of that name. `code_lookup` on each coded entry says
+what was found (`wod_etl.reference.code_lists`):
+
+| `code_lookup.status` | `value` becomes | the writer writes |
+| --- | --- | --- |
+| `matched` (exactly one entry) | the code; the text moves to `originator_value` | the code, with `_originator_text` and `_code_lookup` beside it |
+| `already_a_code` (a number) | unchanged | the code |
+| `ambiguous`, `no_match`, `unavailable`, `disabled` | unchanged (the text) | **no** code -- the text as `<field>_originator_text`, the reason as `<field>_code_lookup` |
+
+The run reports every unresolved one under `coded_headers_not_resolved`. Originator's units
+(header 8) are coded too: `deg C` has no entry, and `ug/l` is two (036 and 136).
 
 ### Originator quality flags
 
@@ -300,7 +337,13 @@ contract = generate_field_mapping({**profile, "columns": list(df.columns)}, spec
 
 `extracted_header_metadata` is the narrower set the original parser produced and is kept so
 anything reading that key still works. **`secondary_headers` is the one to read** — it
-covers the header block *and* metadata columns, each with its code list.
+covers the header block *and* metadata columns, each with its code list and lookup.
+
+Also in the contract: `character_data` (cruise code, PI), `provenance_notes` (every
+`# Note:` line) and `source_files` (every `# Source:` line) -- the writer turns those into
+`comment` and `source_files_raw` -- `unresolved_metadata`, `source` (the path read) and
+`source_format` (how it was read). A fluorometer column mapped to code 11 carries a
+`comment` and a warning.
 
 ### Read these four fields before trusting a run
 
@@ -399,7 +442,10 @@ pressure (identical to mbar).
 
 `parsed_coordinates` accepts decimal (`LAT: 61.930`), integer (`LAT: 61`), degrees + decimal
 minutes (`LAT: 61 55.8 N`), and hemisphere suffixes (`33.5 S` → `-33.5`). Dates are read as
-`YYYY-MM-DD`, `YYYYMMDD` or `DD-MM-YYYY`, plus `HH:MM` time.
+`YYYY-MM-DD`, `YYYYMMDD` or `DD-MM-YYYY`, plus `HH:MM` time, and `TIME_ZONE:` as
+`time_zone`. A date with no time of day is a warning, not an error: it is written as
+date-only (`GMT_time` fill), never as midnight. `parse_header_block(text)` is the same reader
+for a caller with a header and no table.
 
 `secondary_headers` is keyed by **Table 4a secondary header ID**, which is a *different
 namespace* from Table 3a variable codes — ID 29 is "Probe Type" while variable code 29 is
@@ -411,6 +457,34 @@ WMO codes stay strings so `0287423` keeps its leading zero.
 around fifty of the sixty-seven, including sea state, cloud cover, Secchi depth, probe type,
 recorder, digitisation method, water sampler, WMO id and the ARGOS fields. Add a pattern
 there rather than parsing a key by hand.
+
+---
+
+## `map_haul(staged)` and `resolve_taxon(name)` — biological data
+
+The mapping step for a haul staged with `wod_etl.staging.write_staged_haul`, as
+`generate_field_mapping` is for a cast. `map_haul` takes what `read_staged_haul` returns and
+produces the same kind of contract a profile gets -- secondary headers with code lookups,
+character data, coordinates, notes, sources -- plus the Biological Header with each coded
+field looked up (gear `b_7`, tow type `b_4`...) and one record per row with its taxon,
+qualifiers and values. `wod_etl.writers.write_taxa_netcdf` writes it.
+
+`resolve_taxon` resolves a name against WOD's `t_1_taxa_list.csv` -- the ~5000 taxa WOD uses,
+with ITIS numbers and Plankton Grouping Codes -- through the same code-list lookup as every
+other coded field:
+
+| Written | Result |
+| --- | --- |
+| `Acartia danae` | `matched`, 86086, PGC 4212010 |
+| `Acartia spp.` | `matched` at genus as written (86084); `note` says so |
+| `Thunnus obesus` (not in the list) | `matched_higher_rank`: genus *Thunnus* -- the species is lost, and `note` says so |
+| `Mysis of Decapoda` | `matched_higher_rank`: **Decapoda**, not the mysid genus *Mysis* -- a later capitalised word is the taxon |
+| `Fish larva` | `ambiguous` -- "Fish" names more than one WOD group |
+| an unknown name, or the list unavailable | no code; the originator's name is kept |
+
+`resolve_taxa_coded(field_id, value)` does the same for a Table 7a qualifier: life stage
+(`adult` -> 8, `larvae` -> 6 LARVA, `copepodite` -> 29), sex. The originator's text is always
+kept; a code is written only for exactly one match. ITIS itself is not queried.
 
 ---
 

@@ -29,3 +29,16 @@ def make_cast(lat=61.93, lon=-172.27, rows=3, dic=False):
         "column_mapping": mapping,
     }
     return {"df": df, "contract": contract}
+
+
+def cache_code_list(cache_dir, field, text, retrieved="2026-01-01T00:00:00+00:00"):
+    """Put a published code list into the (test) cache, as if fetched on `retrieved`."""
+    import json
+    from pathlib import Path
+
+    from wod_etl.reference import code_lists
+
+    d = Path(cache_dir)
+    (d / f"{field}.csv").write_text(text, encoding="utf-8")
+    (d / f"{field}.json").write_text(json.dumps({"url": "test", "retrieved": retrieved}))
+    code_lists.clear_cache_memo()

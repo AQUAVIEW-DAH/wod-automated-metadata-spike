@@ -10,11 +10,13 @@ dependencies = [
     # without one it can only tell you to export the sheet to CSV yourself.
     "openpyxl>=3.1.5",
     "pandas>=3.0.5",
+    # Cruise reports state station positions, dates and some measurements only in PDF
+    # tables; wod_etl.staging.extract_pdf_rows reads them, with a page citation.
+    "pypdf>=6.16.1",
 ]
 
 [dependency-groups]
 dev = [
-    "pypdf>=6.16.1",
     "pytest>=9.1.1",
     "pyyaml>=6.0.3",
 ]

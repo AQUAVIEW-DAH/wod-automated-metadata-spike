@@ -72,10 +72,11 @@ Single-cast wrapper over the above. Use it when you have exactly one cast.
 
 | Group | Contents |
 | --- | --- |
-| Global attributes | `title`, `Conventions`, `featureType=profile`, `WOD_version`, `wod_dataset_type`, `source_file`, `source`; `institution` only when the originator stated one (secondary header 4) |
-| Provenance | `unit_conversions`, and `seawater_density_kg_m3` + `seawater_density_provenance` when a conversion used the assumed density |
-| Secondary headers | one `secondary_header_<id>_<name>` attribute per Table 4a entry, plus `<same>_code_table` where WOD publishes a code list |
-| Per cast (`casts`) | `lat`, `lon`, `time` (days since 1770-01-01), `cast_id` (`cf_role=profile_id`), `z_row_size` (`sample_dimension=z_obs`), and any secondary header that differs between casts |
+| Global attributes | `title`, `Conventions`, `featureType=profile`, `WOD_version`, `wod_dataset_type`, `source_file` (the path read), `source_format` (how), `source`; `institution` only when the originator stated one (secondary header 4) |
+| Provenance | `comment` (the staged header's `# Note:` lines every cast shares; differing ones go to a `cast_notes` variable), `history`, `source_files_raw` (the `# Source:` lines), `metadata_not_placed` (header keys with no WOD field), `unit_conversions`, and `seawater_density_kg_m3` + `seawater_density_provenance` when a conversion used the assumed density |
+| Character data | `originator_cruise_id`, `principal_investigator` (manual p.30) -- global when shared, per cast otherwise |
+| Secondary headers | one `secondary_header_<id>_<name>` attribute per Table 4a entry, plus `<same>_code_table` where WOD publishes a code list; a coded value that is not a code goes to `<same>_originator_text` with `<same>_code_lookup` instead (below) |
+| Per cast (`casts`) | `lat`, `lon`, `time` (days since 1770-01-01), `date` (YYYYMMDD), `GMT_time` (hours, fill when not stated), `cast_id` (`cf_role=profile_id`), `z_row_size` (`sample_dimension=z_obs`), and any secondary header that differs between casts |
 | Per level (`z_obs`) | `z` (`positive=down`, `axis=Z`), `z_qc` when WOD QC ran, one variable per WOD code, and per variable `<var>_qc` and/or `<var>_qc_originator` |
 
 Each measured variable carries `units`, `long_name` (the WOD name), `wod_variable_code`,
@@ -88,9 +89,11 @@ the originator declared rather than only what the conversion produced:
 
 | Attribute | From | Why it is there |
 | --- | --- | --- |
-| `originator_units`, `wod_variable_specific_header_8` | the raw column name | A conversion is only auditable against the unit the source declared |
+| `originator_units`, `wod_variable_specific_header_8` | the raw column name; header 8 is a code only when WOD's units list has exactly one match, else `_originator_text` | A conversion is only auditable against the unit the source declared |
 | `measurement_scale`, `wod_variable_specific_header_3` | `[ITS-90]`, `(PSS-78)` | A temperature is ambiguous without knowing which standard it is on |
 | `originator_column_name` | the raw column name, verbatim | The link back to the source file |
+| `comment` | the mapping, e.g. a fluorometer column written as Chlorophyll | What the number actually is |
+| `<header>_originator_text`, `<header>_code_lookup` | a coded Table 5a value that did not resolve | The originator's text, kept beside the field rather than in it |
 | `wod_variable_specific_header_<id>` | other Table 5a fields, e.g. 17 for nitrate+nitrite | How WOD records the distinction |
 
 Use `setncattr`, not `setattr`, if you add more: netCDF4 reserves Python attribute names on
@@ -141,6 +144,36 @@ names are prose, so they are converted and the original kept in `long_name`.
   enforces that.
 - Missing coordinates are written as NaN rather than refused, so the *validator* is what
   catches them. Always validate.
+- **A date without a time of day is not midnight.** `time` sits at 00:00 of the date because
+  CF needs a value, `GMT_time` is fill, and `time.comment` says how many casts are date-only.
+  A numeric `time_zone` (`UTC+10`) with a time of day is converted to UTC; a named zone or a
+  date alone is recorded as `time_zone_of_source` and **not** shifted (`time_zone_note`).
+- **`cast_id` identifies the cast outside the file**: accession (or platform), originator's
+  cruise, cast or station (or the source file's name), and the date with its time when
+  known -- `0303928_SHU1505-st01_20151109`. It used to be `<platform>_0000` for every one-cast
+  file. Repeats within a file are suffixed; `verify_output` checks uniqueness across a run.
+- **A coded field holds a code or nothing.** When a lookup did not find exactly one entry
+  (`code_lookup` in the contract), the field is not written: the originator's text goes to
+  `<field>_originator_text` and the reason to `<field>_code_lookup`. A contract with no lookup
+  information is written as it stands.
+
+---
+
+## `write_taxa_netcdf(hauls, output_path)` — Taxa-Records, not profiles
+
+Plankton counts and biomass are not values at a level, so they get their own layout, written
+beside the profile writer and sharing its helpers for time, cast ids, secondary headers,
+character data and provenance. `hauls` come from `wod_etl.mapping.map_haul`.
+
+| Dimension | Variables |
+| --- | --- |
+| `casts` (one per haul) | `lat`, `lon`, `time`, `date`, `GMT_time`, `cast_id`, `taxa_row_size` (CF ragged count, `sample_dimension = "taxa_obs"`), Biological Header fields `b_<id>_<name>`, and secondary headers and character data as for a profile |
+| `taxa_obs` (one per Taxa-Record) | `t_1_variable_number` (ITIS TSN, or a negative WOD code; fill if unresolved), `taxon_name_originator` (always), `taxon_resolution`, `t_30_plankton_grouping_code`, `t_2_upper_depth`, `t_3_lower_depth`, coded qualifiers (`t_5_taxon_life_stage` + `_originator_text`), measurements (`t_10_taxon_count`...), `t_20_originator_s_unit` |
+
+A coded Biological Header field is its code only when the list has exactly one match;
+otherwise the text goes to `_originator_text` with the reason in `_code_lookup`. The global
+`wod_record_model` names the layout; `wod_dataset_type` is `OSD`, where Table 2 puts plankton.
+Validate with `wod_etl.verify.validate_taxa_netcdf`, not the profile validator.
 
 ---
 

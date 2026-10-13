@@ -253,7 +253,7 @@ loads itself as the `wod-reference` skill.
 | [`cast_structure.md`](knowledge/cast_structure.md) | The seven parts of a cast, the four colliding numbering systems, where information belongs when it is not a Table 3a variable |
 | [`wod_code_tables/standardization_rules.md`](knowledge/wod_code_tables/standardization_rules.md) | QC procedure and flags, what the profile path cannot carry, the SUR model, unit traps |
 | [`accession_field_guide.md`](knowledge/accession_field_guide.md) | How submissions arrive, what `49-46.9858N` means, the date/time traps, and the intermediate format contract |
-| [`plankton_biomass.md`](knowledge/plankton_biomass.md) | Why plankton belongs in WOD but not in a profile, the Taxa-Record model, what to report today, what a plankton tool still needs |
+| [`plankton_biomass.md`](knowledge/plankton_biomass.md) | Why plankton belongs in WOD but not in a profile, the Taxa-Record model, how `process_taxa` writes it, what to report |
 
 **Never hardcode a WOD code, unit or threshold from memory.** Read the JSON, or the PDF page
 it cites.
@@ -283,7 +283,7 @@ and **skills** (the code). Everything else is scaffolding.
 │   ├── writers/                       Phase 4
 │   ├── verify/                        Structural validation + the dataset audit
 │   ├── reference/                     Loads knowledge/ — codes, units, flags, thresholds
-│   └── orchestration/                 The driver and the run ledger
+│   └── orchestration/                 The drivers (profiles, and Taxa-Records) and the run ledger
 │
 ├── knowledge/                         ← KNOWLEDGE. Ground truth, not code.
 │   ├── wod_readme.pdf                 WOD 2023 User's Manual, 131 pages
@@ -291,7 +291,7 @@ and **skills** (the code). Everything else is scaffolding.
 │   ├── cast_structure.md              The seven parts of a cast; the colliding code tables
 │   ├── wod_code_tables/               12 JSON tables + standardization_rules.md
 │   ├── accession_field_guide.md       How submissions arrive; the intermediate contract
-│   ├── plankton_biomass.md            The plankton path: why it is not a profile
+│   ├── plankton_biomass.md            Plankton: why it is not a profile; the Taxa-Record path
 │   └── wod_readme_db/page_text.json   Page cache for search_manual (rebuildable)
 │
 ├── data/                              ← DATA. A run's working area.

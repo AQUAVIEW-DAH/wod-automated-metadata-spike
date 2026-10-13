@@ -1,12 +1,17 @@
 # Plankton biomass and taxonomy in WOD
 
 **Plankton belongs in WOD. It does not belong in a profile.** Those two facts are both true
-and they are what makes this confusing. This file is the reference for the second one, and
-the preparation for a future tool that handles the first.
+and they are what makes this confusing. This file is the reference for the record model.
 
-Nothing in `wod_etl/` writes a plankton record today. When an accession holds plankton, the
-job is to identify it, exclude it from the profile run with a stated reason, and report it as
-an **unfinished item** — not a success, not a failure. Rule 7 of the `wod-etl` skill.
+`process_accession` identifies plankton and skips it with a stated reason. It then goes
+through the same phase packages a cast does, in its own record shape: stage each haul
+(`wod_etl.staging.write_staged_haul`), map it -- taxa, life stages and coded collection
+fields resolved against WOD's own code lists (`wod_etl.mapping.map_haul`) -- write
+Biological Headers and Taxa-Records (`wod_etl.writers.write_taxa_netcdf`) and validate them
+(`wod_etl.verify.validate_taxa_netcdf`). `wod_etl.orchestration.process_taxa` runs all four;
+each phase README documents its part. What it cannot supply -- volume filtered, preservative,
+counting method -- it reports, and that part stays an **unfinished item** to name. Rule 7 of
+the `wod-etl` skill.
 
 ---
 
@@ -102,7 +107,7 @@ Table 3a codes and they are not Table 8 ranges used the same way.
 
 ---
 
-## What to do today, when an accession holds plankton
+## What to do when an accession holds plankton
 
 `classify_dataset` already recognises it and refuses to route it into the profile path:
 
@@ -115,36 +120,40 @@ v["exclusion"]["route"]               # names Tables 6a and 7a
 ```
 
 `process_accession` skips those files and records the reason, so they appear in
-`skipped_reasons` rather than vanishing. **That is not the end of the job.** Report it:
+`skipped_reasons` rather than vanishing. **That is not the end of the job.** Reshape the
+sheet (`melt_matrix` for a count matrix), stage one file per haul with
+`write_staged_haul`, and run `process_taxa`. Then report its four lists:
 
-> `5-plankton/` — 340 zooplankton biomass records, 12 taxa, hauls 0–100 m and 100–500 m.
-> Belongs in WOD via the Biological Header (Table 6a) and Taxa-Records (Table 7a). Not
-> written: this pipeline has no plankton writer. Unfinished item.
+> `5-plankton/` — 340 zooplankton records in 24 hauls, written as Taxa-Records. 12 names did
+> not resolve to a WOD variable number (kept by name); 3 resolved one rank up. Not stated
+> anywhere: volume filtered, preservative, count method -- counts stay per sample.
 
-Also capture, while you have the accession open, what a future writer will need and what only
-the submitter can tell you: **gear and tow type, mesh size, water volume filtered or tow
-distance, preservative, counting and weighing method, and whether large plankters were
-removed.** These are Table 6a fields, they are rarely in the data file, and they are usually
-recoverable only from the cruise report or the submitter.
+Capture, while you have the accession open, what only the submitter can tell you: **gear and
+tow type, mesh size, water volume filtered or tow distance, preservative, counting and
+weighing method, and whether large plankters were removed.** These are Table 6a fields, they
+are rarely in the data file, and they are usually recoverable only from the cruise report or
+the submitter. `missing_biological_fields` names the ones a haul lacks.
 
 ---
 
-## What a plankton tool would still need
+## What the Taxa-Record path uses, and what it still lacks
 
-Everything below is missing from this repository, and all of it is on the WOD website rather
-than in the manual PDF:
+The code lists the manual defers to the WOD website are **fetched and cached with their
+retrieval date** by `wod_etl.reference.code_lists`, not copied into this repository:
 
-- **Appendix 4.1–4.9** — tow type, gear, preservative, weight/count/volume/depth methods,
-  flowmeter calibration.
-- **Appendix 5.1–5.11** — life stage, sex, presence, trophic mode, realm, feature, modifier,
-  size, count method, CBV and its calculation method.
-- **Appendix 6** — the PGC group list.
-- **The ITIS taxonomic serial numbers** (`t_1_taxa_list`), and the WOD ancillary code lists
-  for descriptions ITIS cannot represent.
-- **A record model that is not a profile**: an output format with upper/lower depth per
-  observation, repeated per taxon, with the biological header attached to the cast.
+- **Appendix 4.x** — gear (`b_7_gear_and_flowmeter`), tow type (`b_4_type_tow`) and the other
+  coded collection fields. Some of them publish no CSV; a lookup there is `unavailable` and
+  the originator's text is kept.
+- **Appendix 5.x** — life stage (`t_5_taxon_lifestage`), sex (`t_6_taxon_sex`).
+- **`t_1_taxa_list`** — WOD's ~5000 taxa with ITIS numbers and Plankton Grouping Codes. A name
+  not in it falls back one rank (genus, or the capitalised taxon in "Zoea of Decapoda") and
+  says so; anything else keeps only its name. ITIS itself is not queried.
+- **The record model** — `wod_etl.writers.write_taxa_netcdf`: one Biological Header per
+  haul, Taxa-Records with upper/lower depth per observation.
 
-Until those exist, a plankton dataset is an item to name in a report, not an item to process.
+Still missing: **automatic biomass coding** (a Table 8 biomass code carries its unit, so a
+biomass record must be staged with its code as the taxon), and every Table 6a value only the
+submitter has.
 
 ---
 

@@ -13,6 +13,7 @@ from wod_etl.mapping.query_wod_spec import (
     canonical_unit_text,
     explain_column,
     extract_scale,
+    fluorescence_rule,
     extract_unit,
     match_variable,
     normalize_name,
@@ -54,7 +55,9 @@ _MOLAR_ABBREV = re.compile(r"(mmol|umol|nmol)\s*/\s*(l|kg)")
 _HEADER_PATTERNS = {
     1:  r"(?:accession|accession[_\s]*(?:no|number)|nodc[_\s]*accession)",
     2:  r"(?:project|programme|program)",
-    3:  r"(?:platform|ship|vessel|cruise|cruise[_\s]*id|callsign)",
+    # Not 'cruise': a cruise code names a voyage, not the vessel (map_metadata routes it to
+    # the character data). Kept in step with SECONDARY_HEADER_PATTERNS there.
+    3:  r"(?:platform|ship|vessel|callsign)",
     4:  r"(?:institut(?:e|ion)|agency|originator[_\s]*institution)",
     5:  r"(?:cast|cast[_\s]*(?:no|number)|tow[_\s]*(?:no|number))",
     7:  r"(?:station|station[_\s]*(?:no|number)|stn)",
@@ -71,6 +74,11 @@ _NUM = r"[-+]?\d+(?:\.\d+)?"
 
 # Prose lines in a staged header, skipped before any key is mined out of them.
 _NOTE_LINE = re.compile(r"\s*#?\s*(?:note|comment|remark)s?\s*[:=]", re.IGNORECASE)
+
+# `# Source: data/raw/.../file.csv` -- one per file a staged cast was built from.
+_SOURCE_LINE = re.compile(r"\s*#?\s*source(?:[_\s]*file)?s?\s*[:=]\s*(.+)$", re.IGNORECASE)
+# `TIME_ZONE: UTC+10` -- the zone of the DATE and TIME lines, when it is not UTC.
+_TIME_ZONE_LINE = re.compile(r"\s*#?\s*time[_\s]*zone\s*[:=]\s*(.+)$", re.IGNORECASE)
 
 # Secondary headers whose value is a measurement rather than an identifier.
 _NUMERIC_HEADER_IDS = {10, 22, 23, 24}
@@ -165,6 +173,12 @@ def generate_field_mapping(
                 (f["flag_column"] for f in metadata["originator_flags"]
                  if f.get("flags_column") == col), None),
         }
+        fluor = fluorescence_rule(col)
+        if fluor is not None and fluor.get("code") == code:
+            mapping["comment"] = fluor["comment"]
+            warnings.append(f"Column '{col}' is fluorometer output written as {var['name']} "
+                            f"(code {code}) because its unit is a concentration. Say so "
+                            f"when reporting: it is not extracted chlorophyll-a.")
         if conversion == "molar_rescale":
             # A parameterised conversion needs its endpoints; the label alone cannot say
             # whether this is umol/l -> umol/kg or mmol/kg -> mmol/l.
@@ -183,6 +197,13 @@ def generate_field_mapping(
 
     extracted = _parse_header_block(raw_header_text)
     parsed_coords = extracted["coordinates"]
+    if parsed_coords.get("year") is not None and "hour" not in parsed_coords:
+        warnings.append(
+            "The cast has a date but no time of day. It is written at 00:00 of that date with "
+            "GMT_time left as fill, so it reads as date-only rather than as midnight."
+            + (f" The date's time zone is {parsed_coords['time_zone']}; a local date may be "
+               f"a different UTC date." if parsed_coords.get("time_zone") else
+               " The date's time zone is not stated."))
 
     for entry in dropped:
         warnings.append(f"Column '{entry['column']}' is {entry['variable'].replace('_', ' ')}: "
@@ -226,6 +247,7 @@ def generate_field_mapping(
 
     return {
         "source": profile_result.get("source", "unknown"),
+        "source_format": profile_result.get("source_format"),
         "dataset_type": spec_result.get("dataset_type", ""),
         "wod_dataset_code": spec_result.get("wod_dataset_code"),
         "dataset_resolution": spec_result.get("dataset_resolution", {}),
@@ -235,6 +257,15 @@ def generate_field_mapping(
         # AND from metadata columns, each with its published code list.
         "extracted_header_metadata": extracted["secondary_headers"],
         "secondary_headers": metadata["secondary_headers"],
+        # Character data (manual p.30): the originator's cruise code and PI. Not secondary
+        # headers; a cruise code written as the platform made a voyage look like a vessel.
+        "character_data": metadata.get("character_data", {}),
+        # Free-text `# Note:` lines and `# Source:` lines from a staged header. The staged
+        # file is where every derivation is recorded, and these are what carries it into the
+        # output -- before, it stopped at the staged CSV.
+        "provenance_notes": extracted["notes"],
+        "source_files": extracted["sources"],
+        "unresolved_metadata": metadata.get("unresolved", []),
         "metadata_columns": metadata["metadata_columns"],
         "originator_flags": metadata["originator_flags"],
         "parsed_coordinates": parsed_coords,
@@ -244,6 +275,15 @@ def generate_field_mapping(
         "warnings": warnings,
         "ready_for_transform": bool(column_mappings) and not missing_coords,
     }
+
+
+def parse_header_block(raw_header_text: str) -> Dict[str, Any]:
+    """Coordinates, date/time, time zone, notes and sources from a `Key: value` header block.
+
+    The same reader the profile contract uses, for a caller with a header and no table to
+    map -- `map_haul` reads a staged haul's position and date this way.
+    """
+    return _parse_header_block(raw_header_text)
 
 
 def molar_units(raw_col_name: str, wod_code: int):
@@ -307,13 +347,25 @@ def _parse_header_block(raw_header_text: str) -> Dict[str, Any]:
     """Scan the header comment block for coordinates, date and secondary header metadata."""
     sec_headers: Dict[str, Any] = {}
     coords: Dict[str, Any] = {}
+    notes: List[str] = []
+    sources: List[str] = []
     names = wod_secondary_headers()
 
     for line in raw_header_text.splitlines():
         # Free-text notes are prose, and staged files put them above the coordinate lines.
         # Left in scope, a note reading "cast positions fall on the track" yields cast number
-        # "positions fall", and a note quoting a source header supplies the wrong date.
+        # "positions fall", and a note quoting a source header supplies the wrong date. They
+        # are collected instead, for the output's `comment`.
         if _NOTE_LINE.match(line):
+            notes.append(_NOTE_LINE.sub("", line, count=1).strip())
+            continue
+        m = _SOURCE_LINE.match(line)
+        if m:
+            sources.append(m.group(1).strip())
+            continue
+        m = _TIME_ZONE_LINE.match(line)
+        if m:
+            coords.setdefault("time_zone", m.group(1).strip())
             continue
 
         _parse_position(line, coords)
@@ -328,12 +380,14 @@ def _parse_header_block(raw_header_text: str) -> Dict[str, Any]:
             # -- NOT to a fixed word count. A two-word cap silently truncated every longer
             # value ('University of Alaska Fairbanks' -> 'University of'), and a truncated
             # institution or platform is indistinguishable from what the originator wrote.
-            m = re.search(rf"(?:^|[,;|]|\s{{2,}})\s*#?\s*{key_pat}\b[:=\s]+"
+            m = re.search(rf"(?:^|[,;|]|\s{{2,}})\s*#?\s*{key_pat}\b(\s*[:=]\s*|\s+)"
                           rf"([^\s,;|][^,;|]*?)(?=\s{{2,}}|[,;|]|$)",
                           line, re.IGNORECASE)
             if not m:
                 continue
-            value: Any = m.group(1).strip().strip('"\'')
+            value: Any = m.group(2).strip().strip('"\'')
+            if not re.search(r"[:=]", m.group(1)) and re.search(r"[:=]", value):
+                continue                     # a longer key: 'Cast duration: 30' is not a cast
             # Only genuinely numeric headers are coerced. Accession, station and WMO codes
             # are identifiers: '0287423' must not become 287423.
             if sec_id in _NUMERIC_HEADER_IDS and re.fullmatch(_NUM, value):
@@ -343,7 +397,8 @@ def _parse_header_block(raw_header_text: str) -> Dict[str, Any]:
                     pass
             sec_headers[str(sec_id)] = {"name": names.get(sec_id, f"code {sec_id}"), "value": value}
 
-    return {"secondary_headers": sec_headers, "coordinates": coords}
+    return {"secondary_headers": sec_headers, "coordinates": coords, "notes": notes,
+            "sources": sources}
 
 
 def _parse_position(line: str, coords: Dict[str, Any]) -> None:

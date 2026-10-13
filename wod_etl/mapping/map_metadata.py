@@ -49,7 +49,10 @@ _NUM = r"[-+]?\d+(?:\.\d+)?"
 SECONDARY_HEADER_PATTERNS: Dict[int, str] = {
     1:  r"(?:accession(?:[_\s]*(?:no|num|number))?|nodc[_\s]*accession|ncei[_\s]*accession)",
     2:  r"(?:project|programme|program|expedition)",
-    3:  r"(?:platform|ship(?:[_\s]*name)?|vessel|cruise(?:[_\s]*(?:id|name))?|callsign|call[_\s]*sign)",
+    # NOT 'cruise'. A cruise identifier (STOCS85A, kah1104, SHU1505) names a voyage, not a
+    # vessel, and header 3 is a coded vessel. It belongs to the character data section --
+    # see CHARACTER_DATA_PATTERNS.
+    3:  r"(?:platform|ship(?:[_\s]*name)?|vessel|callsign|call[_\s]*sign)",
     4:  r"(?:institut(?:e|ion)|agency|laborator(?:y|ies)|originator[_\s]*institution|data[_\s]*cent(?:er|re))",
     5:  r"(?:cast(?:[_\s]*(?:no|num|number|id))?|tow[_\s]*(?:no|num|number)|profile[_\s]*(?:no|number|id)|haul[_\s]*(?:no|number))",
     7:  r"(?:station(?:[_\s]*(?:no|num|number|id))?|stn(?:[_\s]*(?:no|id))?|originator'?s?[_\s]*station)",
@@ -111,6 +114,32 @@ SECONDARY_HEADER_PATTERNS: Dict[int, str] = {
     97: r"(?:water[_\s]*sampler|sampler(?:[_\s]*type)?|niskin|rosette|bottle[_\s]*type)",
     98: r"(?:argos[_\s]*id|platform[_\s]*transmitter|ptt\b)",
 }
+
+# ------------------------------------------------- character data (p.30)
+# The originator's own identifiers that are not secondary headers: the cruise code and the
+# principal investigator. Manual p.30, "Character data and principal investigator".
+CHARACTER_DATA_PATTERNS: Dict[str, str] = {
+    "originator_cruise_id": r"(?:originator'?s?[_\s]*)?cruise(?:[_\s]*(?:id|code|name|no|"
+                            r"num|number))?",
+    "principal_investigator": r"(?:principal[_\s]*investigator|pi(?:[_\s]*name)?|"
+                              r"chief[_\s]*scientist)",
+}
+
+# Keys in a staged header that are not metadata to place: coordinates are parsed by
+# generate_field_mapping, and Source lines are provenance it collects.
+_NOT_METADATA_KEY = re.compile(
+    r"^(?:lat|latitude|lon|long|longitude|date|time|time[_\s]*zone|tz|datetime|year|month|"
+    r"day|hour|minute|source(?:[_\s]*file)?s?|history)$", re.IGNORECASE)
+
+# Keys that describe a Sea-Bird .cnv file's own layout and processing, which read_any rewrites
+# as `Key: value` lines: column definitions, spans, the fill value, each SBE Data Processing
+# module's settings. They are not originator metadata, and reported as unresolved they
+# buried the few keys that are under a dozen notes saying a pattern was missing.
+_INSTRUMENT_FILE_KEY = re.compile(
+    r"^(?:nquan|nvalues|units|name\s*\d+|span\s*\d+|interval|start_time|bad_flag|file_type|"
+    r"sensor\s*\d+|filename|software\s+version|system\s+upload\s+time|"
+    r"(?:datcnv|filter|alignctd|celltm|loopedit|derive|binavg|wildedit|sectionx|strip|"
+    r"split|bottlesum|w_filter|seasave|translate)_\w+)$", re.IGNORECASE)
 
 # Secondary headers whose value is a number, not an identifier or a code. Everything else
 # stays a string: an accession, a station or a WMO number is an identifier, and '0287423'
@@ -182,6 +211,8 @@ def map_metadata(
         "variable_specific_headers": {},
         "metadata_columns": [],
         "originator_flags": [],
+        "character_data": {},
+        "cast_level_variable_headers": {},
         "unresolved": [],
         "dataset_code": dataset_code,
     }
@@ -189,8 +220,10 @@ def map_metadata(
     _from_header_block(header_text or "", out)
     _from_columns(columns, df, out)
     _from_column_names(columns, out)
+    _apply_cast_level_variable_headers(columns, out)
     _find_originator_flags(columns, out)
     _attach_code_tables(out)
+    _resolve_codes(out)
     return out
 
 
@@ -242,22 +275,139 @@ def _from_header_block(header_text: str, out: Dict[str, Any]) -> None:
             _place_pair(pair, line, names, out)
             continue
 
+        placed_keys, spans = set(), []
         for sec_id, key_pat in SECONDARY_HEADER_PATTERNS.items():
-            if str(sec_id) in out["secondary_headers"]:
-                continue
             # The key must start the line or follow a delimiter or a column gap -- never sit
             # mid-sentence, where any English use of 'cast' or 'station' would match. The
             # value runs to the end of the line, a delimiter, or a 2+ space column gap.
-            m = re.search(rf"(?:^|[,;|]|\s{{2,}})\s*#?\s*{key_pat}\b[:=\s]+"
+            m = re.search(rf"(?:^|[,;|]|\s{{2,}})\s*#?\s*({key_pat})\b(\s*[:=]\s*|\s+)"
                           rf"([^\s,;|][^,;|]*?)(?=\s{{2,}}|[,;|]|$)", line, re.IGNORECASE)
             if not m:
                 continue
+            key, value = m.group(1).strip(), m.group(3).strip().strip("\"'")
+            # 'Weather observer: K.' is not header 26 'Weather' = 'observer: K.'. A key joined
+            # to its value by a bare space is only that when the value holds no separator
+            # of its own; otherwise the real key is longer than the pattern matched.
+            if not re.search(r"[:=]", m.group(2)) and re.search(r"[:=]", value):
+                continue
+            if _NOT_METADATA_KEY.match(key) or _character_data_key(key):
+                continue
+            # One key, one header: 'Cast duration: 30' must not also be read as a cast
+            # number 'duration: 30' by the shorter pattern that matches its first word.
+            if any(a <= m.start(1) < b or m.start(1) <= a < m.end(1) for a, b in spans):
+                continue
+            spans.append((m.start(1), m.end(3)))
+            placed_keys.add(_norm_key(key))
+            held = out["secondary_headers"].get(str(sec_id))
+            if held is not None:
+                # A second key claiming a header that is already held used to vanish here
+                # without a word. It is recorded, like every other key that is not placed.
+                if held.get("value") != _coerce(value, sec_id):
+                    out["unresolved"].append({
+                        "key": key, "value": value, "variable": None,
+                        "evidence": line.strip()[:120],
+                        "matches": f"secondary header {sec_id}",
+                        "note": f"header {sec_id} is already held by "
+                                f"{held.get('evidence', held.get('source'))!r}. Both are in "
+                                f"the file; decide which WOD wants."})
+                continue
             out["secondary_headers"][str(sec_id)] = {
                 "name": names.get(sec_id, f"code {sec_id}"),
-                "value": _coerce(m.group(1).strip().strip("\"'"), sec_id),
+                "value": _coerce(value, sec_id),
                 "source": "header block",
+                "originator_key": key,
                 "evidence": line.strip()[:120],
             }
+        _from_key_value_line(line, placed_keys, out)
+
+
+# `Key: value` as a staged header writes it, possibly several per line separated by a
+# column gap. Only a colon or equals sign counts here: the pattern pass above also accepts a
+# bare space, which is right for a KNOWN key and far too loose for an unknown one.
+_KEY_VALUE = re.compile(
+    r"(?:^|[,;|]|\s{2,})\s*#?\s*([A-Za-z][A-Za-z0-9 _.'/()&-]{0,47}?)\s*[:=]\s*"
+    r"([^,;|]*?)\s*(?=\s{2,}[A-Za-z][A-Za-z0-9 _.'/()&-]{0,47}?\s*[:=]|[,;|]|$)")
+
+
+def _norm_key(key: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+
+
+def _character_data_key(key: str) -> Optional[str]:
+    for field, pattern in CHARACTER_DATA_PATTERNS.items():
+        if re.fullmatch(pattern, key.strip().replace("_", " "), re.IGNORECASE):
+            return field
+    return None
+
+
+def _from_key_value_line(line: str, placed_keys, out: Dict[str, Any]) -> None:
+    """Every `Key: value` on a line that the secondary-header pass did not place.
+
+    Before this, a header line whose key matched no Table 4a pattern disappeared: no
+    secondary header, no entry in `unresolved`, nothing. A staged `# Instrument: SBE ...`
+    and `# Cruise: SHU1505` both went that way. Now each lands somewhere a reader will see:
+    the character data, a per-variable header for every measured variable, or
+    `unresolved`.
+    """
+    for m in _KEY_VALUE.finditer(line):
+        key, value = m.group(1).strip(), m.group(2).strip().strip("\"'")
+        if (not value or _NOT_METADATA_KEY.match(key) or _INSTRUMENT_FILE_KEY.match(key)
+                or _norm_key(key) in placed_keys):
+            continue
+        evidence = line.strip()[:120]
+
+        field = _character_data_key(key)
+        if field:
+            if field in out["character_data"]:
+                out["unresolved"].append({
+                    "key": key, "value": value, "variable": None, "evidence": evidence,
+                    "matches": f"character data {field}",
+                    "note": f"{field} is already {out['character_data'][field]['value']!r}."})
+            else:
+                out["character_data"][field] = {"value": value, "originator_key": key,
+                                                "source": "header block",
+                                                "evidence": evidence}
+            continue
+
+        var_id = next((vid for vid, pat in VARIABLE_HEADER_PATTERNS.items()
+                       if _key_matches(key, pat)), None)
+        if var_id is not None:
+            # Said once for the whole cast -- '# Instrument: SBE 911plus' -- so it applies to
+            # every measured variable. A per-variable value, where one differs, belongs in
+            # the delimited form that names the variable in column 1.
+            out["cast_level_variable_headers"].setdefault(str(var_id), {
+                "name": (variable_specific_headers().get(var_id) or {}).get("name", key),
+                "value": value, "originator_key": key, "evidence": evidence,
+                "source": "header block, stated for the whole cast"})
+            continue
+
+        if any(re.fullmatch(pat, key.replace("_", " "), re.IGNORECASE)
+               for pat in SECONDARY_HEADER_PATTERNS.values()):
+            continue                     # a known key the pattern pass already handled
+        out["unresolved"].append({
+            "key": key, "value": value, "variable": None, "evidence": evidence,
+            "matches": None,
+            "note": "no WOD field matched this key. Either it has no WOD home -- report it "
+                    "as not carried -- or a pattern is missing from map_metadata."})
+
+
+def _apply_cast_level_variable_headers(columns: List[str], out: Dict[str, Any]) -> None:
+    """Give a cast-level Table 5a value to every measured variable that lacks its own."""
+    cast_level = out.get("cast_level_variable_headers") or {}
+    if not cast_level:
+        return
+    variables = wod_variables()
+    for col in columns:
+        code = match_variable(col)
+        if code is None or code == 0 or code in (30, 31, 32):
+            continue
+        entry = out["variable_specific_headers"].setdefault(col, {
+            "raw_column": col, "wod_code": code,
+            "wod_name": variables.get(code, {}).get("name"), "headers": {}})
+        for vid, header in cast_level.items():
+            entry["headers"].setdefault(vid, {**header,
+                                              "note": "stated once for the cast; applied to "
+                                                      "every measured variable"})
 
 
 def _delimited_pair(line: str):
@@ -344,6 +494,13 @@ def _place_pair(pair, line, names, out) -> None:
                 **({"description": pair["description"]} if pair["description"] else {}),
             }
             return
+
+    field = _character_data_key(key)
+    if field and not variable:
+        out["character_data"].setdefault(field, {"value": value, "originator_key": key,
+                                                 "source": "header block",
+                                                 "evidence": evidence})
+        return
 
     for sec_id, key_pat in SECONDARY_HEADER_PATTERNS.items():
         if not _key_matches(key, key_pat):
@@ -598,6 +755,41 @@ def _attach_code_tables(out: Dict[str, Any]) -> None:
             if link:
                 header["code_table"] = {k: v for k, v in link.items()
                                         if k in ("html", "csv", "pdf")}
+
+
+def _resolve_codes(out: Dict[str, Any]) -> None:
+    """Look every coded value up in its published list, and say what was found.
+
+    A coded field is written as a code only when its value is one: a number already, or text
+    that names exactly one entry. Anything else keeps the originator's text, and
+    `code_lookup` says why -- ambiguous, no entry, list unavailable -- so the writer can put
+    the text beside the field rather than in it.
+    """
+    from wod_etl.reference.code_lists import lookup_code
+
+    for sid, entry in out["secondary_headers"].items():
+        if not entry.get("is_coded") or entry.get("value") in (None, ""):
+            continue
+        result = lookup_code("secondary_header", int(sid), entry["value"])
+        _apply_lookup(entry, result)
+    for entry in out["variable_specific_headers"].values():
+        for vid, header in entry["headers"].items():
+            if not header.get("code_table") or header.get("value") in (None, ""):
+                continue
+            result = lookup_code("variable_specific_header", int(vid), header["value"])
+            _apply_lookup(header, result)
+
+
+def _apply_lookup(entry: Dict[str, Any], result: Dict[str, Any]) -> None:
+    from wod_etl.reference.code_lists import describe_lookup
+
+    entry["code_lookup"] = {k: v for k, v in result.items()
+                            if k in ("status", "code", "label", "candidates", "possible",
+                                     "field", "code_list", "retrieved", "verified", "error")}
+    entry["code_lookup"]["summary"] = describe_lookup(result)
+    if result.get("status") == "matched":
+        entry["originator_value"] = entry["value"]
+        entry["value"] = result["code"]
 
 
 if __name__ == "__main__":

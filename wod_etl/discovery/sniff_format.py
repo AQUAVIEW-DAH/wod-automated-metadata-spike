@@ -14,6 +14,7 @@ bytes that are not text and records a parse error instead of a format.
 description; where the two differ it is because several families share one reader.
 Never raises -- an unreadable file comes back as a family with `readable: False`.
 """
+import csv
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -155,8 +156,8 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
                        note="Readme, log or metadata. It may still hold coordinates or a "
                             "sentinel legend -- read it during triage, do not process it.")
 
-    numeric = _numeric_fraction(body)
     delim = _best_delimiter(body)
+    numeric = (_numeric_field_fraction(body, delim[0]) if delim else _numeric_fraction(body))
 
     # A delimiter that holds across every row is stronger evidence of a table than numeric
     # density is, because a legitimate table may be mostly text columns -- a station list
@@ -246,12 +247,50 @@ def _numeric_fraction(rows: List[str]) -> float:
     return numeric / total if total else 0.0
 
 
+def _numeric_field_fraction(rows: List[str], char: str) -> float:
+    """Share of delimited fields that are numbers or coordinates, splitting as csv does.
+
+    Splitting on every comma and space instead breaks one quoted remark into a dozen words
+    and dilutes the count; and a station list's positions are written `142°18'E` or
+    `49-46.9858S`, which are numbers in every sense but float()'s.
+    """
+    from wod_etl.staging.parse import parse_coordinate
+
+    total = numeric = 0
+    for row in rows:
+        try:
+            fields = next(csv.reader([row], delimiter=char))
+        except (csv.Error, StopIteration):
+            fields = row.split(char)
+        for field in fields:
+            f = field.strip()
+            if not f:
+                continue
+            total += 1
+            try:
+                float(f)
+                numeric += 1
+            except ValueError:
+                if re.search(r"\d", f) and re.search(r"[NSEW\u00b0]", f) \
+                        and parse_coordinate(f) is not None:
+                    numeric += 1
+    return numeric / total if total else 0.0
+
+
+# `LAT: 21.000000`, `DATE: 2015-11-09` -- a header line a staged cast writes above its table.
+# It contains digits, so it used to count as a data row with no delimiter in it, and a staged
+# cast of three levels (a bottle cast) failed the consistency test and sniffed as prose.
+_KEY_VALUE_LINE = re.compile(r"^\s*[A-Za-z][A-Za-z0-9_ ]{0,30}\s*[:=]\s+\S")
+
+
 def _likely_data_lines(lines: List[str], sample: int = 40) -> List[str]:
-    """Lines that look like data rows: not comments, and containing a number."""
+    """Lines that look like data rows: not comments, not `Key: value`, and with a number."""
     out = []
     for line in lines:
         s = line.strip()
         if s.startswith(("#", "//", "%", "*", ";", "!")):
+            continue
+        if _KEY_VALUE_LINE.match(s) and not any(d in s for d, _n in _DELIMITERS):
             continue
         if any(c.isdigit() for c in s):
             out.append(line.rstrip("\n"))
@@ -273,17 +312,35 @@ def _header_plus_one_row(lines: List[str], row: str):
     if header is None:
         return None
     for char, name in _DELIMITERS:
-        n = header.count(char)
-        if n >= 1 and row.count(char) == n:
+        n = _separator_count(header, char)
+        if n >= 1 and _separator_count(row, char) == n:
             return char, name, n + 1
     return None
+
+
+def _separator_count(line: str, char: str) -> int:
+    """How many times `char` separates fields in `line`, ignoring any inside quotes.
+
+    A raw character count is fooled by a quoted free-text column: a station list whose last
+    field is `"CTD, trawl, NORPAC, 2m-ring net"` on one row and `"CTD, NORPAC"` on the next
+    has a different comma count on every row, failed the consistency test, and was filed as
+    prose -- unreadable, so triage never saw the positions in it.
+    """
+    if char not in line:
+        return 0
+    if '"' not in line:
+        return line.count(char)
+    try:
+        return len(next(csv.reader([line], delimiter=char))) - 1
+    except (csv.Error, StopIteration):
+        return line.count(char)
 
 
 def _best_delimiter(rows: List[str]):
     """The delimiter that splits the most rows into an identical, >1 field count."""
     best = None
     for char, name in _DELIMITERS:
-        counts = [r.count(char) for r in rows]
+        counts = [_separator_count(r, char) for r in rows]
         if not any(counts):
             continue
         modal = max(set(counts), key=counts.count)

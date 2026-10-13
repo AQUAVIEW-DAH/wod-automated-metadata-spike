@@ -76,6 +76,29 @@ QC_FILL_VALUE = -1
 CF_CONVENTIONS = "CF-1.8"
 WOD_VERSION = "WOD23"
 
+# ------------------------------------------------------- WOD code lists
+# Coded metadata fields (platform, institution, instrument, probe type, originator's units,
+# scale, gear, life stage...) hold a CODE from a list WOD publishes online. The originator's
+# text is looked up in that list and written as a code only when exactly one entry matches;
+# otherwise the text is kept beside the field as `<field>_originator_text` and the lookup
+# result says why. See wod_etl/reference/code_lists.py.
+#
+# The lists are cached here with the date they were retrieved, and refetched after
+# CODE_LIST_MAX_AGE_DAYS -- they change between WOD releases.
+CODE_LIST_CACHE_DIR = DATA_DIR / "reference_cache" / "wod_code_lists"
+CODE_LOOKUP = os.environ.get("WOD_CODE_LOOKUP", "1").strip().lower() in ("1", "true", "yes", "on")
+CODE_LIST_FETCH = os.environ.get("WOD_CODE_LIST_FETCH", "1").strip().lower() in (
+    "1", "true", "yes", "on")
+CODE_LIST_MAX_AGE_DAYS = float(os.environ.get("WOD_CODE_LIST_MAX_AGE_DAYS", "30"))
+
+# ------------------------------------------------- taxa-records (plankton)
+# Table 6a Biological Header fields without which a count cannot be interpreted -- gear (7),
+# tow type (4), mesh (3), volume filtered (1) or tow distance (14), preservative (10), count
+# method (13). A JUDGEMENT, not a manual table: the ids are WOD's, the choice is ours. A haul
+# that lacks one is reported, never filled in. Fields grouped in a tuple are alternatives:
+# either satisfies the requirement.
+KEY_BIOLOGICAL_FIELD_IDS = (7, 4, 3, (1, 14), 10, 13)
+
 # --------------------------------------------------------- dataset routing
 # What a file is processed as when nothing identifies it and the caller has asked for
 # unidentified files to be processed anyway. It is an ASSUMPTION, never a classification:
@@ -153,4 +176,7 @@ def describe() -> dict:
         "run_wod_qc": RUN_WOD_QC,
         "on_file_error": ON_FILE_ERROR,
         "text_encodings": list(TEXT_ENCODINGS),
+        "code_lookup": CODE_LOOKUP,
+        "code_list_fetch": CODE_LIST_FETCH,
+        "code_list_cache_dir": str(CODE_LIST_CACHE_DIR),
     }

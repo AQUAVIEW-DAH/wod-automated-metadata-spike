@@ -19,6 +19,8 @@ def write_staged_cast(
     time: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     notes: Optional[List[str]] = None,
+    sources: Optional[List[str]] = None,
+    time_zone: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Write a header block plus a CSV table to `output_path`.
 
@@ -42,15 +44,24 @@ def write_staged_cast(
 
     Column names must carry their units -- `Temp (deg C)`, `DO (mg/L)`, `Depth (m)` --
     because unit detection reads the full raw column name and nothing else.
+
+    `sources` names the raw files the cast was built from, one `# Source:` line each; they
+    reach the NetCDF as `source_files_raw`, and `notes` reach it as `comment`. `time_zone`
+    states the zone of `date` and `time` when it is not UTC (`"UTC+10"`, `"local"`): a
+    numeric offset with a time of day is converted to UTC by the writer, anything else is
+    recorded and left alone.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     lines = [f"# {k}: {v}" for k, v in (metadata or {}).items() if v not in (None, "")]
+    lines += [f"# Source: {src}" for src in (sources or []) if src]
     lines += [f"# Note: {n}" for n in (notes or []) if n]
     lines += [f"LAT: {float(latitude):.6f}", f"LON: {float(longitude):.6f}", f"DATE: {date}"]
     if time:
         lines.append(f"TIME: {time}")
+    if time_zone:
+        lines.append(f"TIME_ZONE: {time_zone}")
 
     n = 0
     with open(output_path, "w", newline="", encoding="utf-8") as f:
@@ -64,3 +75,33 @@ def write_staged_cast(
 
     return {"output_path": str(output_path), "header_lines": len(lines),
             "columns": list(columns), "data_rows": n}
+
+
+def write_staged_table(
+    output_path,
+    columns: List[str],
+    rows: Iterable[Iterable[Any]],
+    *,
+    source: str,
+    notes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Write a harvested table -- a station list read out of a PDF, a trawl log -- as CSV.
+
+    Not a cast: it has no position of its own and `process_accession` skips it as a sidecar
+    or by its contents. It exists so a value taken from a report can be read back, cited and
+    cross-checked (`read_station_list`, `reconcile_stations`) like any other file. `source`
+    is the citation -- `extract_pdf_rows` returns one in `info["source"]`.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        f.write(f"# Source: {source}\n")
+        for note in notes or []:
+            f.write(f"# Note: {note}\n")
+        w = csv.writer(f)
+        w.writerow(columns)
+        for row in rows:
+            w.writerow(list(row))
+            n += 1
+    return {"output_path": str(output_path), "columns": list(columns), "data_rows": n}

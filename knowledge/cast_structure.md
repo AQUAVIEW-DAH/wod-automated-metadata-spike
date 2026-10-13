@@ -91,11 +91,13 @@ For PI assignment, plankton is identified as variable **14** (all plankton), **�
 (zooplankton) and **−5006** (phytoplankton), p.30. **These are not Table 3a codes** and there
 is no Table 3a plankton variable at all.
 
-This pipeline writes Table 3a profiles only. A plankton dataset must be reported as needing
-the biological path, not forced onto a level. The field definitions for both sections are
-extracted — Tables 6a/6b and 7a/7b — and
-[`plankton_biomass.md`](plankton_biomass.md) covers the Taxa-Record model, the Table 8 code
-ranges, the Plankton Grouping Code, and what a plankton writer would still need.
+The profile path writes Table 3a profiles only, and never forces plankton onto a level.
+Plankton goes through the same phase packages in its own record shape --
+`write_staged_haul`, `map_haul`, `write_taxa_netcdf`, `validate_taxa_netcdf`, driven by
+`wod_etl.orchestration.process_taxa` -- which write the Biological Header and Taxa-Records. The field definitions for both sections are extracted
+— Tables 6a/6b and 7a/7b — and [`plankton_biomass.md`](plankton_biomass.md) covers the
+Taxa-Record model, the Table 8 code ranges, the Plankton Grouping Code, and what the
+plankton path does and does not do.
 
 ---
 
@@ -116,13 +118,14 @@ What this pipeline writes, and where each section lands:
 
 | WOD section | In the output file |
 | --- | --- |
-| Primary header | `lat`, `lon`, `time` on the `casts` dimension; `cast_id` with `cf_role = profile_id` |
-| Secondary header | `secondary_header_<id>_<name>` global attributes, keyed by Table 4a ID |
+| Primary header | `lat`, `lon`, `time`, `date` and `GMT_time` (fill when no time of day) on the `casts` dimension; `cast_id` with `cf_role = profile_id` |
+| Secondary header | `secondary_header_<id>_<name>` global attributes (per-cast variables when casts differ), keyed by Table 4a ID; a coded one is a code, or the originator's text in `_originator_text` with the lookup result |
+| Character data | `originator_cruise_id`, `principal_investigator` |
 | Measured variables | one variable per WOD code on `z_obs`, each with `wod_variable_code` and the Table 3a standard unit |
 | Depth | `z` on `z_obs`, `positive = down`, metres — the axis, not a variable |
 | QC | `z_qc` and `<var>_qc`, Table 12 values with `flag_values`/`flag_meanings` |
-| Variable-specific secondary header | **not written** — originator units are recorded in `unit_conversions` provenance instead |
-| Biological header, taxa/biomass | **not written** — see above |
+| Variable-specific secondary header | `wod_variable_specific_header_<id>` attributes on each variable (originator's units, scale, instrument...), coded where the list has one match; plus `originator_units` and `measurement_scale` |
+| Biological header, taxa/biomass | **not in a profile file** — written by `wod_etl.writers.write_taxa_netcdf` as `b_<id>_<name>` per haul and `t_<id>_<name>` per Taxa-Record; see [`plankton_biomass.md`](plankton_biomass.md) |
 
 The full contract is in *The intermediate format* in
 [`accession_field_guide.md`](accession_field_guide.md).

@@ -5,7 +5,11 @@
 ```python
 from wod_etl.staging import (parse_coordinate, parse_timestamp, pressure_to_depth,
                              read_table, clean_sentinels, group_rows, fold_unit_row,
-                             combine_levels, combine_on_key, write_staged_cast)
+                             combine_levels, combine_on_key, pivot_long, melt_matrix,
+                             read_station_list, join_station_list,
+                             reconcile_stations, check_track,
+                             extract_pdf_rows, write_staged_table, write_staged_cast,
+                             write_staged_haul, read_staged_haul)
 ```
 
 For the shapes these exist to handle -- coordinate forms, non-English headers, sentinel
@@ -36,6 +40,9 @@ Peek at it and at its siblings before deciding. Five signals, each with a fix:
 | A second header row of units | Units invisible to detection | `fold_unit_row` |
 | One file per depth level | Levels of one cast, split up | `combine_levels` |
 | One file per variable | Variables of one cast, split up | `combine_on_key` |
+| `StNo, parm, depth, value` | Long format: the variable is named in a cell | `pivot_long` |
+| Taxa down, stations across | A count matrix | `melt_matrix`, then `write_staged_haul` |
+| Positions only in a report table | A PDF holds the station list | `extract_pdf_rows` |
 
 **The coordinates may not be in any data file at all.** Positions and dates are sometimes
 stated only in prose in the dataset's readme PDF. Read the readmes before concluding a
@@ -43,7 +50,7 @@ dataset cannot be staged.
 
 ---
 
-## `read_table(path, header_row=0, encoding=None, drop_blank_rows=True, delimiter=",")`
+## `read_table(path, header_row=0, encoding=None, drop_blank_rows=True, delimiter=",", comment_prefix=None)`
 
 Returns `(columns, rows, info)`. Handles what stops `load_tabular` before it starts:
 
@@ -60,6 +67,9 @@ Returns `(columns, rows, info)`. Handles what stops `load_tabular` before it sta
 {"encoding": "utf-8-sig", "delimiter": ",", "rows_in_file": 1019,
  "blank_rows_dropped": 510, "data_rows": 507, "duplicate_columns": []}
 ```
+
+`comment_prefix="#"` drops `# ...` rows before the header is located -- what a staged table's
+`# Source:` lines need.
 
 **Check `blank_rows_dropped` and `duplicate_columns`.** A large blank count confirms the
 double-spacing; duplicates mean a merged header that needs decoding by hand.
@@ -219,6 +229,101 @@ key column before joining when the files spell their depths differently.
 
 ---
 
+## `read_station_list(source, *, station=None, latitude=None, longitude=None, date=None, time=None, year=None, time_zone=None, header_row=0)` and `join_station_list(cast_keys, stations)`
+
+The positions-in-a-sibling-file pattern as two calls. `read_station_list` detects the station,
+latitude, longitude, date, time and year columns from the header (or takes them by name),
+parses every coordinate form `parse_coordinate` does -- including `142°18’E` -- and returns
+`{station_key: {"station", "latitude", "longitude", "date", "time", "time_known",
+"time_zone", "row", "raw", "source"}}` in file order.
+
+```python
+stations, info = read_station_list(SRC / "SHU1505_StationInfo.csv")
+info["dropped"]      # footer remarks in the station column, by row -- never silent
+info["duplicates"]   # a re-occupied station: key '7#2'. Match on station AND date then.
+matched, report = join_station_list(cast_keys, stations)
+report["casts_without_station"], report["stations_without_cast"]   # report BOTH sides
+```
+
+Keys are compared through `normalise_station`: `St-01`, `stn 1`, `Station 1` and `1` meet.
+A zone named in a header (`Time (UTC)`) is recorded; nothing is converted. `source` may also
+be `(columns, rows)` -- rows from `extract_pdf_rows`, for instance.
+
+---
+
+## `pivot_long(tables, keys, variable, value, *, key_aliases=None, columns=None)`
+
+Long format names the variable in a cell -- `Cruise,StNo,parm,depth,value` -- so the table's
+one measurement column is called `value` and maps to nothing. Read as it stands it skipped as
+a station list. Pivot it, usually across one file per variable:
+
+```python
+tables = [read_table(p)[:2] for p in (temp_csv, sal_csv, fluor_csv)]
+cols, rows, info = pivot_long(
+    tables, keys=["StNo", "depth"], variable="parm", value="value",
+    key_aliases={"depth": ["dep"]},                   # the temperature file says 'dep'
+    columns={"Temperature": "Temperature (deg C)", "Salinity": "Salinity (PSU)",
+             "fluorescence": "Fluorescence (ug/l)"})  # the unit goes in HERE
+for (station,), levels in group_rows(rows, cols, ["StNo"]).items(): ...
+```
+
+Numeric keys meet as numbers (`4.969` = `4.9690`). **Read `info`**: `conflicts` (one key and
+variable, two values -- the first is kept and every one listed), `levels_missing_variable`,
+and `per_table` (which key columns each table used).
+
+## `melt_matrix(rows, *, header_rows, label_columns, header_names, fill_down=(), fill_across=True, thousands=",", blank="absent")`
+
+A count sheet typed as taxa down the rows and samples across the columns, with one or more
+header rows naming each sample (station, then mesh). Returns one row per non-blank cell:
+label columns + one column per header row + `value`. Header values are carried across blank
+cells (a merged spreadsheet cell); `fill_down` names label columns written once per group.
+**A blank cell is "not found in this sample" by default** (`blank="absent"`, no row written,
+counted in `info["blank_cells"]`) -- `blank="zero"` is a claim the originator must have made.
+
+---
+
+## `reconcile_stations(sources, *, position_tolerance_km=5.0)` and `check_track(stations, *, outlier_factor=1.75, bounding_box=None)`
+
+A position or date taken from one file is a claim. Accessions state each station two or three
+times -- station list, trawl log, report tables, a map -- and the copies disagree more often
+than anyone checks.
+
+```python
+report = reconcile_stations({"SHU1505_StationInfo.csv": stations,
+                             "report p.4 Table 1": table1,          # extract_pdf_rows
+                             "report p.5 Table 2 (trawls)": trawls},
+                            position_tolerance_km=10)
+report["conflicts"]     # [{"station": "6", "field": "date", "values": {...}}, ...]
+check_track(stations)["flags"]   # an outlying hop, time running backwards, impossible speed
+```
+
+Choose the tolerance for what the sources ARE: two transcriptions of one station list should
+agree to the arc-minute, while a trawl is towed some kilometres from its CTD station.
+`check_track` needs the stations in occupation order; a hop over `outlier_factor` times the
+median hop is the signature of a mistyped degree. Neither changes anything: settle each
+conflict from a third source or with the submitter, and record the choice in `notes`.
+
+---
+
+## `extract_pdf_rows(path, page, row_pattern, columns)` and `write_staged_table(path, columns, rows, *, source, notes=None)`
+
+Rows of a table that exists only in a cruise report. PDF text loses the layout, so describe
+ONE row as a regex, one group per column, against the page text with whitespace collapsed:
+
+```python
+cols, rows, info = extract_pdf_rows(
+    "0-data/Final.Report.U2015-015.JAPAN.pdf", page=8,
+    row_pattern=r"(\d+) (Nov\. \d{2}, \d{4}) (\S+E) (\S+N) (\d+\.\d) (\d+)",
+    columns=["Station", "Date", "Long", "Lat", "SST (deg C)", "Tow depth (m)"])
+info["source"]   # 'Final.Report.U2015-015.JAPAN.pdf, PDF page 8 (printed page 5)'
+```
+
+`page` is the PDF's own index. **Compare `info["matches"]` with the printed table**: a row the
+pattern misses is absent, not flagged. `write_staged_table` saves the rows with a `# Source:`
+citation so they can be read back with `read_station_list` and reconciled.
+
+---
+
 ## `parse_coordinate(value, minutes=None, hemisphere=None)`
 
 Signed decimal degrees from every form NCEI submissions use, or `None`.
@@ -228,8 +333,13 @@ parse_coordinate(62.16)             #   62.16
 parse_coordinate("170 30.01 W")     # -170.500167
 parse_coordinate("64-05.8454N")     #   64.097423
 parse_coordinate("62 09 36 N")      #   62.16       degrees, minutes, seconds
+parse_coordinate("142°18’E")        #  142.3        degree sign and a CURLY quote
+parse_coordinate("N 21°00.5'")      #   21.008333   hemisphere first
 parse_coordinate(62, 9.6, "N")      #   62.16       three separate columns
 ```
+
+Degree, minute and second marks -- `°`, `′`, `’`, `'`, `″`, `"`, `deg`, `min` -- are
+separators. A Word- or Japanese-authored list writes `’` (U+2019), not an ASCII apostrophe.
 
 A hemisphere letter beats a leading minus sign, because station lists often carry both.
 
@@ -240,10 +350,12 @@ check that they agree before trusting either.
 
 ---
 
-## `parse_timestamp(value, time_value=None)`
+## `parse_timestamp(value, time_value=None, year=None)`
 
-A datetime from the usual spreadsheet forms, including single-digit months (`2023/6/1`)
-and a separate time column (`parse_timestamp("20230624", "031903")`).
+A datetime from the usual spreadsheet forms, including single-digit months (`2023/6/1`),
+a separate time column (`parse_timestamp("20230624", "031903")`), month names
+(`"Nov. 09, 2015"`, `"12-Nov-2015"`, `"Sept. 3 2015"`), and a year held in its own column
+(`parse_timestamp("Nov. 09", year=2015)`).
 
 ---
 
@@ -268,7 +380,7 @@ does not parse, and log what was dropped.
 
 ---
 
-## `write_staged_cast(path, columns, rows, *, latitude, longitude, date, time=None, metadata=None, notes=None)`
+## `write_staged_cast(path, columns, rows, *, latitude, longitude, date, time=None, metadata=None, notes=None, sources=None, time_zone=None)`
 
 Writes the header block Phase 1 reads, then the CSV table.
 
@@ -279,12 +391,21 @@ write_staged_cast(
     latitude=62.16, longitude=-170.500167, date="2023-06-20", time="14:55",
     metadata={"Accession": "0287423", "Platform": "Oshoro maru",
               "Station": "a01", "Bottom Depth": 47},
-    notes=["Depth computed from PrDM by UNESCO 1983 at the cast latitude"])
+    notes=["Depth computed from PrDM by UNESCO 1983 at the cast latitude"],
+    sources=["data/raw/0287423/2-CTD/C145-001.asc", "data/raw/0287423/2-CTD/CTD_readme.csv"])
 ```
 
-`metadata` keys become `# Key: value` lines, which `generate_field_mapping` mines for
-Table 4a secondary headers — Accession, Platform, Station, Cast, Bottom Depth and
-Instrument are all recognised.
+`metadata` keys become `# Key: value` lines, and every one is placed or reported:
+Accession, Platform, Station, Cast and Bottom Depth become Table 4a secondary headers;
+`Cruise` is the originator's cruise code (character data, not the platform); `Instrument`,
+`Method` and the other Table 5a keys apply to **every measured variable**; a key with no WOD
+field lands in `unresolved` and in the output's `metadata_not_placed`. Coded values
+(platform, instrument) are looked up in WOD's code lists -- see the mapping README.
+
+`notes` reach the NetCDF as `comment` and `sources` as `source_files_raw`. `time_zone`
+states the zone of `date`/`time` when it is not UTC: a numeric offset (`UTC+10`) with a time
+of day is converted to UTC by the writer; a named zone or a date alone is recorded, not
+shifted.
 
 **Two rules for the staged file:**
 
@@ -299,9 +420,47 @@ Instrument are all recognised.
 
 ---
 
+## `write_staged_haul(path, records, *, latitude, longitude, date, time=None, time_zone=None, upper_depth=None, lower_depth=None, biological_header=None, metadata=None, notes=None, sources=None)`
+
+**Biological data -- plankton counts, biomass -- staged as one haul.** WOD does not store it
+as a profile: a net haul samples a depth *range*, and each observation is a taxon with
+qualifiers. A haul is the counterpart of a cast: a position and date, a Biological Header
+(Table 6a: how it was collected) and Taxa-Records (Table 7a). Background:
+[`knowledge/plankton_biomass.md`](../../knowledge/plankton_biomass.md); the rest of the path
+is `wod_etl.orchestration.process_taxa`.
+
+`records` is `(columns, rows)` or a list of dicts. Recognised columns (a bracketed unit is
+ignored for matching; `taxa_record_field(name)` gives a column's field):
+
+| Column | Table 7a field |
+| --- | --- |
+| `Taxon` / `Species` / `Taxa or species` | resolved later to field 1, the variable number |
+| `Upper depth (m)`, `Lower depth (m)` | 2, 3 -- or pass `upper_depth`/`lower_depth` for the whole haul |
+| `Life stage` / `Stage`, `Sex` | 5, 6 (coded) |
+| `Count` / `Number` / `Abundance` | 10, count per UNIT |
+| `Unit` | 20, the originator's UNIT for every "per UNIT" field |
+| `Biomass`, `Volume`, `Wet weight`, `Dry weight`, `Carbon`, `Size min/max`, `Length`... | 4, 12, 13, 14, 25, 18/19, 22... |
+
+A column matching none is listed in `unmapped_columns`. `biological_header` is keyed by
+Table 6a name or id -- `{"Gear code": "NORPAC Net", "Mesh size": 100, "Type of tow":
+"vertical tow"}`; a key that is not a Table 6a field is **not** written as one: it becomes a
+note and is listed in `unknown_biological_fields`.
+
+The return carries **`missing_biological_fields`**: of gear, tow type, mesh, volume filtered
+*or* tow distance, preservative and count method (`config.KEY_BIOLOGICAL_FIELD_IDS`), those
+the haul does not state. Report them. Without volume filtered or tow distance a count stays
+per sample; nothing here invents one.
+
+The file is a `# Record type: WOD taxa-records` marker, `# Key: value` lines (`# Bio
+<field>:` for Table 6a), `LAT:`/`LON:`/`DATE:`, then a CSV. `classify_dataset` recognises
+the marker, so `process_accession` skips a staged haul with the route rather than failing
+it. `read_staged_haul(path)` reads one back.
+
+---
+
 ## Two worked patterns
 
-Almost every accession that needs staging is one of these two shapes.
+Almost every accession that needs staging is one of these shapes.
 
 ### A. Positions in a sibling station list
 
@@ -309,27 +468,20 @@ The data files hold only the measurement table; a station list keyed by file nam
 carries the coordinates. Common for CTD, XCTD and XBT submissions.
 
 ```python
-cols, rows, info = read_table(SRC / "CTD_readme.csv")        # often cp932
-stations = {}
-for r in rows:
-    lat, lon = parse_coordinate(r[3], r[4], r[5]), parse_coordinate(r[6], r[7], r[8])
-    stamp = parse_timestamp(r[10])
-    if lat is None or lon is None or stamp is None:
-        continue                                              # header or footer row
-    stations[r[2].strip()] = {"station": r[1], "lat": lat, "lon": lon, "time": stamp}
-
-for cast_file in sorted(SRC.glob("*.asc")):
-    meta = stations.get(cast_file.stem)
-    if meta is None:
-        print(f"!! {cast_file.name}: no station-list entry -- not staged")   # never silent
-        continue
-    cols, levels = read_instrument_export(cast_file)
-    write_staged_cast(OUT / f"{cast_file.stem}.csv", cols, levels,
-                      latitude=meta["lat"], longitude=meta["lon"],
-                      date=f"{meta['time']:%Y-%m-%d}", time=f"{meta['time']:%H:%M}",
+stations, info = read_station_list(SRC / "CTD_readme.csv")        # cp932 is handled
+casts = {p.stem: p for p in sorted(SRC.glob("*.asc"))}
+matched, report = join_station_list(casts, stations)
+for name in report["casts_without_station"]:
+    print(f"!! {name}: no station-list entry -- not staged")      # never silent
+for name, s in matched.items():
+    cols, levels = read_instrument_export(casts[name])
+    write_staged_cast(OUT / f"{name}.csv", cols, levels,
+                      latitude=s["latitude"], longitude=s["longitude"],
+                      date=s["date"], time=s["time"], time_zone=s["time_zone"],
                       metadata={"Accession": ACC, "Platform": SHIP,
-                                "Station": meta["station"], "Cast": cast_file.stem},
-                      notes=[f"source: {cast_file.name} + station list"])
+                                "Station": s["station"], "Cast": name},
+                      sources=[f"data/raw/{ACC}/{casts[name].name}", s["source"]],
+                      notes=[f"position and date from {s['source']}"])
 ```
 
 **Reconcile the two file lists before staging.** A name present on one side and absent on the
@@ -371,6 +523,40 @@ merges two casts into one.
 
 **Sort levels by depth.** Bottle sheets are often in bottle-firing order, which is bottom-up,
 and an unsorted profile trips the depth-inversion check at every level.
+
+### C. Long format, one file per variable, positions in a station list
+
+Accession 0303928: temperature, salinity and fluorescence each in its own
+`Cruise,StNo,ObsItem,parm,depth,value` file covering every station, and the positions in
+`SHU1505_StationInfo.csv` as `142°18’E` with the year in its own column. No custom parser:
+
+```python
+stations, _ = read_station_list(SRC / "SHU1505_StationInfo.csv")
+tables = [read_table(SRC / f)[:2] for f in ("U2015-015_CTD_Temp.csv",
+                                             "U2015-015_CTD_Salinity.csv",
+                                             "U2015-015_CTD_fluor.csv")]
+cols, rows, info = pivot_long(tables, keys=["StNo", "depth"], variable="parm",
+                              value="value", key_aliases={"depth": ["dep"]},
+                              columns={"Temperature": "Temperature (deg C)",
+                                       "Salinity": "Salinity (PSU)",
+                                       "fluorescence": "Fluorescence (ug/l)"})
+groups = group_rows(rows, cols, ["StNo"])
+matched, report = join_station_list([k[0] for k in groups], stations)
+for (st,), levels in groups.items():
+    s = matched[st]
+    levels = sorted(([r[1]] + r[2:] for r in levels), key=lambda r: float(r[0]))
+    write_staged_cast(OUT / f"SHU1505_st{int(st):02d}.csv",
+                      ["Depth (m)"] + cols[2:], levels,
+                      latitude=s["latitude"], longitude=s["longitude"], date=s["date"],
+                      metadata={"Accession": "0303928", "Cruise": "SHU1505",
+                                "Platform": "Shunyo-Maru", "Station": st,
+                                "Cast": f"SHU1505_st{int(st):02d}"},
+                      sources=[...], notes=[...])
+```
+
+Then cross-check before trusting the station list: `reconcile_stations` against the cruise
+report's Table 1 found station 6 dated a day apart, and `check_track` flagged station 11's
+hop at twice the median -- the trawl log puts it a degree east.
 
 ---
 

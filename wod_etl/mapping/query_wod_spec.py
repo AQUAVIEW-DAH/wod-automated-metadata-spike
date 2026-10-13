@@ -284,6 +284,65 @@ def _not_stored_key(norm: str, exact_only: bool = False) -> Optional[str]:
     return None
 
 
+# ------------------------------------------------------------ fluorescence
+# A fluorometer reports chlorophyll fluorescence. WOD has no fluorescence variable; it has
+# Chlorophyll (code 11, ug/l), and a fluorometer calibrated to a chlorophyll concentration IS
+# how most profile chlorophyll is measured. So the UNIT decides, not the name:
+#   * a mass concentration (ug/l, mg/m3, ppb)  -> code 11, with a comment saying it is
+#     fluorometer-derived rather than extracted;
+#   * RFU, volts, counts, or anything else      -> no code. It cannot be written as ug/l
+#     without a calibration nobody has supplied, so it is dropped and reported;
+#   * no unit at all                            -> no code, unless the name is a Sea-Bird
+#     calibrated channel (flSP, flECO-AFL...), whose output is a concentration by definition.
+# This used to depend on someone renaming the column to 'Chlorophyll' during staging, which
+# hid the decision and was easy to get wrong in either direction.
+_FLUOR_NAME = re.compile(r"(?:^|_)(?:chl_?)?fluor(?:escence|ometer|o)?(?:_|$)|^fl(?:u)?(?:_|$)")
+SEABIRD_FLUOR_CHANNELS = {"flsp", "flspp", "flecoafl", "fleco_afl", "flc", "flscufa",
+                          "flspr", "wetstar", "chl_fluorescence"}
+_MASS_CONCENTRATION = re.compile(
+    r"^(?:[µu]g\s*/\s*l|[µu]g\s*l-?1|mg\s*/\s*m\s*\^?\s*3|mg\s*m-?3|ppb|[µu]g/dm3)$", re.I)
+# Fluorescence of something that is NOT chlorophyll. CDOM/FDOM are in NOT_STORED, and the
+# phycobilins, tracer dyes and oil have no Table 3a code either -- yet CDOM is routinely
+# reported in 'ppb' (quinine sulfate equivalents) and phycocyanin in 'ug/l', so a unit test
+# alone would write them as Chlorophyll. The rule does not claim them; the registry does.
+_OTHER_FLUOROPHORE = re.compile(
+    r"(?:^|_)(?:cdom|fdom|dom|phyco\w*|rhodamine|rwt|uranine|fluorescein|oil|crude|"
+    r"hydrocarbons?|tryptophan|trp)(?:_|$)")
+
+
+def fluorescence_rule(column_name: str) -> Optional[Dict[str, Any]]:
+    """For a fluorometer column: the code it maps to (11 or None) and why. None otherwise."""
+    norm = normalize_name(column_name)
+    if not norm or not (norm in SEABIRD_FLUOR_CHANNELS or _FLUOR_NAME.search(norm)):
+        return None
+    if _OTHER_FLUOROPHORE.search(norm):
+        return None
+    unit = extract_unit(column_name)
+    unit_text = canonical_unit_text(unit or "").strip()
+    if unit_text and _MASS_CONCENTRATION.match(unit_text):
+        return {"code": 11, "unit": unit,
+                "comment": f"Chlorophyll from an in-situ fluorometer: the originator's column "
+                           f"{column_name!r} is fluorescence reported as a concentration "
+                           f"({unit}). It is not extracted chlorophyll-a, and its accuracy "
+                           f"depends on the fluorometer's calibration."}
+    if not unit_text and norm in SEABIRD_FLUOR_CHANNELS:
+        return {"code": 11, "unit": None,
+                "comment": f"Chlorophyll from an in-situ fluorometer: {column_name!r} is a "
+                           f"Sea-Bird calibrated fluorometer channel, whose output is a "
+                           f"concentration. Not extracted chlorophyll-a."}
+    return {"code": None, "unit": unit,
+            "reason": (f"Fluorescence in {unit!r} is not a chlorophyll concentration, and WOD "
+                       f"has no fluorescence variable." if unit_text else
+                       "Fluorescence with no stated unit: it may be a concentration or a raw "
+                       "signal, and only a concentration can be written as Chlorophyll."),
+            "route": ("Drop it and report the drop. If the submitter supplies a calibration "
+                      "to ug/l, apply it in staging and name the column with that unit."
+                      if unit_text else
+                      "Find the unit (ISO metadata, readme, instrument export) and put it in "
+                      "the staged column name: 'Fluorescence (ug/l)' maps to Chlorophyll, "
+                      "'Fluorescence (RFU)' is dropped.")}
+
+
 def explain_column(column_name: str) -> Optional[Dict[str, Any]]:
     """Why a column has no WOD code, when the reason is known.
 
@@ -292,6 +351,10 @@ def explain_column(column_name: str) -> Optional[Dict[str, Any]]:
     Table 3a code at all and mapping them onto an adjacent one is worse than dropping them.
     """
     norm = normalize_name(column_name)
+    fluor = fluorescence_rule(column_name)
+    if fluor is not None and fluor["code"] is None:
+        return {"column": column_name, "variable": "fluorescence", "reason": fluor["reason"],
+                "route": fluor["route"], "do_not_alias": True}
     if not norm or match_variable(column_name) is not None:
         return None
     key = _not_stored_key(norm)
@@ -326,6 +389,9 @@ def match_variable(column_name: str) -> Optional[int]:
         return DEPTH_SENTINEL_CODE
     if NOT_THE_DEPTH_AXIS.match(norm):
         return None
+    fluor = fluorescence_rule(column_name)
+    if fluor is not None:
+        return fluor["code"]
 
     # A name WOD does not store must be blocked before the alias fallback, or it is captured
     # by the variable it is named after: 'potential_temperature' contains 'temperature', and

@@ -247,3 +247,46 @@ class TestVerifyOutputDirectly:
                        "observations": 0, "findings": [], "variables": {},
                        "flag_distribution": {}})
         assert "union across all 30 ocean basins" in text
+
+
+class TestVerifierJudgesWhatAReaderWouldMisread:
+    def _write(self, tmp_path, name, casts):
+        write_ragged_profiles(casts, str(tmp_path / name))
+
+    def test_a_small_negative_near_zero_is_an_offset_not_impossible(self, tmp_path):
+        from wod_etl.verify import verify_output
+
+        cast = make_cast(rows=40)
+        cast["df"]["Chl"] = np.where(np.arange(40) % 3 == 0, -0.02, 0.4)
+        cast["contract"]["column_mapping"].append(
+            {"raw_column": "Chl", "wod_code": 11, "wod_name": "Chlorophyll",
+             "target_unit": "Microgram liter-1"})
+        self._write(tmp_path, "a.nc", [cast])
+        r = verify_output(str(tmp_path))
+        kinds = {(f["finding"], f["severity"]) for f in r["findings"]}
+        assert ("near_zero_offset", "low") in kinds
+        assert not any(f["finding"] == "out_of_range_levels" for f in r["findings"])
+        assert r["variables"]["chlorophyll"]["out_of_range"]["near_zero_offset_levels"] == 14
+
+    def test_a_large_negative_is_still_out_of_range(self, tmp_path):
+        from wod_etl.verify import verify_output
+
+        cast = make_cast(rows=40)
+        cast["df"]["Chl"] = np.where(np.arange(40) % 3 == 0, -5.0, 0.4)
+        cast["contract"]["column_mapping"].append(
+            {"raw_column": "Chl", "wod_code": 11, "wod_name": "Chlorophyll",
+             "target_unit": "Microgram liter-1"})
+        self._write(tmp_path, "a.nc", [cast])
+        r = verify_output(str(tmp_path))
+        assert any(f["finding"] == "out_of_range_levels" for f in r["findings"])
+        assert not any(f["finding"] == "near_zero_offset" for f in r["findings"])
+
+    def test_a_cast_id_repeated_across_files_fails_verification(self, tmp_path):
+        from wod_etl.verify import verify_output
+
+        self._write(tmp_path, "a.nc", [make_cast()])
+        self._write(tmp_path, "b.nc", [make_cast(lat=62.4)])
+        r = verify_output(str(tmp_path))
+        assert not r["passed"]
+        dup = next(f for f in r["findings"] if f["finding"] == "duplicate_cast_id")
+        assert dup["severity"] == "high" and "a.nc" in dup["evidence"]

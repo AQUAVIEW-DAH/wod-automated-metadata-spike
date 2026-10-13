@@ -53,6 +53,13 @@ _SUSPECT_RATIOS = [
 ]
 _RATIO_TOLERANCE = 0.15
 
+# A value just below a lower bound of zero is usually not an impossible value but a sensor
+# zero offset: a fluorometer's dark count, a nutrient analyser's blank. Below the bound by no
+# more than this fraction of the variable's own 99th percentile, it is reported as an offset
+# rather than counted as out of range -- 0303928's fluorometer chlorophyll had 14% of levels
+# at -0.02 ug/l and was reported as 'enough levels are impossible to be worth reading'.
+NEAR_ZERO_FRACTION = 0.1
+
 
 def verify_output(processed_dir, sample_levels: int = 200_000) -> Dict[str, Any]:
     """Check every NetCDF in a directory against the manual's acceptable ranges.
@@ -69,7 +76,8 @@ def verify_output(processed_dir, sample_levels: int = 200_000) -> Dict[str, Any]
         "variables": {},
         "flag_distribution": {},
         "findings": [],
-        "checked": ["acceptable_range", "all_fill", "constant_value", "depth_axis"],
+        "checked": ["acceptable_range", "near_zero_offset", "all_fill", "constant_value",
+                    "depth_axis", "unique_cast_id"],
     }
     if not paths:
         report["passed"] = True
@@ -78,10 +86,11 @@ def verify_output(processed_dir, sample_levels: int = 200_000) -> Dict[str, Any]
 
     per_variable: Dict[str, Dict[str, Any]] = {}
     flags: Dict[str, Dict[int, int]] = {}
+    cast_ids: Dict[str, List[str]] = {}
 
     for path in paths:
         try:
-            _read_one(path, per_variable, flags, report, sample_levels)
+            _read_one(path, per_variable, flags, report, sample_levels, cast_ids)
         except Exception as e:                       # noqa: BLE001 - a bad file is a finding
             report["findings"].append(_finding(
                 "unreadable_output", "high", Path(path).name, None,
@@ -91,6 +100,7 @@ def verify_output(processed_dir, sample_levels: int = 200_000) -> Dict[str, Any]
 
     for name, v in sorted(per_variable.items()):
         report["variables"][name] = _summarize(name, v, report["findings"])
+    _check_cast_ids(cast_ids, report["findings"])
     report["flag_distribution"] = {
         name: {"total": sum(c.values()),
                "non_zero_pct": round(100.0 * sum(n for k, n in c.items() if k != 0)
@@ -111,14 +121,15 @@ def verify_output(processed_dir, sample_levels: int = 200_000) -> Dict[str, Any]
 
 
 # ------------------------------------------------------------------ reading
-def _read_one(path, per_variable, flags, report, sample_levels) -> None:
+def _read_one(path, per_variable, flags, report, sample_levels, cast_ids=None) -> None:
     import netCDF4 as nc
-
-    from wod_etl.qc_transforms.apply_qc_auditing import range_at_depth
 
     with nc.Dataset(path) as ds:
         report["casts"] += len(ds.dimensions.get("casts", ()) or ())
         report["observations"] += len(ds.dimensions.get("z_obs", ()) or ())
+        if cast_ids is not None and "cast_id" in ds.variables:
+            for cid in np.asarray(ds.variables["cast_id"][:]).ravel():
+                cast_ids.setdefault(str(cid), []).append(Path(path).name)
 
         z = _numeric(ds.variables["z"]) if "z" in ds.variables else None
         if z is not None:
@@ -219,9 +230,22 @@ def _summarize(name, v, findings) -> Dict[str, Any]:
         return out
 
     outside = (values < lo) | (values > hi)
+    near_zero = _near_zero_offset(values, lo, outside)
+    if near_zero.any():
+        n_nz = int(near_zero.sum())
+        findings.append(_finding(
+            "near_zero_offset", "low", None, name,
+            f"{n_nz} of {values.size} levels ({n_nz / values.size:.1%}) are below the lower "
+            f"bound of 0 by at most {abs(values[near_zero].min()):g} {v['units']} (minimum "
+            f"{values[near_zero].min():g}), small against the variable's own range",
+            "A sensor zero or dark offset, not impossible data. Keep the values as "
+            "submitted -- QC flags them downstream -- and say so in the report. Do not clip "
+            "them to zero: that changes the originator's numbers."))
+        outside = outside & ~near_zero
     n_out = int(outside.sum())
     fraction = n_out / values.size
     out["out_of_range"] = {"levels": n_out, "fraction": round(fraction, 4),
+                           "near_zero_offset_levels": int(near_zero.sum()),
                            "bound_at_surface": list(range_at_depth(v["wod_code"], 0.0))}
     if n_out == 0:
         return out
@@ -248,6 +272,34 @@ def _summarize(name, v, findings) -> Dict[str, Any]:
             "out_of_range_levels", "low", None, name, evidence,
             "A few extreme levels, which is normal in real casts. Reportable, not alarming."))
     return out
+
+
+def _near_zero_offset(values, lo, outside) -> np.ndarray:
+    """Levels below a lower bound of zero by a small fraction of the variable's scale."""
+    below = outside & (values < lo) & (lo == 0)
+    if not below.any():
+        return below
+    positive = values[values > 0]
+    if positive.size == 0:
+        return np.zeros_like(below)
+    scale = float(np.percentile(positive, 99))
+    return below & (values >= -NEAR_ZERO_FRACTION * scale)
+
+
+def _check_cast_ids(cast_ids: Dict[str, List[str]], findings) -> None:
+    """A cast id must identify one cast across the whole run, not only within its file."""
+    repeated = {cid: files for cid, files in cast_ids.items() if len(files) > 1}
+    if not repeated:
+        return
+    shown = "; ".join(f"{cid} in {', '.join(sorted(set(files))[:3])}"
+                      for cid, files in list(repeated.items())[:5])
+    findings.append(_finding(
+        "duplicate_cast_id", "high", None, "cast_id",
+        f"{len(repeated)} cast id(s) occur more than once across {len(cast_ids)} id(s): "
+        f"{shown}",
+        "cast_id is the CF profile_id: two casts sharing one are one cast to any tool that "
+        "merges these files. Give each cast an accession, cruise, cast or station and date "
+        "in its staged header -- the writer builds the id from those."))
 
 
 def _suspect_cause(values, lo, hi) -> str:

@@ -10,10 +10,10 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List, Set
 from urllib.parse import urljoin, urlparse, unquote
 
-import httpx
 from bs4 import BeautifulSoup
 
-from wod_etl.config import HTTP_TIMEOUT, USER_AGENT
+from wod_etl.config import HTTP_RETRIES, RAW_DIR
+from wod_etl.http_util import get_with_retries
 
 _SIZE_RE = re.compile(r"^([\d.]+)\s*([KMGT]?)B?$", re.IGNORECASE)
 _DATE_FORMATS = [
@@ -31,9 +31,34 @@ def list_remote_directory(
     _visited: Optional[Set[str]] = None,
     _depth: int = 0,
 ) -> Dict[str, Any]:
-    """List the contents of a local folder or an open HTTP directory index."""
+    """List the contents of a local folder, a local archive, or an open HTTP directory index.
+
+    Three inputs are resolved before anything is listed:
+
+    * an NCEI landing page, `/archive/accession/<n>` URL or bare accession number is turned
+      into its data directory (see `resolve_accession_url`) and that is listed, with the
+      resolution recorded under `resolved_from`;
+    * a versioned accession directory (`1.1/`, `2.2/`, each a full copy of the bundle) is
+      narrowed to the latest version, so a recursive crawl does not process every file once
+      per version;
+    * a local `.tar`, `.tar.gz`, `.tgz` or `.zip` is extracted under `data/raw/` and the
+      extracted folder is listed.
+    """
+    if os.path.isfile(url_or_path) and _is_archive(url_or_path):
+        return _list_archive(url_or_path, recursive, filter_extension)
     if os.path.exists(url_or_path):
         return _list_local_dir(url_or_path, recursive, filter_extension)
+
+    if _depth == 0 and _is_accession_reference(url_or_path):
+        resolved = resolve_accession_url(url_or_path)
+        if resolved.get("error"):
+            return {"source": url_or_path, "total_items": 0, "items": [],
+                    "error": resolved["error"], "hint": resolved.get("hint"),
+                    "accession_number": resolved.get("accession_number")}
+        listing = list_remote_directory(resolved["url"], recursive, filter_extension)
+        listing["resolved_from"] = url_or_path
+        listing["resolution"] = resolved
+        return listing
 
     visited = _visited if _visited is not None else set()
     base = _normalize(url_or_path)
@@ -43,13 +68,21 @@ def list_remote_directory(
     visited.add(base)
 
     try:
-        with httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(url_or_path, headers={"User-Agent": USER_AGENT})
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(get_with_retries(url_or_path).text, "html.parser")
     except Exception as e:
         return {"source": url_or_path, "error": f"{type(e).__name__}: {e}",
-                "total_items": 0, "items": []}
+                "total_items": 0, "items": [],
+                "hint": "NCEI answers 503 and times out often; this was retried "
+                        f"{HTTP_RETRIES} time(s) with backoff. Try again later, or point at "
+                        "a downloaded copy."}
+
+    if _depth == 0 and recursive:
+        latest = _latest_version(soup, url_or_path)
+        if latest:
+            listing = list_remote_directory(latest["url"], True, filter_extension, visited, 1)
+            listing["source"] = latest["url"]
+            listing["version"] = latest
+            return listing
 
     items: List[Dict[str, Any]] = []
     skipped_nav = 0
@@ -116,6 +149,145 @@ def accession_number(text: str):
         if m:
             return m.group(1).lstrip("0") or "0"
     return None
+
+
+def _is_accession_reference(text: str) -> bool:
+    return bool(_LANDING_PAGE.search(str(text)) or _ACCESSION_URL.search(str(text))
+                or _BARE_ACCESSION.match(str(text)))
+
+
+# The landing page is rendered client-side, but its static HTML still carries the FTP link
+# (and a JSON-LD copy of it): ftp://ftp-oceans.ncei.noaa.gov/nodc/archive/arc0238/0303535/.
+# The HTTPS directory is the same path under /data/oceans/.
+_ARCHIVE_PATH = re.compile(r"/archive/(arc\d{4})/(\d{5,7})/?", re.IGNORECASE)
+LANDING_PAGE_URL = ("https://www.ncei.noaa.gov/access/metadata/landing-page/bin/iso"
+                    "?id=gov.noaa.nodc:{number}")
+DATA_DIR_URL = "https://www.ncei.noaa.gov/data/oceans/archive/{arc}/{number}/"
+
+
+def resolve_accession_url(text: str) -> Dict[str, Any]:
+    """The HTTPS data directory for an accession, from its landing page, URL or number.
+
+    `{"url", "accession_number", "arc", "landing_page"}` on success. NCEI renders the file
+    listing with JavaScript, so the directory cannot be computed from the number -- but the
+    landing page's static HTML carries the FTP download link, and the archive bundle
+    (`arc0238`) in that link is the missing piece. Fetched with retries; on failure the
+    result carries `error` and a `hint` naming the page to open by hand.
+    """
+    number = accession_number(text)
+    if number is None:
+        return {"error": f"no accession number in {text!r}", "accession_number": None}
+    padded = number.zfill(7)
+    page = (text if str(text).startswith("http") and _LANDING_PAGE.search(str(text))
+            else LANDING_PAGE_URL.format(number=padded))
+    try:
+        html = get_with_retries(page).text
+    except Exception as e:                              # noqa: BLE001 - reported, not raised
+        out = _diagnose_empty(text)
+        out["error"] = (f"could not read the landing page {page} to find the data directory "
+                        f"({type(e).__name__}: {e})")
+        return out
+    for m in _ARCHIVE_PATH.finditer(html):
+        if m.group(2).lstrip("0") == number:
+            arc = m.group(1).lower()
+            return {"url": DATA_DIR_URL.format(arc=arc, number=padded),
+                    "accession_number": number, "arc": arc, "landing_page": page}
+    out = _diagnose_empty(text)
+    out["error"] = (f"the landing page {page} names no archive directory for accession "
+                    f"{number}; it may not be public yet")
+    return out
+
+
+_VERSION_DIR = re.compile(r"^(\d+)\.(\d+)/?$")
+
+
+def _latest_version(soup, url: str) -> Optional[Dict[str, Any]]:
+    """The highest `<major>.<minor>/` subdirectory, when the page lists versions of a bundle."""
+    versions = []
+    for link in soup.find_all("a"):
+        href = link.get("href") or ""
+        m = _VERSION_DIR.match(href)
+        if m and _is_descendant(_normalize(url), urljoin(url, href)):
+            versions.append(((int(m.group(1)), int(m.group(2))), href.rstrip("/")))
+    if not versions:
+        return None
+    versions.sort()
+    chosen = versions[-1][1]
+    return {"url": urljoin(_normalize(url), chosen + "/"), "chosen": chosen,
+            "available": [v for _, v in versions],
+            "note": (f"Versioned accession: {len(versions)} versions, each a full copy of "
+                     f"the bundle. Listing only the latest, {chosen}; point at another "
+                     f"version's URL to process it instead." if len(versions) > 1 else None)}
+
+
+_ARCHIVE_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".zip")
+
+
+def _is_archive(path: str) -> bool:
+    import tarfile
+    import zipfile
+
+    if not str(path).lower().endswith(_ARCHIVE_SUFFIXES):
+        return False
+    try:
+        return tarfile.is_tarfile(path) or zipfile.is_zipfile(path)
+    except OSError:
+        return False
+
+
+def _list_archive(path: str, recursive: bool, filter_extension: Optional[str]) -> Dict[str, Any]:
+    """Extract a downloaded accession archive under data/raw/ and list what it holds.
+
+    Extracted once: a second call lists the existing folder. Members that would land outside
+    the target -- an absolute path or `..` -- are refused, not extracted.
+    """
+    import shutil
+    import tarfile
+    import zipfile
+    import zlib
+
+    name = os.path.basename(path)
+    stem = re.sub(r"(\.tar)?\.(gz|tgz|bz2|zip|tar)$", "", name, flags=re.IGNORECASE)
+    target = RAW_DIR / stem
+    refused: List[str] = []
+    if not (target.exists() and any(target.iterdir())):
+        target.mkdir(parents=True, exist_ok=True)
+        root = os.path.realpath(target)
+        try:
+            if zipfile.is_zipfile(path):
+                with zipfile.ZipFile(path) as z:
+                    for member in z.namelist():
+                        dest = os.path.realpath(os.path.join(root, member))
+                        if not dest.startswith(root + os.sep) and dest != root:
+                            refused.append(member)
+                            continue
+                        z.extract(member, root)
+            else:
+                with tarfile.open(path) as t:
+                    safe = []
+                    for member in t.getmembers():
+                        dest = os.path.realpath(os.path.join(root, member.name))
+                        if (not dest.startswith(root + os.sep) or member.issym()
+                                or member.islnk()):
+                            refused.append(member.name)
+                            continue
+                        safe.append(member)
+                    t.extractall(root, members=safe, filter="data")
+        # A truncated download -- what a flaky NCEI transfer leaves -- raises EOFError or
+        # zlib.error from the decompressor, not a TarError. Whatever was extracted is removed:
+        # a non-empty target is read as "already extracted" on the next call, and would be
+        # listed as the whole accession.
+        except (OSError, EOFError, ValueError, zlib.error, tarfile.TarError,
+                zipfile.BadZipFile) as e:
+            shutil.rmtree(target, ignore_errors=True)
+            return {"source": path, "error": f"could not extract {name}: "
+                                              f"{type(e).__name__}: {e}",
+                    "total_items": 0, "items": []}
+    listing = _list_local_dir(str(target), recursive, filter_extension)
+    listing["extracted_from"] = path
+    if refused:
+        listing["refused_members"] = refused
+    return listing
 
 
 def _diagnose_empty(url_or_path: str) -> Dict[str, Any]:

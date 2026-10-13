@@ -14,6 +14,7 @@ def read_table(
     encoding: Optional[str] = None,
     drop_blank_rows: bool = True,
     delimiter: Optional[str] = ",",
+    comment_prefix: Optional[str] = None,
 ) -> Tuple[List[str], List[List[str]], Dict[str, Any]]:
     """Read a delimited originator file as (columns, rows, info). Never raises on encoding.
 
@@ -29,6 +30,9 @@ def read_table(
       header instead, which is what a folder of tab- or semicolon-separated files needs:
       read as CSV they come back as one column per row, which then reads downstream as a
       file with no measurements rather than as the wrong delimiter.
+
+    `comment_prefix` (e.g. `"#"`) drops rows whose first cell starts with it before the
+    header is located -- the `# Source:` and `# Note:` lines a staged table carries.
 
     `info` reports the encoding used, the delimiter, the row counts before and after
     cleaning, and any duplicate column names -- all of which change how the file should
@@ -53,6 +57,11 @@ def read_table(
     sep = delimiter if delimiter is not None else _sniff_delimiter(lines)
     raw = list(csv.reader(lines, delimiter=sep))
     kept = [r for r in raw if any(c.strip() for c in r)] if drop_blank_rows else raw
+    comments = 0
+    if comment_prefix:
+        before = len(kept)
+        kept = [r for r in kept if not (r and r[0].lstrip().startswith(comment_prefix))]
+        comments = before - len(kept)
     if header_row >= len(kept):
         return [], [], {"error": f"header_row {header_row} is past the end of the file "
                                  f"({len(kept)} non-blank rows)", "encoding": used,
@@ -65,7 +74,8 @@ def read_table(
         "encoding": used,
         "delimiter": sep,
         "rows_in_file": len(raw),
-        "blank_rows_dropped": len(raw) - len(kept),
+        "blank_rows_dropped": len(raw) - len(kept) - comments,
+        "comment_rows_dropped": comments,
         "data_rows": len(rows),
         "duplicate_columns": dupes,
     }

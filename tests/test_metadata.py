@@ -123,7 +123,9 @@ class TestCastMetadata:
     def test_header_block_keys_become_secondary_headers(self, frame):
         meta = map_metadata(HEADER, list(frame.columns), frame)
         got = {k: v["value"] for k, v in meta["secondary_headers"].items()}
-        assert got["3"] == "STOCS85A"          # platform
+        # A cruise code names a voyage, not a vessel: character data, never header 3.
+        assert "3" not in got
+        assert meta["character_data"]["originator_cruise_id"]["value"] == "STOCS85A"
         assert got["7"] == "001"               # originator's station number
         assert got["29"] == "T-7"              # probe type
         assert got["22"] == 12.5               # wind speed, coerced
@@ -245,8 +247,13 @@ class TestMetadataReachesTheOutput:
     def test_secondary_headers_are_written(self, output):
         with nc.Dataset(output["outputs"][0]) as ds:
             attrs = {a: ds.getncattr(a) for a in ds.ncattrs()}
-            assert attrs["secondary_header_3_platform_code"] == "EX24-01"
-            assert attrs["secondary_header_29_probe_type"] == "T-7"
+            assert attrs["originator_cruise_id"] == "EX24-01"
+            assert "secondary_header_3_platform_code" not in attrs
+            # Probe type is coded. 'T-7' was not looked up (no list offline), so it is kept
+            # beside the field as text -- never written INTO it as if it were a code.
+            assert "secondary_header_29_probe_type" not in attrs
+            assert attrs["secondary_header_29_probe_type_originator_text"] == "T-7"
+            assert "not looked up" in attrs["secondary_header_29_probe_type_code_lookup"]
             assert float(attrs["secondary_header_10_bottom_depth_meters"]) == 2500.0
 
     def test_a_coded_header_carries_its_code_table_url(self, output):
@@ -368,10 +375,19 @@ class TestDelimitedHeaderBlock:
         assert "Country" in keys
         assert all(u["note"] for u in meta["unresolved"])
 
-    def test_a_collision_keeps_both_and_says_which_won(self, meta):
-        """Cruise ID and Platform both match header 3. WOD wants the coded one."""
+    def test_the_cruise_id_is_character_data_not_a_rival_platform(self, meta):
+        """It used to collide with Platform for header 3 and lose. It was never a platform."""
         assert meta["secondary_headers"]["3"]["value"] == "5423."
-        loser = [u for u in meta["unresolved"] if u["key"] == "Originators Cruise ID"]
+        assert meta["character_data"]["originator_cruise_id"]["value"] == "kah1104"
+        assert not [u for u in meta["unresolved"] if u["key"] == "Originators Cruise ID"]
+
+    def test_a_collision_keeps_both_and_says_which_won(self):
+        """Two keys for one header: the coded value wins and the other is recorded."""
+        block = ("Ship name                   ,,         Kaharoa,,,\n"
+                 "Platform                    ,,          5423.,OCL code,KAHAROA,\n")
+        meta = map_metadata(header_text=block, columns=[], df=None)
+        assert meta["secondary_headers"]["3"]["value"] == "5423."
+        loser = [u for u in meta["unresolved"] if u["key"] == "Ship name"]
         assert loser and "secondary header 3" in loser[0]["matches"]
         assert "published code" in loser[0]["note"]
 

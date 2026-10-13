@@ -229,7 +229,7 @@ finished.
 | --- | --- | --- | --- | --- | --- | --- |
 | `1-CTD` | Sea-Bird `.cnv` | CTD | file header (`NMEA Latitude`) | column names | `Conductivity` (no Table 3a code) | 48 casts written |
 | `3-bottle` | CSV + sidecar | OSD | `stations.csv`, joined on station | units row, folded in during staging | none | 12 casts written |
-| `5-plankton` | CSV | — | — | — | — | not profile data; Tables 6a/7a; **unfinished item** |
+| `5-plankton` | CSV matrix | — (Taxa-Records) | station list | readme: number per sample | none | 24 hauls via `process_taxa`; volume filtered and preservative **not stated** -- asked |
 
 Every derived or assumed value — a depth converted from pressure, a depth of 0 applied by
 convention, a cast identified by matching two files — goes in the staged header **and** in

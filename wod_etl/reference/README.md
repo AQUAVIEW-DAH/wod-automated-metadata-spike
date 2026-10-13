@@ -139,11 +139,37 @@ code_table_link("secondary_header", 10)     # -> None
 **`None` is an answer, not a gap.** A field with no code list carries a plain measurement or
 free text: bottom depth is metres.
 
-Fetch the **CSV**, not the HTML, when you need the values — same list, parseable. Nothing
-here fetches them automatically: they are external, they change between WOD releases, and a
-cached copy would go stale without saying so. `map_metadata` attaches the link to every
-coded field it finds, and the writer puts it in the NetCDF, so a reader of the output alone
-can resolve a code.
+`map_metadata` attaches the link to every coded field it finds, and the writer puts it in
+the NetCDF, so a reader of the output alone can resolve a code.
+
+### Looking a value up: `code_lists.lookup_code(namespace, field_id, value)`
+
+A coded field holds a **code**, and an originator writes a name. `lookup_code` resolves the
+name against the field's published CSV (derived from the link when the manual gives only a
+PDF), and treats a value as a code only when **exactly one** entry is named that:
+
+```python
+from wod_etl.reference.code_lists import lookup_code, describe_lookup
+
+lookup_code("variable_specific_header", 3, "ITS-90")     # matched 103 'Temperature: ITS-90'
+lookup_code("variable_specific_header", 5, "SBE 911plus")  # matched 411
+lookup_code("secondary_header", 3, "Shunyo-Maru")        # ambiguous: 4959, 10793
+lookup_code("taxa_variable", 1, "Acartia danae")         # matched 86086, PGC 4212010
+```
+
+Names are compared upper-cased with punctuation removed, so `Shunyo-Maru` meets
+`SHUNYO MARU` and `PSS-78` meets `Salinity: PSS78`; each label also answers to its
+synonyms (runs of spaces in the CSV), the part after a `Category:` prefix, the text before a
+parenthesised description, and a plural's singular (`larvae` → `LARVA`). Statuses:
+`matched`, `already_a_code`, `ambiguous`, `no_match` (with `possible` near misses),
+`unavailable`, `not_coded`, `disabled`.
+
+**The lists are external and change between releases**, so they are fetched on first use
+with `get_with_retries`, cached under `config.CODE_LIST_CACHE_DIR` (`data/reference_cache/`)
+**with the date retrieved**, refetched after `CODE_LIST_MAX_AGE_DAYS` (30), and every result
+says which copy it was checked against. A refetch that fails falls back to the stale copy
+and says `stale`. `WOD_CODE_LOOKUP=0` turns lookups off; `WOD_CODE_LIST_FETCH=0` keeps them
+to the cache (the test suite runs that way).
 
 Rebuild after replacing the PDF with a newer release:
 
@@ -181,7 +207,7 @@ knowledge/                      (project root, not this package)
 ├── wod_code_tables/            12 JSON tables + standardization_rules.md
 ├── datasets.md                 which dataset a measurement belongs to
 ├── cast_structure.md           the parts of a WOD cast, and the colliding namespaces
-├── plankton_biomass.md         the plankton path: why it is not a profile, what it needs
+├── plankton_biomass.md         plankton: why it is not a profile; the Taxa-Record path
 ├── accession_field_guide.md    how submissions actually arrive, and how to stage them
 └── wod_readme_db/
     └── page_text.json          page cache for search_manual (gitignored, rebuildable)

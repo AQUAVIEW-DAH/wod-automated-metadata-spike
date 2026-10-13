@@ -378,3 +378,158 @@ class TestCrossFileShapeIsDetected:
         result = sniff_format(str(p))
         assert result["readable"] and result["reader"] == "delimited"
         assert result["single_data_row"] is True
+
+
+# ------------------------------------------------ scored exclusions, per-file triage
+class TestExclusionsAreScoredNotOrdered:
+    """First-match-wins labelled fish catch as plankton because the plankton rule came first."""
+
+    def test_camel_case_file_names_are_read(self):
+        """`\\btrawl\\b` cannot match inside 'TrawlInfo'."""
+        v = classify_dataset(path="0-data/SHU1505_TrawlInfo.csv",
+                             columns=["Cruise", "Station No.", "Long", "Lat",
+                                      "towing depgth (center)", "total weight (kg)"])
+        assert v["exclusion"]["reason"] == "fisheries catch data"
+        assert v["exclusion"]["belongs_in_wod"] is False
+
+    def test_a_species_column_does_not_make_trawl_catch_plankton(self):
+        v = classify_dataset(path="0-data/U2015-015_TrawlSamples.csv",
+                             columns=["Cruise", "Station", "Family", "Genus", "Species",
+                                      "Number", "Weight (g)"])
+        assert v["exclusion"]["reason"] == "fisheries catch data"
+        assert v["exclusion"]["alternatives"][0]["reason"] == "plankton biomass or taxonomy"
+
+    def test_fish_lengths_are_catch(self):
+        v = classify_dataset(path="x/lengths.csv",
+                             columns=["Station", "Species", "Fork Length (mm)"])
+        assert v["exclusion"]["reason"] == "fisheries catch data"
+
+    def test_a_species_column_alone_is_ambiguous_not_guessed(self):
+        v = classify_dataset(path="0-data/PLsamples.csv",
+                             columns=["Station No.", "Date", "Species", "number"])
+        assert "ambiguous" in v["exclusion"]["reason"]
+        assert v["exclusion"]["belongs_in_wod"] is None
+        assert v["exclusion"]["confidence"] == "low"
+
+    @pytest.mark.parametrize("path", ["0-data/U2015-015_2mRingNet.csv",
+                                      "0-data/U2015-015_NORPAC.csv",
+                                      "5-plankton/biomass.csv"])
+    def test_plankton_nets_are_plankton(self, path):
+        v = classify_dataset(path=path)
+        assert v["exclusion"]["reason"] == "plankton biomass or taxonomy"
+        assert v["exclusion"]["belongs_in_wod"] is True
+        assert "process_taxa" in v["exclusion"]["route"]
+
+
+class TestSidecarsAndLongFormat:
+    def test_a_station_list_is_a_sidecar(self):
+        v = classify_dataset(path="0-data/SHU1505_StationInfo.csv",
+                             columns=["Cruise", "Station No.", "Date", "Year", "Long", "Lat",
+                                      "Observation items"])
+        assert v["exclusion"]["kind"] == "sidecar"
+        assert "read_station_list" in v["exclusion"]["route"]
+
+    def test_a_cast_with_coordinates_and_data_is_not_a_sidecar(self):
+        v = classify_dataset(path="x/track.csv",
+                             columns=["Station", "Lat", "Lon", "Temperature (deg C)"])
+        assert v["exclusion"] is None
+
+    def test_long_format_is_detected_and_pivot_named(self):
+        v = classify_dataset(path="0-data/U2015-015_CTD_Temp.csv",
+                             columns=["Cruise", "StNo", "ObsItem", "parm", "dep", "value"])
+        assert v["long_format"]["variable_column"] == "parm"
+        assert v["long_format"]["key_columns"] == ["StNo", "dep"]
+        assert "pivot_long" in v["note"]
+
+    def test_no_evidence_either_way_is_undecided_not_profile(self):
+        assert classify_dataset(path="about/0303928_lonlat.txt",
+                                columns=["140", "10"])["is_wod_profile_data"] is None
+        assert classify_dataset(path="x/y.csv",
+                                columns=["Depth (m)", "A"])["is_wod_profile_data"] is True
+
+
+class TestPerFileTriage:
+    @pytest.fixture
+    def acc(self, tmp_path):
+        """One NCEI 0-data folder holding everything, as NCEI archives a submission."""
+        root = tmp_path / "0303928"
+        (root / "about").mkdir(parents=True)
+        (root / "data" / "0-data").mkdir(parents=True)
+        (root / "NCEI-Readme.txt").write_text("This is the standard bundle for an NCEI AIP.\n")
+        (root / "about" / "0303928_lonlat.txt").write_text("140 10\n150 10\n150 25\n140 25\n")
+        d = root / "data" / "0-data"
+        for var, name in (("Temperature", "Temp"), ("Salinity", "Salinity")):
+            rows = "\n".join(f"SHU1505,1,CTD,{var},{z}.0,{20 - z / 10}" for z in range(5, 25))
+            (d / f"U2015-015_CTD_{name}.csv").write_text(
+                f"Cruise,StNo,ObsItem,parm,depth,value\n{rows}\n")
+        (d / "SHU1505_StationInfo.csv").write_text(
+            "Cruise,Station No.,Date,Year,Long,Lat,Observation items\n"
+            "SHU1505,1,Nov. 09,2015,142°18’E,21°00’N,\"CTD, trawl\"\n"
+            "SHU1505,2,Nov. 10,2015,142°24’E,20°30’N,\"CTD, NORPAC, PL\"\n")
+        (d / "SHU1505_TrawlInfo.csv").write_text(
+            "Cruise,Station No.,Date,Long,Lat,total weight (kg)\n"
+            "SHU1505,1,Nov. 09,142.3,21.0,1.7\nSHU1505,3,Nov. 10,142.5,20.0,1.3\n")
+        return root
+
+    def test_every_file_gets_its_own_action(self, acc):
+        r = classify_accession(str(acc))
+        action = {f["path"]: f["action"] for f in r["files"]}
+        assert action["NCEI-Readme.txt"] == "document"
+        assert action["about/0303928_lonlat.txt"] == "document"
+        assert action["data/0-data/SHU1505_StationInfo.csv"] == "sidecar"
+        assert action["data/0-data/SHU1505_TrawlInfo.csv"] == "exclude"
+        assert action["data/0-data/U2015-015_CTD_Temp.csv"] == "stage"
+        assert r["stage_files"] == ["data/0-data/U2015-015_CTD_Salinity.csv",
+                                    "data/0-data/U2015-015_CTD_Temp.csv"]
+
+    def test_long_format_one_file_per_variable_is_a_shape(self, acc):
+        shape = classify_accession(str(acc))["cross_file_shapes"]["data/0-data"]
+        assert shape["shape"] == "long format, one file per variable"
+        assert shape["key_columns"] == ["StNo", "depth"]
+        assert "pivot_long" in shape["action"]
+
+    def test_the_folder_summary_says_it_is_mixed(self, acc):
+        v = classify_accession(str(acc))["folders"]["data/0-data"]["verdict"]
+        assert v["action"] == "stage"
+        assert "per-file verdicts" in v["reason"]
+
+    def test_a_long_format_file_fails_with_the_fix_not_a_sidecar_skip(self, acc, tmp_path):
+        from wod_etl.orchestration import process_accession
+
+        res = process_accession(str(acc / "data" / "0-data"), output_dir=str(tmp_path / "o"),
+                                raw_dir=str(tmp_path / "r"), run_id="t_long", resume=False)
+        failed = {f["key"]: f for f in res["failures"]}
+        assert "pivot_long" in failed["U2015-015_CTD_Temp.csv"]["error"]
+
+
+class TestDryRunReadsLocalFiles:
+    """It classified by file NAME, so a staged folder of CTD casts came back dataset null."""
+
+    def test_a_staged_cast_is_classified_from_its_header(self, tmp_path):
+        d = tmp_path / "staged"
+        d.mkdir()
+        (d / "SHU1505_st01.csv").write_text(
+            "# Instrument: SBE CTD/Rosette system\nLAT: 21.0\nLON: 142.3\nDATE: 2015-11-09\n"
+            "Depth (m),Temperature (deg C)\n" + "\n".join(f"{z},{20 - z / 100}"
+                                                          for z in range(5, 60)) + "\n")
+        res = process_accession(str(d), output_dir=str(tmp_path / "o"),
+                                raw_dir=str(tmp_path / "r"), run_id="t_dry_local",
+                                resume=False, dry_run=True)
+        (item,) = res["would_process"]
+        assert item["dataset_type"] == "CTD"
+        assert item["decided_by"].startswith("file head")
+
+    def test_long_format_and_ncei_files_are_named_in_the_dry_run(self, tmp_path):
+        d = tmp_path / "acc"
+        (d / "about").mkdir(parents=True)
+        (d / "NCEI-Readme.txt").write_text("This is the standard bundle.\n")
+        (d / "about" / "0303928_lonlat.txt").write_text("140 10\n150 10\n150 25\n140 25\n")
+        rows = "\n".join(f"C,1,Temperature,{z},{20 - z / 10}" for z in range(5, 30))
+        (d / "ctd_long.csv").write_text(f"Cruise,StNo,parm,depth,value\n{rows}\n")
+        res = process_accession(str(d), output_dir=str(tmp_path / "o"),
+                                raw_dir=str(tmp_path / "r"), run_id="t_dry_long",
+                                resume=False, dry_run=True)
+        assert [s["key"] for s in res["needs_staging"]] == ["ctd_long.csv"]
+        skipped = {s["key"]: s["reason"] for s in res["would_skip"]}
+        assert "NCEI bundle" in skipped["NCEI-Readme.txt"]
+        assert "NCEI bundle" in skipped["about/0303928_lonlat.txt"]

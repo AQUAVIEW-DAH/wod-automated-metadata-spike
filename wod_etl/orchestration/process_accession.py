@@ -36,6 +36,7 @@ from wod_etl.discovery import (
     read_any,
     sniff_format,
 )
+from wod_etl.discovery.classify_dataset import ncei_bundle_role
 from wod_etl.mapping import generate_field_mapping, query_wod_spec
 from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE, match_variable
 from wod_etl.qc_transforms import apply_qc_auditing, convert_units_and_types
@@ -121,7 +122,10 @@ def process_accession(
     # The key must identify the file, not just name it. A bare basename collapses every
     # subdirectory's data.csv onto one manifest entry, one cached download and one output
     # file -- so with recursive=True (the default) all but the last were silently lost.
-    items = [{"key": _item_key(url_or_path, i["path"], i["name"]),
+    # Keys are relative to what was actually LISTED: a landing page resolves to its data
+    # directory, a versioned accession to its latest version, an archive to its extraction.
+    root = listing.get("source") or url_or_path
+    items = [{"key": _item_key(root, i["path"], i["name"]),
               "url": i["path"], "size_bytes": i.get("size_bytes")}
              for i in candidates]
     qc = RUN_WOD_QC if run_qc is None else bool(run_qc)
@@ -172,7 +176,9 @@ def process_accession(
                     dataset_types=result.get("dataset_types"),
                     classification=result.get("classification"),
                     unstorable_columns=result.get("unstorable_columns"),
-                    format_family=result.get("format_family"))
+                    format_family=result.get("format_family"),
+                    casts_without_time_of_day=result.get("casts_without_time_of_day"),
+                    coded_headers_not_resolved=result.get("coded_headers_not_resolved"))
         else:
             failed += 1
             mf.mark(manifest, key, mf.FAILED, stage=result["stage"], error=result["error"],
@@ -287,6 +293,7 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
     qc_summaries, classifications, skipped_casts = [], [], []
     unstorable: List[Dict[str, str]] = []
     for cast in casts:
+        cast.setdefault("local_path", local)
         b, verdict = _build_cast(cast, key, dataset_type, dataset_overrides,
                                  process_unidentified_as,
                                  RUN_WOD_QC if run_qc is None else bool(run_qc))
@@ -332,6 +339,9 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
     for b in built:
         code = b["contract"].get("wod_dataset_code") or "unresolved"
         types[code] = types.get(code, 0) + 1
+    date_only = sum(1 for v in classifications
+                    if v.get("date_known") and v.get("time_of_day_known") is False)
+    code_lookups = _coded_header_report(built)
 
     return {
         "ok": True,
@@ -345,7 +355,32 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
         "unstorable_columns": unstorable or None,
         "format_family": fmt["format_family"],
         "skipped_casts": skipped_casts or None,
+        "casts_without_time_of_day": date_only or None,
+        "coded_headers_not_resolved": code_lookups or None,
     }
+
+
+def _coded_header_report(built) -> List[Dict[str, Any]]:
+    """Coded metadata whose value is not a resolved code, once per (field, value)."""
+    seen, out = set(), []
+    for b in built:
+        contract = b["contract"]
+        entries = [(f"secondary header {sid}", e)
+                   for sid, e in (contract.get("secondary_headers") or {}).items()]
+        for m in contract.get("column_mapping", []):
+            for vid, h in (m.get("variable_specific_headers") or {}).items():
+                entries.append((f"{m['raw_column']}: variable header {vid}", h))
+        for where, e in entries:
+            lookup = e.get("code_lookup") or {}
+            if not lookup or lookup.get("status") in ("matched", "already_a_code"):
+                continue
+            k = (where.split(":")[-1], str(e.get("value")))
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append({"field": where, "value": e.get("value"),
+                        "lookup": lookup.get("summary")})
+    return out
 
 
 def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified_as,
@@ -372,10 +407,23 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
             "no instrument identified from path, header, columns or depth spacing")
         return None, verdict
 
+    # A long-format table names its variables in a cell, so its only measurement column is
+    # 'value' and maps to nothing. Read as it stands it skipped as "a station list or
+    # metadata sidecar", which is wrong twice: it holds measurements, and a file that needs
+    # reshaping is a failure to report, not a skip to file away.
+    if verdict.get("long_format"):
+        verdict["skip_kind"] = "needs_staging"
+        verdict["skip_reason"] = verdict["long_format"]["action"]
+        return None, verdict
+
     spec = query_wod_spec(chosen, [str(c) for c in df.columns], depth_increment_m=depth_inc)
-    profile = {"source": cast.get("source_note", ""), "raw_header_block": header,
+    profile = {"source": cast.get("local_path") or cast.get("source_note", ""),
+               "source_format": cast.get("source_note", ""), "raw_header_block": header,
                "columns": [str(c) for c in df.columns]}
     contract = generate_field_mapping(profile, spec, df=df)
+    pc = contract.get("parsed_coordinates") or {}
+    verdict["time_of_day_known"] = pc.get("hour") is not None
+    verdict["date_known"] = pc.get("year") is not None
     if not contract["column_mapping"]:
         verdict["skip_kind"] = "unmappable"
         verdict["skip_reason"] = (
@@ -526,6 +574,12 @@ def _prefilter(key: str, dataset_type, dataset_overrides) -> Optional[Dict[str, 
         return {"reason": f"{Path(key).suffix.lower()} is documentation or a container, "
                           f"not measurements",
                 "stage": "prefilter"}
+    # NCEI's own bundle files, by name. Downloaded and sniffed, the readme and journal are
+    # prose that does not parse -- a FAILURE, since they are not documents by format -- and
+    # `<accession>_lonlat.txt` is two numeric columns that parse as a table.
+    bundle = ncei_bundle_role(Path(key).name)
+    if bundle:
+        return {"reason": f"NCEI bundle file: {bundle}", "stage": "prefilter"}
     if dataset_type or _override_for(key, dataset_overrides):
         return None                       # an operator named this folder; do not second-guess
     verdict = classify_dataset(path=key)
@@ -538,31 +592,65 @@ def _prefilter(key: str, dataset_type, dataset_overrides) -> Optional[Dict[str, 
 
 
 def _dry_run(rid, source, todo, manifest, dataset_type, dataset_overrides):
-    """What would happen, with the dataset each file would be processed as."""
-    would, skipped = [], []
+    """What would happen, with the dataset each file would be processed as.
+
+    A local file is triaged from its head -- format, header text, columns -- exactly as
+    `classify_accession` does, so the answer matches the real run. A dry run on a staged
+    folder used to classify by file NAME only, and eleven CTD casts came back
+    `dataset_type: null` while the real run called them CTD at high confidence. A remote
+    file is still judged by its path, because nothing has been downloaded; each item says
+    which it was.
+    """
+    from wod_etl.discovery import classify_file
+
+    would, skipped, staging, undecided = [], [], [], []
     for entry in todo:
         key = entry["key"]
         pre = _prefilter(key, dataset_type, dataset_overrides)
         if pre is not None:
             skipped.append({"key": key, **pre})
             continue
-        verdict = classify_dataset(path=key)
-        would.append({
-            "key": key,
-            "dataset_type": (_override_for(key, dataset_overrides) or dataset_type
-                             or verdict["dataset_type"]),
-            "decided_by": ("dataset_overrides" if _override_for(key, dataset_overrides)
-                           else "explicit argument" if dataset_type
-                           else f"path only ({verdict['confidence']} confidence)"),
-            "evidence": verdict["evidence"][:2],
-        })
+        override = _override_for(key, dataset_overrides)
+        local = os.path.exists(str(entry.get("url") or ""))
+        if local:
+            v = classify_file(entry["url"], rel=key)
+            decided_by = "file head (format, header, columns)"
+        else:
+            cd = classify_dataset(path=key)
+            v = {"action": ("exclude" if cd.get("exclusion") else
+                            "process" if cd.get("dataset_type") else "inspect"),
+                 "dataset_type": cd.get("dataset_type"), "confidence": cd["confidence"],
+                 "reason": (cd.get("exclusion") or {}).get("reason"),
+                 "evidence": cd["evidence"]}
+            decided_by = "path only (remote; not downloaded)"
+
+        forced = override or dataset_type
+        if forced and v["action"] not in ("document",):
+            would.append({"key": key, "dataset_type": forced,
+                          "decided_by": "dataset_overrides" if override else "explicit argument",
+                          "evidence": v.get("evidence", [])[:2]})
+        elif v["action"] == "process":
+            would.append({"key": key, "dataset_type": v["dataset_type"],
+                          "decided_by": f"{decided_by} ({v['confidence']} confidence)",
+                          "evidence": v.get("evidence", [])[:2]})
+        elif v["action"] == "stage":
+            staging.append({"key": key, "reason": v["reason"]})
+        elif v["action"] in ("exclude", "document", "sidecar"):
+            skipped.append({"key": key, "reason": v.get("reason") or v["action"],
+                            "stage": "dry_run", "decided_by": decided_by})
+        else:
+            undecided.append({"key": key, "reason": v.get("reason"),
+                              "decided_by": decided_by})
     return {"status": "dry_run", "run_id": rid, "source": source,
             "would_process": would, "would_skip": skipped,
+            "needs_staging": staging, "undecided": undecided,
             "already_done": [k for k, v in manifest["items"].items()
                              if v["status"] in mf.TERMINAL],
-            "note": "Classification here uses the PATH only, because nothing has been "
-                    "downloaded. The real run reclassifies each file from its header, "
-                    "columns and depth spacing, so these types can change."}
+            "note": "Local files are triaged from their heads, as the real run would. Remote "
+                    "files are judged by path only -- the real run reclassifies them from "
+                    "their content, so those types can change. `needs_staging` fails in a "
+                    "real run; `undecided` is skipped unless process_unidentified_as is "
+                    "set."}
 
 
 def _run_report(manifest) -> Dict[str, Any]:
@@ -571,9 +659,16 @@ def _run_report(manifest) -> Dict[str, Any]:
     skips: Dict[str, int] = {}
     dropped: Dict[str, int] = {}
     no_time: List[str] = []
+    date_only: List[str] = []
+    unresolved_codes: Dict[str, Any] = {}
     for it in manifest["items"].values():
         if "time" in ((it.get("classification") or {}).get("missing_coordinates") or []):
             no_time.append(it["key"])
+        if it.get("casts_without_time_of_day"):
+            date_only.append(it["key"])
+        for u in (it.get("coded_headers_not_resolved") or []):
+            label = f"{u['field'].split(':')[-1].strip()} = {u['value']!r}"
+            unresolved_codes.setdefault(label, u["lookup"])
         for code, n in (it.get("dataset_types") or {}).items():
             types[code] = types.get(code, 0) + n
         if it["status"] == mf.SKIPPED and it.get("reason"):
@@ -583,7 +678,12 @@ def _run_report(manifest) -> Dict[str, Any]:
             dropped[label] = dropped.get(label, 0) + 1
     return {"dataset_types": types, "skipped_reasons": skips,
             "unstorable_columns_dropped": dropped,
-            "outputs_without_time": no_time or None}
+            "outputs_without_time": no_time or None,
+            # A date with no time of day. Not missing -- WOD accepts it -- but it is written
+            # with a fill GMT_time, and a reader who looks only at `time` sees 00:00.
+            "outputs_without_time_of_day": date_only or None,
+            # Coded metadata written as the originator's text because no unique code matched.
+            "coded_headers_not_resolved": unresolved_codes or None}
 
 
 def _abort(manifest, reason: str) -> Dict[str, Any]:

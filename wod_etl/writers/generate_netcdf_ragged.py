@@ -10,7 +10,7 @@ underscore); the WOD name is preserved in `long_name`.
 """
 import os
 import re
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 import netCDF4 as nc
 import numpy as np
@@ -82,10 +82,12 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
     n_casts = len(casts)
 
     with nc.Dataset(output_nc_path, "w", format="NETCDF4") as ds:
-        _write_globals(ds, casts)
-
+        # Dimensions first: the globals can write per-cast variables (notes, character data
+        # that differ between casts), and those need the `casts` dimension to exist.
         ds.createDimension(CAST_DIM, n_casts)
         ds.createDimension(OBS_DIM, total_obs)
+
+        _write_globals(ds, casts)
 
         # ---- instance (per-cast) variables ---------------------------------
         _cast_var(ds, "lat", "f8", [_coord(c, "latitude") for c in casts],
@@ -93,22 +95,36 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
         _cast_var(ds, "lon", "f8", [_coord(c, "longitude") for c in casts],
                   units="degrees_east", standard_name="longitude", long_name="cast longitude")
 
-        times, has_time = _cast_times(casts)
+        times = _cast_times(casts)
         tv = ds.createVariable("time", "f8", (CAST_DIM,), fill_value=np.nan)
         tv.units = "days since 1770-01-01 00:00:00"
         tv.standard_name = "time"
         tv.long_name = "cast time"
         tv.calendar = "gregorian"
-        tv[:] = times
-        if not has_time:
-            tv.comment = "no usable date in the source header; values are fill"
+        tv[:] = times["time"]
+        _describe_time(tv, times)
+
+        # WOD's own ragged files carry the date and the time of day separately, because they
+        # are known separately: a cast with a date and no clock time has `date` and a fill
+        # `GMT_time`. Folding both into `time` alone wrote such a cast as 00:00 UTC -- a
+        # precise-looking midnight nobody measured.
+        dv = ds.createVariable("date", "i4", (CAST_DIM,), fill_value=np.int32(-2147483647))
+        dv.long_name = "cast date, YYYYMMDD (UTC when the time of day is known)"
+        dv[:] = np.array(times["date"], dtype="i4")
+        gv = ds.createVariable("GMT_time", "f4", (CAST_DIM,), fill_value=NETCDF_FILL_VALUE)
+        gv.long_name = "cast time of day, decimal hours UTC; fill when not stated"
+        gv.units = "hours"
+        gv[:] = np.array(times["hours"], dtype="f4")
+        _write_time_zones(ds, casts, times)
 
         # NETCDF4 variable-length strings; "S1" would truncate each id to one character.
         idv = ds.createVariable("cast_id", str, (CAST_DIM,))
         idv.cf_role = "profile_id"
         idv.long_name = "cast identifier"
-        for i, c in enumerate(casts):
-            idv[i] = _cast_id(c, i)
+        idv.comment = ("accession, originator's cruise, cast or station, and date -- unique "
+                       "within this file; verify_output checks it across a run")
+        for i, cid in enumerate(_cast_ids(casts)):
+            idv[i] = cid
 
         rs = ds.createVariable("z_row_size", "i4", (CAST_DIM,))
         rs.long_name = "number of observations for this cast"
@@ -317,17 +333,28 @@ def _variable_metadata(casts, var) -> Dict[str, Any]:
                         if m.get("wod_code") == var["wod_code"]), None)
         if not mapping:
             continue
+        headers = mapping.get("variable_specific_headers") or {}
         if mapping.get("originator_unit") and "originator_units" not in attrs:
             attrs["originator_units"] = str(mapping["originator_unit"])
-            attrs["wod_variable_specific_header_8"] = str(mapping["originator_unit"])
+            if "8" not in headers:
+                attrs["wod_variable_specific_header_8"] = str(mapping["originator_unit"])
         if mapping.get("originator_scale") and "measurement_scale" not in attrs:
             attrs["measurement_scale"] = str(mapping["originator_scale"])
-            attrs["wod_variable_specific_header_3"] = str(mapping["originator_scale"])
-        for vid, header in (mapping.get("variable_specific_headers") or {}).items():
+            if "3" not in headers:
+                attrs["wod_variable_specific_header_3"] = str(mapping["originator_scale"])
+        for vid, header in headers.items():
             key = f"wod_variable_specific_header_{vid}"
-            if key not in attrs and header.get("value") is not None:
-                attrs[key] = (str(header["value"]) if not isinstance(header["value"], (int, float))
-                              else header["value"])
+            if key in attrs or f"{key}_originator_text" in attrs:
+                continue
+            value, text, summary = split_coded_value(header)
+            if value is not None:
+                attrs[key] = (str(value) if not isinstance(value, (int, float)) else value)
+            if text is not None:
+                attrs[f"{key}_originator_text"] = str(text)
+            if summary is not None:
+                attrs[f"{key}_code_lookup"] = str(summary)
+        if mapping.get("comment") and "comment" not in attrs:
+            attrs["comment"] = str(mapping["comment"])
         if mapping.get("raw_column") and "originator_column_name" not in attrs:
             attrs["originator_column_name"] = str(mapping["raw_column"])
     return attrs
@@ -341,25 +368,157 @@ def _coord(cast, key) -> float:
         return np.nan
 
 
-def _cast_times(casts) -> Tuple[np.ndarray, bool]:
-    epoch = pd.Timestamp("1770-01-01")
-    out, any_time = [], False
+_EPOCH = pd.Timestamp("1770-01-01")
+
+
+def utc_offset_hours(zone: Any) -> Optional[float]:
+    """Hours to ADD to UTC to get the zone's local time, or None if the zone is not numeric.
+
+    'UTC', 'GMT', 'Z' -> 0; 'UTC+10', 'GMT-3:30', '+09:00', '+0900' -> the offset. Named
+    zones ('JST', 'local', 'ship time') return None: converting on a guess about a name
+    is how a whole cruise shifts by a day.
+    """
+    z = str(zone or "").strip().upper()
+    if z in ("UTC", "GMT", "Z", "UT"):
+        return 0.0
+    m = re.fullmatch(r"(?:UTC|GMT|UT)?\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?", z)
+    if not m:
+        return None
+    hours = int(m.group(2)) + int(m.group(3) or 0) / 60.0
+    return hours if m.group(1) == "+" else -hours
+
+
+def _cast_times(casts) -> Dict[str, Any]:
+    """Per cast: `time` (days since 1770), `date` (YYYYMMDD), `hours` (UTC, or fill).
+
+    A cast with a date and no time of day keeps its date and gets a fill time of day; `time`
+    sits at 00:00 of that date because CF needs a value, and the variable's comment says so.
+    A stated numeric zone with a known time of day is converted to UTC; a named zone, or a
+    date with no time, is recorded and NOT converted -- there is no hour to shift.
+    """
+    out = {"time": [], "date": [], "hours": [], "time_known": [], "date_known": [],
+           "zone": [], "converted": []}
     for c in casts:
         pc = c["contract"].get("parsed_coordinates", {})
+        zone = pc.get("time_zone")
         try:
-            ts = pd.Timestamp(year=int(pc["year"]), month=int(pc["month"]), day=int(pc["day"]),
-                              hour=int(pc.get("hour", 0)), minute=int(pc.get("minute", 0)))
-            out.append((ts - epoch).total_seconds() / 86400.0)
-            any_time = True
+            day = pd.Timestamp(year=int(pc["year"]), month=int(pc["month"]), day=int(pc["day"]))
         except (KeyError, TypeError, ValueError):
-            out.append(np.nan)
-    return np.array(out, dtype=float), any_time
+            for k, v in (("time", np.nan), ("date", -2147483647), ("hours", NETCDF_FILL_VALUE),
+                         ("time_known", False), ("date_known", False), ("zone", zone),
+                         ("converted", False)):
+                out[k].append(v)
+            continue
+        known = pc.get("hour") is not None
+        ts = day + pd.Timedelta(hours=int(pc.get("hour") or 0),
+                                minutes=int(pc.get("minute") or 0))
+        offset = utc_offset_hours(zone) if zone else None
+        converted = bool(known and offset)
+        if converted:
+            ts = ts - pd.Timedelta(hours=offset)
+        out["time"].append((ts - _EPOCH).total_seconds() / 86400.0)
+        out["date"].append(int(ts.strftime("%Y%m%d")))
+        out["hours"].append(ts.hour + ts.minute / 60.0 if known else NETCDF_FILL_VALUE)
+        out["time_known"].append(known)
+        out["date_known"].append(True)
+        out["zone"].append(zone)
+        out["converted"].append(converted)
+    out["time"] = np.array(out["time"], dtype=float)
+    return out
+
+
+def _describe_time(tv, times) -> None:
+    n = len(times["time_known"])
+    no_date = n - sum(times["date_known"])
+    date_only = sum(1 for d, t in zip(times["date_known"], times["time_known"]) if d and not t)
+    parts = []
+    if no_date == n:
+        parts.append("no usable date in the source header; values are fill")
+    elif no_date:
+        parts.append(f"{no_date} of {n} cast(s) have no usable date; their time is fill")
+    if date_only:
+        parts.append(f"{date_only} of {n} cast(s) have a date but no time of day: their time "
+                     f"is 00:00 of that date by convention and GMT_time is fill. Do not read "
+                     f"it as midnight")
+    if any(times["converted"]):
+        parts.append("converted to UTC from the stated time zone (see time_zone_of_source)")
+    if parts:
+        tv.comment = "; ".join(parts)
+
+
+def _write_time_zones(ds, casts, times) -> None:
+    zones = times["zone"]
+    if not any(zones):
+        return
+    if len(set(zones)) == 1:
+        ds.setncattr("time_zone_of_source", str(zones[0]))
+    else:
+        v = ds.createVariable("time_zone_of_source", str, (CAST_DIM,))
+        v.long_name = "time zone the originator's date and time were stated in"
+        for i, z in enumerate(zones):
+            v[i] = "" if z is None else str(z)
+    unconverted = [z for z, k, c in zip(zones, times["time_known"], times["converted"])
+                   if z and not c and utc_offset_hours(z) != 0.0]
+    if unconverted:
+        ds.setncattr("time_zone_note",
+                     "the source date/time is not UTC and was NOT converted -- either no time "
+                     "of day was stated, or the zone is not a numeric offset. A local date "
+                     "may be a different UTC date.")
 
 
 def _cast_id(cast, index) -> str:
+    """A cast identifier that means something outside this file.
+
+    It used to be the platform plus the cast's position within its own file, so every
+    one-cast file got `<platform>_0000` and a run of eleven casts had eleven identical ids.
+    Built now from what identifies a cast to a reader -- the accession (or, with none, the
+    platform), the originator's cruise, the cast or station (or, with neither, the source
+    file's name), and the date with its time of day when known.
+    """
     meta = _cast_secondary_headers(cast)
-    platform = str(meta.get("3", {}).get("value") or "") or "unknown"
-    return f"{platform}_{index:04d}"[:64]
+    contract = cast["contract"]
+    value = lambda sid: str((meta.get(sid) or {}).get("originator_value")
+                            or (meta.get(sid) or {}).get("value") or "").strip()
+    cruise = str(((contract.get("character_data") or {}).get("originator_cruise_id")
+                  or {}).get("value") or "").strip()
+    cast_or_station = value("5") or (f"st{value('7')}" if value("7") else "")
+    if not cast_or_station:
+        # Nothing names the cast, so the file it came from does: several XBT drops on one
+        # day from one ship would otherwise share platform-and-date.
+        src = str(contract.get("source") or "")
+        stem = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", src.replace("\\", "/").rsplit("/", 1)[-1])
+        cast_or_station = stem if stem not in ("", "unknown") else ""
+    pc = contract.get("parsed_coordinates") or {}
+    try:
+        date = f"{int(pc['year']):04d}{int(pc['month']):02d}{int(pc['day']):02d}"
+        if pc.get("hour") is not None:
+            date += f"T{int(pc['hour']):02d}{int(pc.get('minute') or 0):02d}"
+    except (KeyError, TypeError, ValueError):
+        date = ""
+    # The accession scopes the id; without one the platform does, so ids from two
+    # accessions' files cannot meet on a bare station number.
+    scope = value("1") or value("3")
+    parts = [scope, cruise if cruise and cruise not in cast_or_station else "",
+             cast_or_station]
+    if not any(parts):
+        parts = ["unknown"]
+    parts.append(date)
+    cid = "_".join(re.sub(r"[^A-Za-z0-9.-]+", "-", p).strip("-") for p in parts if p)
+    return (cid or f"cast_{index:04d}")[:64]
+
+
+def _cast_ids(casts) -> List[str]:
+    """Every cast's id, made unique within the file by suffixing repeats."""
+    ids, seen = [], {}
+    for i, c in enumerate(casts):
+        cid = _cast_id(c, i)
+        if cid in seen:
+            seen[cid] += 1
+            cid = f"{cid}_{seen[cid]:02d}"[:64]
+        else:
+            seen[cid] = 1
+        ids.append(cid)
+    return ids
 
 
 def _write_globals(ds, casts) -> None:
@@ -369,7 +528,19 @@ def _write_globals(ds, casts) -> None:
     ds.featureType = "profile"
     ds.WOD_version = WOD_VERSION
     ds.wod_dataset_type = str(first.get("wod_dataset_code") or "unresolved")
-    ds.source_file = str(first.get("source", "unknown"))
+    # The file that was read -- a path, not the reader's description of it. That moved to
+    # `source_format`; it used to fill this attribute with 'delimited_text, delimiter comma'.
+    sources = list(dict.fromkeys(str(c["contract"].get("source") or "unknown") for c in casts))
+    ds.source_file = "; ".join(sources)
+    fmt = first.get("source_format")
+    if fmt:
+        ds.source_format = str(fmt)
+    raw = list(dict.fromkeys(p for c in casts
+                             for p in (c["contract"].get("source_files") or [])))
+    if raw:
+        ds.source_files_raw = "; ".join(raw)
+    _write_provenance(ds, casts)
+    _write_character_data(ds, casts)
     # CF: institution is whose data this is, not what wrote the file. Secondary header 4
     # carries it when the originator stated it; the writer belongs in `source`.
     institution = _shared_secondary_header_value(casts, 4)
@@ -393,6 +564,52 @@ def _write_globals(ds, casts) -> None:
             if lg.get("seawater_density_kg_m3"))
 
 
+def _write_provenance(ds, casts) -> None:
+    """The staged header's notes, as CF `comment`, and the run, as CF `history`.
+
+    Every derivation and judgement a stager recorded -- a position taken from a station list,
+    fluorescence written as chlorophyll, a date chosen between two sources -- lived in the
+    staged CSV and nowhere else, so the NetCDF a reader actually receives said none of it.
+    Notes every cast shares are global; notes that differ go to a per-cast variable.
+    """
+    import datetime as _dt
+
+    per_cast = [list(c["contract"].get("provenance_notes") or []) for c in casts]
+    shared = [n for n in per_cast[0] if all(n in other for other in per_cast[1:])]
+    if shared:
+        ds.comment = "\n".join(shared)
+    own = [[n for n in notes if n not in shared] for notes in per_cast]
+    if any(own):
+        v = ds.createVariable("cast_notes", str, (CAST_DIM,))
+        v.long_name = "originator and staging notes for this cast"
+        for i, notes in enumerate(own):
+            v[i] = "\n".join(notes)
+    stamp = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    ds.history = (f"{stamp} wod-agent-etl: standardized to WOD intermediate NetCDF from "
+                  f"{ds.source_file}")
+    unplaced = [u for c in casts for u in (c["contract"].get("unresolved_metadata") or [])]
+    if unplaced:
+        keys = list(dict.fromkeys(f"{u.get('key')}={u.get('value')!r}" for u in unplaced))
+        ds.metadata_not_placed = (
+            "header keys with no WOD field, kept here so they are not lost: "
+            + "; ".join(keys[:40]))
+
+
+def _write_character_data(ds, casts) -> None:
+    """Character data (manual p.30): originator's cruise code and principal investigator."""
+    fields = sorted({f for c in casts for f in (c["contract"].get("character_data") or {})})
+    for field in fields:
+        values = [str(((c["contract"].get("character_data") or {}).get(field) or {})
+                      .get("value") or "") for c in casts]
+        if len(set(values)) == 1:
+            ds.setncattr(field, values[0])
+        else:
+            v = ds.createVariable(field, str, (CAST_DIM,))
+            v.long_name = field.replace("_", " ")
+            for i, x in enumerate(values):
+                v[i] = x
+
+
 def _cast_secondary_headers(cast) -> Dict[str, Any]:
     """One cast's Table 4a headers, from the full metadata map or the older key.
 
@@ -406,8 +623,32 @@ def _cast_secondary_headers(cast) -> Dict[str, Any]:
     return {**legacy, **full}
 
 
+# Lookup outcomes under which a coded field's value IS a code and may be written as one.
+_CODE_OK = ("matched", "already_a_code")
+
+
+def split_coded_value(entry: Dict[str, Any]):
+    """(value to write in the field, originator text to write beside it, lookup summary).
+
+    A coded field holds a code. When the value was looked up and is not one -- ambiguous, no
+    entry, list unavailable -- the field itself is left unwritten and the originator's text
+    goes beside it with the reason. An entry that was never looked up (a contract built by
+    hand) is written as it stands.
+    """
+    if not entry:
+        return None, None, None
+    lookup = entry.get("code_lookup")
+    if lookup is None:
+        return entry.get("value"), None, None
+    if lookup.get("status") in _CODE_OK:
+        return entry.get("value"), entry.get("originator_value"), (
+            lookup.get("summary") if lookup.get("status") == "matched" else None)
+    return None, entry.get("value"), lookup.get("summary")
+
+
 def _secondary_header_columns(casts):
-    """Every Table 4a header seen across the casts, as (id, name, key, values-per-cast)."""
+    """Every Table 4a header seen across the casts:
+    (id, name, key, values, code_table, originator_texts, lookup_summaries), one per cast."""
     per_cast = [_cast_secondary_headers(c) for c in casts]
     sec_ids = sorted({k for m in per_cast for k in m},
                      key=lambda k: (0, int(k)) if str(k).isdigit() else (1, str(k)))
@@ -415,8 +656,9 @@ def _secondary_header_columns(casts):
         name = next(m[sec_id].get("name", sec_id) for m in per_cast if sec_id in m)
         key = f"secondary_header_{sec_id}_{cf_safe_name(name)}"
         entry = next(m[sec_id] for m in per_cast if sec_id in m)
-        yield (sec_id, name, key, [m.get(sec_id, {}).get("value") for m in per_cast],
-               entry.get("code_table") or {})
+        split = [split_coded_value(m.get(sec_id) or {}) for m in per_cast]
+        yield (sec_id, name, key, [x[0] for x in split], entry.get("code_table") or {},
+               [x[1] for x in split], [x[2] for x in split])
 
 
 def _is_shared(values) -> bool:
@@ -424,9 +666,15 @@ def _is_shared(values) -> bool:
 
 
 def _shared_secondary_header_value(casts, sec_id: int):
-    """One Table 4a header's value when every cast agrees on it, else None."""
+    """One Table 4a header's value AS THE ORIGINATOR WROTE IT, when every cast agrees on it.
+
+    For the human-readable CF attributes (`institution`): a header whose text was resolved
+    to a code holds the code in `value` and the text in `originator_value`, and a CF
+    `institution` of '1234' names nobody.
+    """
     per_cast = [_cast_secondary_headers(c) for c in casts]
-    values = [m.get(str(sec_id), m.get(sec_id, {})).get("value") for m in per_cast]
+    entries = [m.get(str(sec_id), m.get(sec_id, {})) for m in per_cast]
+    values = [e.get("originator_value") or e.get("value") for e in entries]
     return str(values[0]) if _is_shared(values) else None
 
 
@@ -439,23 +687,38 @@ def _write_shared_secondary_headers(ds, casts) -> None:
     variables instead, in _write_varying_secondary_headers. A single-cast file agrees with
     itself on everything and so keeps the all-global layout it has always had.
     """
-    for sec_id, _name, key, values, code_table in _secondary_header_columns(casts):
+    for sec_id, _name, key, values, code_table, texts, lookups in _secondary_header_columns(casts):
+        url = code_table.get("csv") or code_table.get("html") or code_table.get("pdf")
+        if _is_shared(texts):
+            ds.setncattr(f"{key}_originator_text", str(texts[0]))
+        if _is_shared(lookups):
+            ds.setncattr(f"{key}_code_lookup", str(lookups[0]))
+        if (_is_shared(texts) or _is_shared(lookups)) and url:
+            ds.setncattr(f"{key}_code_table", url)
         if not _is_shared(values):
             continue
         ds.setncattr(key, str(values[0]))
         # A coded value is unusable without the list it is coded against, and WOD publishes
         # those online rather than in the manual. Carrying the URL means a reader of the
         # NetCDF alone can resolve the code.
-        url = code_table.get("csv") or code_table.get("html") or code_table.get("pdf")
         if url:
             ds.setncattr(f"{key}_code_table", url)
 
 
 def _write_varying_secondary_headers(ds, casts) -> None:
     """Headers that differ between casts, written on the `casts` dimension."""
-    for sec_id, name, key, values, code_table in _secondary_header_columns(casts):
+    for sec_id, name, key, values, code_table, texts, lookups in _secondary_header_columns(casts):
+        for suffix, series in (("_originator_text", texts), ("_code_lookup", lookups)):
+            if any(x is not None for x in series) and not _is_shared(series):
+                tv = ds.createVariable(f"{key}{suffix}", str, (CAST_DIM,))
+                tv.long_name = (f"{name}: originator's text, not a code" if suffix ==
+                                "_originator_text" else f"{name}: code lookup result")
+                for i, x in enumerate(series):
+                    tv[i] = "" if x is None else str(x)
         if _is_shared(values):
             continue
+        if all(v is None for v in values) and any(t is not None for t in texts):
+            continue                         # nothing coded to write; the text went beside it
         if all(v is None for v in values):
             # The header was identified but its value is not in the file -- header 96 when
             # flag columns are present but the flag SET is not named, for instance. A
