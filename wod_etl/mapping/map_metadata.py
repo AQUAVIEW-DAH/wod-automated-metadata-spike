@@ -121,8 +121,9 @@ SECONDARY_HEADER_PATTERNS: Dict[int, str] = {
 CHARACTER_DATA_PATTERNS: Dict[str, str] = {
     "originator_cruise_id": r"(?:originator'?s?[_\s]*)?cruise(?:[_\s]*(?:id|code|name|no|"
                             r"num|number))?",
+    # ACDD's creator_name is who made the data: in an originator's NetCDF, the PI.
     "principal_investigator": r"(?:principal[_\s]*investigator|pi(?:[_\s]*name)?|"
-                              r"chief[_\s]*scientist)",
+                              r"chief[_\s]*scientist|creator[_\s]*name)",
 }
 
 # Keys in a staged header that are not metadata to place: coordinates are parsed by
@@ -324,9 +325,13 @@ def _from_header_block(header_text: str, out: Dict[str, Any]) -> None:
 # `Key: value` as a staged header writes it, possibly several per line separated by a
 # column gap. Only a colon or equals sign counts here: the pattern pass above also accepts a
 # bare space, which is right for a KNOWN key and far too loose for an unknown one.
+# A value runs to the next `Key:` (after a delimiter or a column gap), a `;` or `|`, or the
+# end of the line. A comma ends it only before another key: `LAT: 61.9, LON: -172.2` is two
+# pairs, but `title: CTD profiles from LeConte Bay, Alaska, August 2016` is one -- cut at its
+# first comma, the title and every citation lost the rest of themselves.
 _KEY_VALUE = re.compile(
     r"(?:^|[,;|]|\s{2,})\s*#?\s*([A-Za-z][A-Za-z0-9 _.'/()&-]{0,47}?)\s*[:=]\s*"
-    r"([^,;|]*?)\s*(?=\s{2,}[A-Za-z][A-Za-z0-9 _.'/()&-]{0,47}?\s*[:=]|[,;|]|$)")
+    r"(.*?)\s*(?=(?:\s{2,}|[,;|]\s*)[A-Za-z][A-Za-z0-9 _.'/()&-]{0,47}?\s*[:=]|[;|]|$)")
 
 
 def _norm_key(key: str) -> str:
@@ -349,10 +354,15 @@ def _from_key_value_line(line: str, placed_keys, out: Dict[str, Any]) -> None:
     the character data, a per-variable header for every measured variable, or
     `unresolved`.
     """
+    # A station's position line places its `Depth:` as the bottom depth (header 10, read by
+    # generate_field_mapping) -- not a key without a WOD field.
+    position_line = bool(re.search(r"\blat(?:itude)?\s*[:=]", line, re.IGNORECASE)
+                         and re.search(r"\blon(?:g(?:itude)?)?\s*[:=]", line, re.IGNORECASE))
     for m in _KEY_VALUE.finditer(line):
         key, value = m.group(1).strip(), m.group(2).strip().strip("\"'")
         if (not value or _NOT_METADATA_KEY.match(key) or _INSTRUMENT_FILE_KEY.match(key)
-                or _norm_key(key) in placed_keys):
+                or _norm_key(key) in placed_keys
+                or (position_line and key.lower() == "depth")):
             continue
         evidence = line.strip()[:120]
 
@@ -418,6 +428,11 @@ def _delimited_pair(line: str):
     the key.
     """
     if _BLOCK_MARKER.match(line):
+        return None
+    # `title: CTD profiles from LeConte Bay, Alaska, August 2016` is one key and its value,
+    # commas and all -- read as `key,variable,value` it became title = 'August 2016'.
+    if re.match(r"^\s*#?\s*[A-Za-z][\w .()/-]{0,47}?\s*[:=]\s*\S", line) and \
+            line.find(":") < line.find(","):
         return None
     m = _DELIMITED_HEADER.match(line)
     if not m:

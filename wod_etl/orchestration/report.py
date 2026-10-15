@@ -1,69 +1,103 @@
-"""The run report: `data/runs/<accession>/report.md` and `report.json`, written by every run
-however it ended.
+"""The run summary: `data/runs/<accession>/report.md` and `report.json`, written by every
+`wod-etl run` and `wod-etl confirm` however it ended.
 
-It answers, for a person who was not watching: did it finish, what was written, what was
-left out and why, what needs doing next. The run log has the blow-by-blow; this is the
-summary to read first.
+It answers, for a person who was not watching: what the accession holds, what the decisions
+include and leave out and why, what was written and how it verified, and what needs doing
+next. The run log has the blow-by-blow; this is the summary to read first.
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from wod_etl.io_util import write_json_atomic, write_text_atomic
 
-STATUS_WORDS = {0: "finished, output verified", 1: "FAILED", 2: "PAUSED: decisions needed",
-                3: "finished, but the output is NOT verified", 130: "interrupted"}
+
+def _status_words(command: str, exit_code: int, state: Dict[str, Any]) -> str:
+    stages = state["stages"]
+    out = lambda s: (stages.get(s) or {}).get("outputs") or {}
+    if exit_code == 130:
+        return "interrupted"
+    if command == "run":
+        return ("decisions written: review them, then confirm" if exit_code == 0 else "FAILED")
+    if exit_code == 0:
+        return ("finished: output written and verified" if out("verify").get("output_verified")
+                else "finished: nothing to write")
+    if exit_code == 2:
+        return "waiting for decisions"
+    if exit_code == 3:
+        return "finished, but the output is NOT verified"
+    process = stages.get("process") or {}
+    if process.get("status") == "done":
+        failed = sum(1 for p in process.get("problems") or [] if p.get("file"))
+        return f"finished, but {failed} file(s) could not be written"
+    return "FAILED"
 
 
-def _problems(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    from wod_etl.orchestration.pipeline import STAGES
-
-    out = []
-    for s in STAGES:
-        stage = state["stages"].get(s) or {}
-        for p in stage.get("problems") or []:
-            out.append(p)
+def current_problems(recorded: Dict[str, Any], stages) -> List[Dict[str, Any]]:
+    """The problems of the stages up to the one the command stopped at. A later stage's
+    record is from an earlier attempt -- the failures of a process stage that has not run
+    since are not this run's news."""
+    out: List[Dict[str, Any]] = []
+    for s in stages:
+        st = recorded.get(s) or {}
+        out += st.get("problems") or []
+        if st.get("status") != "done":
+            break
     return out
 
 
-def write_report(ws, state: Dict[str, Any], exit_code: int, interrupted: bool) -> Dict[str, Any]:
-    from wod_etl.orchestration.pipeline import STAGES
+def write_report(ws, state: Dict[str, Any], exit_code: int, interrupted: bool,
+                 command: str = "run", stages: Optional[tuple] = None) -> Dict[str, Any]:
+    from wod_etl.orchestration.pipeline import CONFIRM_STAGES, RUN_STAGES
 
-    problems = _problems(state)
-    stages = state["stages"]
-    out = lambda s: (stages.get(s) or {}).get("outputs") or {}
-    paths = {"run_dir": str(ws.run_dir), "log": str(ws.log_path),
-             "decisions": str(ws.decisions_path), "report": str(ws.report_md),
-             "state": str(ws.state_path),
-             "profiles": str(ws.processed_dir / "profiles"),
-             "taxa": str(ws.processed_dir / "taxa")}
-    report = {"accession": ws.accession, "input": state.get("input"),
-              "exit_code": exit_code, "status": STATUS_WORDS.get(exit_code, str(exit_code)),
+    stages = stages or (CONFIRM_STAGES if command == "confirm" else RUN_STAGES)
+    recorded = state["stages"]
+    out = lambda s: (recorded.get(s) or {}).get("outputs") or {}
+    problems = current_problems(recorded, stages)
+    plan = (out("check").get("plan") if command == "confirm" else None) \
+        or out("decide").get("plan") or {}
+    paths = {"run_dir": str(ws.run_dir), "decisions": str(ws.decisions_path),
+             "report": str(ws.report_md), "log": str(ws.log_path),
+             "events": str(ws.run_dir / "events.jsonl"), "state": str(ws.state_path),
+             "triage": str(ws.triage_path),
+             "output": str(ws.processed_dir)}
+    report = {"accession": ws.accession, "input": state.get("input"), "command": command,
+              "exit_code": exit_code, "status": _status_words(command, exit_code, state),
               "invocation": state.get("last_invocation"), "git": state.get("git"),
-              "updated_at": state.get("updated_at"),
-              "stages": {s: {k: (stages.get(s) or {}).get(k)
+              "code": state.get("code"), "updated_at": state.get("updated_at"),
+              "stages": {s: {k: (recorded.get(s) or {}).get(k)
                              for k in ("status", "summary", "finished_at")}
-                         for s in STAGES if s in stages},
+                         for s in stages if s in recorded},
               "problems": problems,
               "resolution": {k: out("resolve").get(k) for k in ("mode", "source", "resolution",
                                                                 "version")},
-              "process": out("process").get("runs"),
-              "taxa": {k: v for k, v in out("taxa").items() if k != "outputs"} or None,
-              "verify": {k: out("verify").get(k) for k in ("output_verified", "finding_counts",
-                                                           "findings")},
-              "decisions": _decisions_applied(out("decide")),
+              "triage": out("triage").get("counts"),
+              "decisions": {"entries": plan.get("entries") or [],
+                            "direct": len(plan.get("direct") or []),
+                            "recipes": sorted((plan.get("profiles") or {}).keys()),
+                            "left_out": len(plan.get("left_out") or []),
+                            "dataset_overrides": plan.get("dataset_overrides") or {},
+                            "metadata": plan.get("metadata") or {},
+                            "file_options": plan.get("file_options") or {},
+                            "station_overrides": plan.get("station_overrides") or {}},
+              "stage": out("stage").get("recipes") if command == "confirm" else None,
+              "process": out("process").get("runs") if command == "confirm" else None,
+              "files": out("process").get("files") if command == "confirm" else None,
+              "files_written_at": (recorded.get("process") or {}).get("finished_at"),
+              "files_removed": (out("process").get("removed") if command == "confirm"
+                                else None),
+              "verify": ({k: out("verify").get(k) for k in
+                          ("output_verified", "netcdf_files", "casts", "finding_counts",
+                           "findings", "variables")} if command == "confirm" else None),
+              "wod_qc": _wod_qc(),
               "paths": paths}
     write_json_atomic(ws.report_json, report)
     write_text_atomic(ws.report_md, render(report))
     return report
 
 
-def _decisions_applied(decide: Dict[str, Any]) -> Dict[str, Any]:
-    plan = decide.get("plan") or {}
-    return {"profile_recipes": sorted((plan.get("profiles") or {}).keys()),
-            "taxa_recipes": sorted((plan.get("taxa") or {}).keys()),
-            "direct_files": len(plan.get("direct") or []),
-            "skipped_by_decision": plan.get("skipped"),
-            "station_overrides": plan.get("station_overrides"),
-            "pending": [p.get("what") for p in decide.get("pending") or []]}
+def _wod_qc() -> bool:
+    from wod_etl import config
+
+    return bool(config.RUN_WOD_QC)
 
 
 def _items(value: Any, limit: int = 12) -> List[str]:
@@ -83,11 +117,17 @@ def _items(value: Any, limit: int = 12) -> List[str]:
     return lines
 
 
+def _cell(text: Any) -> str:
+    return str(text if text is not None else "").replace("|", "\\|").replace("\n", " ")
+
+
 def render(report: Dict[str, Any]) -> str:
+    cmd = report["command"]
     lines = [f"# Accession {report['accession']} -- {report['status']}", "",
              f"Input: `{report['input']}`  ",
-             f"Last run: {report.get('updated_at')} (invocation {report.get('invocation')}, "
-             f"code {report.get('git')}), exit code {report['exit_code']}", ""]
+             f"Last command: `wod-etl {cmd}`, {report.get('updated_at')} (invocation "
+             f"{report.get('invocation')}, git {report.get('git')}, code {report.get('code')}), "
+             f"exit code {report['exit_code']}", ""]
     res = report.get("resolution") or {}
     if res.get("source"):
         lines += [f"Data from: {res['source']}"
@@ -96,76 +136,170 @@ def render(report: Dict[str, Any]) -> str:
 
     lines += ["## Stages", "", "| Stage | Status | Summary |", "| --- | --- | --- |"]
     for s, v in report["stages"].items():
-        lines.append(f"| {s} | {v.get('status')} | {v.get('summary') or ''} |")
+        lines.append(f"| {s} | {v.get('status')} | {_cell(v.get('summary'))} |")
     lines.append("")
 
     blocking = [p for p in report["problems"] if p.get("blocking")]
     other = [p for p in report["problems"] if not p.get("blocking")]
     if blocking:
-        lines += ["## What needs doing", ""]
+        lines += ["## Before confirming" if cmd == "run" else "## What needs doing", ""]
         for n, p in enumerate(blocking, 1):
             lines += [f"{n}. **{p['what']}** ({p['stage']})",
-                      f"   - Why: {p['why']}" if p.get("why") else "",
+                      f"   - Why: {p['why']}" if p.get("why") else None,
                       f"   - How to fix: {p['how_to_fix']}", ""]
     if other:
-        lines += ["## Pending and warnings (do not stop the run)", ""]
+        lines += ["## Notes and warnings (they do not stop anything)", ""]
         for p in other:
             lines.append(f"- {p['what']} -- {p['how_to_fix']}")
         lines.append("")
 
+    lines += _render_decisions(report)
+    if cmd == "confirm":
+        lines += _render_output(report)
+    lines += ["## Files", ""] + [f"- {k}: `{p}`" for k, p in report["paths"].items()]
+    return "\n".join(l for l in lines if l is not None) + "\n"
+
+
+def _render_decisions(report: Dict[str, Any]) -> List[str]:
+    d = report.get("decisions") or {}
+    entries = d.get("entries") or []
+    if not entries:
+        return []
+    files = lambda es: sum(e["files"] for e in es)
+    data = [e for e in entries if not e.get("documentation")]
+    docs = [e for e in entries if e.get("documentation")]
+    included = [e for e in data if e.get("include")]
+    lines = ["## Decisions (decisions.toml)", "",
+             f"{files(included)} file(s) included, {files(data) - files(included)} left out, "
+             f"{files(docs)} documentation"
+             + (f"; {len(d['recipes'])} reshaping recipe(s): {', '.join(d['recipes'])}"
+                if d.get("recipes") else "") + ".", ""]
+    if data:
+        lines += ["| Files | Holds | Include | Why |", "| --- | --- | --- | --- |"]
+        for e in data:
+            lines.append(f"| `{_cell(e['key'])}`" + (f" ({e['files']})" if e["files"] > 1 else "")
+                         + f" | {_cell(e.get('data'))} | "
+                         + (f"yes, as {e.get('dataset') or '?'}" if e.get("include") else "no")
+                         + f" | {_cell(e.get('why'))} |")
+        lines.append("")
+    if docs:
+        lines.append("Documentation, read and not processed: "
+                     + "; ".join(f"`{e['key']}`" + (f" ({e['files']})" if e["files"] > 1 else "")
+                                 + f" {e.get('data')}" for e in docs) + ".")
+        lines.append("")
+    if d.get("metadata"):
+        lines.append("Header values from the review, for every cast: "
+                     + ", ".join(f"{k} = {v}" for k, v in d["metadata"].items()) + ".")
+    for path, o in (d.get("file_options") or {}).items():
+        own = {k: v for k, v in (o.get("metadata") or {}).items()
+               if (d.get("metadata") or {}).get(k) != v}
+        if own or o.get("drop"):
+            lines.append(f"- `{path}`: "
+                         + ", ".join([f"{k} = {v}" for k, v in own.items()]
+                                     + [f"drop {', '.join(o['drop'])}"] * bool(o.get("drop"))))
+    for station, o in (d.get("station_overrides") or {}).items():
+        for note in o.get("notes") or []:
+            lines.append(f"- Station {station}: {note}")
+    if d.get("metadata") or d.get("file_options") or d.get("station_overrides"):
+        lines.append("")
+    return lines
+
+
+def _render_wod_files(report: Dict[str, Any]) -> List[str]:
+    """The files written: one per WOD dataset and year, and the source files in each."""
+    files = report.get("files")
+    if files is None:
+        return []
+    folder = (report.get("paths") or {}).get("output")
+    lines = ["## WOD files written", "",
+             f"In `{folder}`, written {report.get('files_written_at')}: one file per WOD "
+             f"dataset and year, named as WOD names its own (`wod_<dataset>_<year>`) with the "
+             f"accession. Each cast says which source file it came from.", ""]
+    if not files:
+        return lines[:2] + ["None.", ""]
+    lines += ["| File | Dataset | Year | Casts | Levels | From |",
+              "| --- | --- | --- | --- | --- | --- |"]
+    for f in files:
+        sources = f.get("sources") or []
+        shown = ", ".join(f"`{_cell(s['key'])}` ({s['casts']})" for s in sources[:6])
+        if len(sources) > 6:
+            shown += f" and {len(sources) - 6} more"
+        lines.append(f"| `{f['name']}` | {f['dataset']} | {f['year'] or 'no date'} | "
+                     f"{f['casts']} | {f['observations']} | {shown} |")
+    lines.append("")
+    if report.get("files_removed"):
+        lines += ["Removed, as this confirm no longer writes them: "
+                  + ", ".join(f"`{n}`" for n in report["files_removed"]) + ".", ""]
+    return lines
+
+
+def _render_output(report: Dict[str, Any]) -> List[str]:
+    lines: List[str] = []
+    for r in report.get("stage") or []:
+        lines.append(f"- Recipe {r.get('recipe')}: {r.get('files')} cast file(s) staged"
+                     + (f", {len(r['skipped'])} skipped" if r.get("skipped") else ""))
+    if lines:
+        lines = ["## Staged", ""] + lines + [""]
+    lines += _render_wod_files(report)
     for which, r in (report.get("process") or {}).items():
-        lines += [f"## Profiles: {which} files", "",
-                  f"- Status: {r.get('status')}, counts {r.get('counts')}",
-                  f"- Dataset types: {r.get('dataset_types')}"]
-        for field, label in (("skipped_reasons", "Skipped"),
-                             ("unstorable_columns_dropped", "Columns dropped (no WOD code)"),
+        counts = r.get("counts") or {}
+        lines += [f"## Source files processed: {which}", "",
+                  f"- {counts.get('done', 0)} file(s) processed, {counts.get('failed', 0)} "
+                  f"failed, {counts.get('skipped', 0)} skipped (status {r.get('status')})",
+                  f"- Casts by WOD dataset: {r.get('dataset_types') or {}}"]
+        if r.get("casts_depth_from_pressure"):
+            lines.append(f"- Depth computed from pressure (UNESCO 1983, at each cast's "
+                         f"latitude; pressure kept as variable 25): "
+                         f"{r['casts_depth_from_pressure']} cast(s)")
+        for field, label in (("skipped_reasons", "Files skipped"),
+                             ("casts_not_written", "Casts not written (casts)"),
+                             ("unstorable_columns_dropped",
+                              "Columns not written: no WOD code, or not stored in the "
+                              "dataset (casts)"),
                              ("outputs_without_time", "No date"),
                              ("coded_headers_not_resolved", "Coded metadata kept as text")):
             if r.get(field):
                 lines.append(f"- {label}:")
                 lines += _items(r[field])
+            if field == "casts_not_written":
+                for path, casts in (r.get("casts_not_written_in") or {}).items():
+                    lines.append(f"  - in `{path}` (source profiles, counted from 0): "
+                                 + "; ".join(casts[:15]) + (" ..." if len(casts) > 15 else ""))
+        if r.get("levels_without_data"):
+            lines.append(f"- Levels with nothing measured (padding, blanked values), not "
+                         f"written: {r['levels_without_data']}")
         if r.get("outputs_without_time_of_day"):
             lines.append(f"- Date but no time of day: {len(r['outputs_without_time_of_day'])} "
                          f"file(s) (written date-only; GMT_time is fill)")
         for f in r.get("failures") or []:
             lines.append(f"- FAILED `{f['key']}` at {f['stage']}: {f['error']}")
         lines.append("")
-    taxa = report.get("taxa")
-    if taxa:
-        lines += ["## Plankton (Taxa-Records)", "",
-                  f"- {taxa.get('taxa_records', 0)} record(s) in "
-                  f"{taxa.get('staged_files', 0)} haul file(s), status {taxa.get('status')}"]
-        for field, label in (("unresolved_taxa", "Taxa with no WOD code (records; name kept)"),
-                             ("missing_biological_fields",
-                              "Collection metadata not stated (hauls)"),
-                             ("unmapped_columns", "Columns not written")):
-            if taxa.get(field):
-                lines.append(f"- {label}:")
-                lines += _items(taxa[field])
-        if taxa.get("taxa_resolved_at_higher_rank"):
-            names = list(taxa["taxa_resolved_at_higher_rank"])
-            lines.append(f"- Resolved at a higher rank (species lost): {len(names)} name(s)")
-            lines += _items(names)
-        lines.append("")
     v = report.get("verify") or {}
     if v.get("output_verified") is not None:
         lines += ["## Verification", "",
-                  f"- output_verified: {v['output_verified']}, findings {v.get('finding_counts')}"]
+                  f"- {v.get('casts')} cast(s) in {v.get('netcdf_files')} file(s): "
+                  + ("verified" if v["output_verified"] else "NOT verified")
+                  + f", findings {v.get('finding_counts')}. Verification checks that the "
+                    f"values are possible (Appendix 11 ranges, fill, copies, depth axis).",
+                  "- WOD quality control (Table 12 flags): "
+                  + ("run here." if report.get("wod_qc") else
+                     "not run here -- no WOD flags are set; WOD applies its own QC "
+                     "downstream (set WOD_RUN_QC=1 to run it here). The originator's own "
+                     "flags, where the source has them, are carried verbatim."), ""]
+        if v.get("variables"):
+            lines += ["| Variable | WOD code | Units | Values | Range-checked | Min | Max |",
+                      "| --- | --- | --- | --- | --- | --- | --- |"]
+            for name, s in v["variables"].items():
+                checked = s.get("levels_range_checked")
+                lines.append(f"| {name} | {s.get('wod_code')} | {_cell(s.get('units'))} | "
+                             f"{s.get('n_finite')} | "
+                             + ("all" if checked == s.get("n_finite") else
+                                f"{checked} (not checked: {s.get('values_not_range_checked')})")
+                             + f" | {s.get('min')} | {s.get('max')} |")
+            lines.append("")
         for f in v.get("findings") or []:
             lines.append(f"- [{f['severity']}] {f.get('variable') or f.get('file')}: "
                          f"{f['evidence']} -- {f['action']}")
-        lines.append("")
-    d = report.get("decisions") or {}
-    if any(d.values()):
-        lines += ["## Decisions applied", "",
-                  f"- Profile recipes: {d.get('profile_recipes')}; taxa recipes: "
-                  f"{d.get('taxa_recipes')}; files processed as they stand: "
-                  f"{d.get('direct_files')}"]
-        if d.get("skipped_by_decision"):
-            lines.append(f"- Skipped by decision: {[s['key'] for s in d['skipped_by_decision']]}")
-        for station, o in (d.get("station_overrides") or {}).items():
-            for note in o.get("notes") or []:
-                lines.append(f"- Station {station}: {note}")
-        lines.append("")
-    lines += ["## Files", ""] + [f"- {k}: `{p}`" for k, p in report["paths"].items()]
-    return "\n".join(l for l in lines if l is not None) + "\n"
+        if v.get("findings"):
+            lines.append("")
+    return lines

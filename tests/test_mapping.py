@@ -573,3 +573,36 @@ class TestFluorescenceIsDecidedByItsUnit:
         chl = next(m for m in contract["column_mapping"] if m["wod_code"] == 11)
         assert "in-situ fluorometer" in chl["comment"]
         assert any("not extracted chlorophyll" in w for w in contract["warnings"])
+
+
+class TestTable3aDecidesWhatEachDatasetStores:
+    def test_a_variable_the_dataset_does_not_store_is_left_out_and_said(self):
+        """MBT stores temperature only: an SV&T probe's computed salinity is not written."""
+        columns = ["Depth (m)", "Temp (C)", "Salinity (PSU)"]
+        profile = {"source": "t", "columns": columns,
+                   "raw_header_block": "LAT: 27.7 LON: -96.1\nDATE: 2025-02-01"}
+        c = generate_field_mapping(profile, query_wod_spec("MBT", columns))
+        assert [m["raw_column"] for m in c["column_mapping"]] == ["Depth (m)", "Temp (C)"]
+        dropped = [d for d in c["dropped_columns"] if d.get("kind") == "not_in_dataset"]
+        assert dropped[0]["column"] == "Salinity (PSU)"
+        assert "not in MBT (Table 3a)" in dropped[0]["reason"]
+
+    def test_a_cast_date_labelled_time_is_read(self):
+        """Expedition formats write the cast's date as `Time: 2009. 8.18`."""
+        from wod_etl.mapping.generate_field_mapping import parse_header_block
+
+        coords = parse_header_block("Stn: KD0309 ;  Lat: 81.671N;  Time: 2009. 8.18;")[
+            "coordinates"]
+        assert (coords["year"], coords["month"], coords["day"]) == (2009, 8, 18)
+        assert "hour" not in coords
+
+
+class TestTheRangeLookupIsTheManualsRuleForAnyNumberOfDepths:
+    def test_the_vectorised_lookup_agrees_with_the_scalar_one(self):
+        """Nearest listed level, the shallower on a tie, the deepest for all below it."""
+        from wod_etl.qc_transforms.apply_qc_auditing import range_at_depth, ranges_at_depths
+
+        z = np.array([0, 2.4, 5, 7.5, 12.5, 999, 5500, 9000, np.nan])
+        lo, hi = ranges_at_depths(1, z)
+        assert list(zip(lo, hi)) == [range_at_depth(1, float(d)) for d in z]
+        assert ranges_at_depths(25, z) is None or len(ranges_at_depths(25, z)[0]) == z.size

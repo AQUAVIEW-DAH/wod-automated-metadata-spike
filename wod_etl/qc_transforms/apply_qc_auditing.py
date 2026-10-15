@@ -103,6 +103,27 @@ def range_at_depth(wod_code: int, depth_m: float) -> Optional[Tuple[float, float
     return best[1], best[2]
 
 
+def ranges_at_depths(wod_code: int, depths) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """range_at_depth for a whole array of depths: the same rule, vectorised.
+
+    Resolving bounds once per distinct depth was quadratic -- depths computed from pressure
+    are nearly all distinct, and verifying 140 casts took a minute."""
+    levels = sorted(_range_levels().get(wod_code) or [], key=lambda lv: lv[0])
+    if not levels:
+        return None
+    listed = np.array([lv[0] for lv in levels], dtype=float)
+    lows = np.array([lv[1] for lv in levels], dtype=float)
+    highs = np.array([lv[2] for lv in levels], dtype=float)
+    z = np.asarray(depths, dtype=float)
+    z = np.where(np.isfinite(z), z, 0.0)
+    nxt = np.clip(np.searchsorted(listed, z, side="left"), 0, len(listed) - 1)
+    prev = np.clip(nxt - 1, 0, len(listed) - 1)
+    # The nearest listed level, the shallower one on a tie; the deepest covers all below.
+    pick = np.where(np.abs(z - listed[prev]) <= np.abs(listed[nxt] - z), prev, nxt)
+    pick = np.where(z >= listed[-1], len(listed) - 1, pick)
+    return lows[pick], highs[pick]
+
+
 def gradient_limits(wod_code: int, depth_m: float) -> Optional[Dict[str, float]]:
     """MGV/MIV/ZSI for a variable at a depth, honouring the 400 m split (manual p.54)."""
     f = _gradient_factors().get(wod_code)

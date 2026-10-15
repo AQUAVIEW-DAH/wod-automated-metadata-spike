@@ -11,6 +11,7 @@ from wod_etl.discovery import (
     list_remote_directory,
     load_tabular,
     profile_raw_data,
+    read_any,
     split_casts,
 )
 
@@ -337,3 +338,209 @@ class TestALocalCopyIsOnlyReusedWhileCurrent:
         res = download_file(str(src), dest_dir=str(tmp_path / "raw"))
         assert res["status"] == "copied" and "changed" in res["note"]
         assert (tmp_path / "raw" / "cast.csv").read_text().endswith("10,19\n")
+
+
+# LeConte's CTD units, offset and all, and the time of the first cast in its August 2016 file.
+LECONTE_UNITS = "seconds since 1970-01-01 00:00:00 0:00"
+T0 = 1470773808.0                                           # 2016-08-09 20:16:48 UTC
+
+
+class TestNetCDFCastsAreDatedAndPlacedByTheirOwnVariables:
+    """A NetCDF cast's header listed the file's attributes above the cast's own variables,
+    and the parser keeps the first `Date:` it meets. Every cast in a 155-cast file was dated
+    by `date_created` -- when the FILE was made -- while its own `time` stayed a raw count of
+    seconds, and a bounding-box corner stood in for each cast's position."""
+
+    @staticmethod
+    def _write(path, times, units=LECONTE_UNITS, fill=None, **attrs):
+        """Casts along `profile` with a time, lat and lon each, on a shared depth axis."""
+        import netCDF4
+
+        n = len(times)
+        with netCDF4.Dataset(path, "w") as ds:
+            ds.setncatts(attrs)
+            ds.createDimension("profile", n)
+            ds.createDimension("z", 3)
+            t = ds.createVariable("time", "f8", ("profile",), fill_value=fill)
+            t.units, t.calendar = units, "calendar"      # LeConte's: it names no calendar
+            t[:] = times
+            for name, unit, start, step in (("lat", "degrees_north", 56.82, 0.01),
+                                            ("lon", "degrees_east", -132.36, -0.01)):
+                v = ds.createVariable(name, "f4", ("profile",))
+                v.units = unit
+                v[:] = [start + i * step for i in range(n)]
+            z = ds.createVariable("z", "f4", ("z",))
+            z.units = "m"
+            z[:] = [1, 2, 3]
+            temp = ds.createVariable("temperature", "f4", ("profile", "z"))
+            temp.units = "degrees C"
+            temp[:] = [[5.0, 4.9, 4.8]] * n
+        return str(path)
+
+    @staticmethod
+    def _coords(cast):
+        """(year, month, day, hour, minute) and (latitude, longitude), as the mapper reads them."""
+        from wod_etl.mapping.generate_field_mapping import parse_header_block
+
+        c = parse_header_block(cast["header_block"])["coordinates"]
+        return (tuple(c.get(k) for k in ("year", "month", "day", "hour", "minute")),
+                (c.get("latitude"), c.get("longitude")))
+
+    def test_each_cast_has_its_own_date_time_and_position(self, tmp_path):
+        times = [T0, T0 + 86400 + 3600, T0 + 2 * 86400 + 7800]
+        casts, info = read_any(self._write(tmp_path / "ctd.nc", times))
+        assert info.get("error") is None
+        got = [self._coords(c) for c in casts]
+        assert [date for date, _ in got] == [(2016, 8, 9, 20, 16), (2016, 8, 10, 21, 16),
+                                             (2016, 8, 11, 22, 26)]
+        assert got[2][1] == pytest.approx((56.84, -132.38), abs=1e-4)
+        assert "time: 2016-08-09T20:16:48Z" in casts[0]["header_block"]
+
+    def test_the_files_own_dates_do_not_override_the_casts(self, tmp_path):
+        path = self._write(tmp_path / "ctd.nc", [T0, T0 + 86400],
+                           date_created="2019-05-28", time_coverage_start="2016-08-01")
+        casts, _ = read_any(path)
+        header = casts[1]["header_block"]
+        assert "date_created: 2019-05-28" in header          # kept, but never as a Date
+        assert "Date: 2019-05-28" not in header and "Date: 2016-08-01" not in header
+        assert self._coords(casts[1])[0] == (2016, 8, 10, 20, 16)
+
+    def test_a_single_profile_with_no_time_variable_still_uses_the_attributes(self, tmp_path):
+        import netCDF4
+
+        path = tmp_path / "one.nc"
+        with netCDF4.Dataset(path, "w") as ds:
+            ds.setncatts({"date_created": "2019-05-28", "time_coverage_start": "20240304T091500Z",
+                          "geospatial_lat_min": 34.25, "geospatial_lon_min": -120.5})
+            ds.createDimension("z", 3)
+            for name, unit in (("depth", "m"), ("temperature", "degC")):
+                v = ds.createVariable(name, "f4", ("z",))
+                v.units = unit
+                v[:] = [1, 2, 3]
+        casts, _ = read_any(str(path))
+        date, position = self._coords(casts[0])
+        assert date[:3] == (2024, 3, 4)
+        assert position == pytest.approx((34.25, -120.5))
+
+    @pytest.mark.parametrize("units", [LECONTE_UNITS, "seconds since 1970-01-01T00:00:00Z",
+                                       "seconds since 1970-01-01"])
+    def test_an_epoch_with_a_utc_offset_decodes(self, tmp_path, units):
+        casts, _ = read_any(self._write(tmp_path / "ctd.nc", [T0], units=units))
+        assert self._coords(casts[0])[0] == (2016, 8, 9, 20, 16)
+
+    def test_a_mistyped_epoch_leaves_the_cast_undated_and_says_so(self, tmp_path):
+        """LeConte's keel CTD wrote 1070 for 1970, which puts a 2018 cast in 1118."""
+        units = "seconds since 1070-01-01 00:00:00 0:00"
+        path = self._write(tmp_path / "keel.nc", [1536014356.5], units=units,
+                           time_coverage_start="2018-09-03")
+        casts, info = read_any(path)
+        assert "Date:" not in casts[0]["header_block"]
+        assert self._coords(casts[0])[0] == (None,) * 5
+        warning = next(w for w in info["warnings"] if "epoch looks wrong" in w)
+        assert "'time'" in warning and units in warning and "1118-09-03" in warning
+
+    def test_a_missing_time_dates_nothing(self, tmp_path):
+        """A fill or NaN time gives no date, and the file's date does not stand in for it."""
+        path = self._write(tmp_path / "ctd.nc", [T0, -9999.0, float("nan")], fill=-9999.0,
+                           time_coverage_start="2016-08-01")
+        casts, _ = read_any(path)
+        assert self._coords(casts[0])[0] == (2016, 8, 9, 20, 16)
+        for cast in casts[1:]:
+            assert "Date:" not in cast["header_block"]
+            assert self._coords(cast)[0] == (None,) * 5
+
+    def test_a_bounding_box_does_not_override_the_cast_position(self, tmp_path):
+        path = self._write(tmp_path / "ctd.nc", [T0, T0 + 600],
+                           geospatial_lat_min=56.0, geospatial_lon_min=-133.0)
+        casts, _ = read_any(path)
+        assert "geospatial_lat_min: 56.0" in casts[1]["header_block"]
+        assert "(from global attribute geospatial_lat_min)" not in casts[1]["header_block"]
+        assert self._coords(casts[1])[1] == pytest.approx((56.83, -132.37), abs=1e-4)
+
+    def test_a_lone_cast_timed_per_scan_is_dated_by_its_first_scan(self, tmp_path):
+        import netCDF4
+
+        path = tmp_path / "scans.nc"
+        with netCDF4.Dataset(path, "w") as ds:
+            ds.time_coverage_start = "2016-08-01"
+            ds.createDimension("obs", 3)
+            t = ds.createVariable("time", "f8", ("obs",), fill_value=-9999.0)
+            t.units = LECONTE_UNITS
+            t[:] = [-9999.0, T0, T0 + 30]
+            for name, unit in (("depth", "m"), ("temperature", "degC")):
+                v = ds.createVariable(name, "f4", ("obs",))
+                v.units = unit
+                v[:] = [1, 2, 3]
+        casts, _ = read_any(str(path))
+        assert self._coords(casts[0])[0] == (2016, 8, 9, 20, 16)
+
+
+class TestStationBlockFiles:
+    """Expedition CTD files: a file header, then per station a `Stn:` line, a level count, a
+    line of column names and rows -- one block straight after another."""
+
+    @staticmethod
+    def _text(levels=(12, 12), stated=(12, 14)):
+        out = [" Experiment:  NABOS-09          Number of stations:  2",
+               " Area:        Arctic Ocean      Missing value:       -9", ""]
+        for (stn, lat, lon, day), n, says in zip(
+                (("KD0309", "81.671N", "31.307E", "18"), ("KD0409a", "81.771N", "31.029E", "19")),
+                levels, stated):
+            out += [f"Stn: {stn} ;  Lat: {lat};  Lon:  {lon};  Time: 2009. 8.{day};  "
+                    f"Depth: -999m", f"Number of levels: {says};  Ice:   0%      Comment: CTD",
+                    "    PR     TEMP  SALNTY"]
+            out += [f"{1.5 + i / 2:7.2f}  {-1.3 - i / 100:6.3f}  {32.3 + i / 100:6.3f}"
+                    if i != 1 else f"{2.0:7.2f}  -9.000  -9.000" for i in range(n)]
+        return "\n".join(out) + "\n"
+
+    def test_every_block_is_a_cast_with_the_file_header(self, tmp_path):
+        from wod_etl.mapping.generate_field_mapping import parse_header_block
+
+        p = tmp_path / "2009CTD.txt"
+        p.write_text(self._text())
+        casts, info = read_any(str(p))
+        assert [c["df"].shape for c in casts] == [(12, 3), (12, 3)], info
+        assert list(casts[1]["df"].columns) == ["PR", "TEMP", "SALNTY"]
+        assert "Missing value:       -9" in casts[1]["header_block"]
+        coords = parse_header_block(casts[1]["header_block"])["coordinates"]
+        assert (coords["year"], coords["month"], coords["day"]) == (2009, 8, 19)
+        assert (coords["latitude"], coords["longitude"]) == (81.771, 31.029)
+        assert "hour" not in coords                       # a date, not a time of day
+
+    def test_the_declared_missing_value_is_missing_and_a_short_block_is_reported(self,
+                                                                                tmp_path):
+        p = tmp_path / "2009CTD.txt"
+        p.write_text(self._text())
+        casts, info = read_any(str(p))
+        assert casts[0]["df"]["TEMP"].isna().tolist() == [False, True] + [False] * 10
+        assert any("declared missing value -9" in w for w in info["warnings"])
+        assert any("states 14 levels, 12 were read" in w for w in info["warnings"])
+
+
+class TestNetCDFStringDimensions:
+    def test_a_string_length_dimension_is_not_the_profile_dimension(self, tmp_path):
+        """NCEI's profile template spells each profile's id along `profile_id_length`,
+        which matches the hint 'profile' and is longer than the one profile there is."""
+        import netCDF4
+        import numpy as np
+
+        p = tmp_path / "mvp.nc"
+        with netCDF4.Dataset(p, "w") as ds:
+            ds.createDimension("profile", 1)
+            ds.createDimension("z", 5)
+            ds.createDimension("profile_id_length", 40)
+            pid = ds.createVariable("profile", "S1", ("profile", "profile_id_length"))
+            pid[0, :] = np.array(list("2025-02-01T04:38:30Z".ljust(40)), dtype="S1")
+            for name, units, value in (("time", "seconds since 1970-01-01 00:00:00",
+                                        1738384710), ("lat", "degrees_north", 27.71),
+                                       ("lon", "degrees_east", -96.12)):
+                v = ds.createVariable(name, "f8", ("profile",))
+                v.units = units
+                v[:] = [value]
+            for name, units in (("depth", "m"), ("temperature", "degree_C")):
+                v = ds.createVariable(name, "f4", ("profile", "z"))
+                v.units = units
+                v[:] = np.arange(5, dtype="f4").reshape(1, 5) + 1
+        casts, info = read_any(str(p))
+        assert len(casts) == 1 and casts[0]["df"].shape == (5, 2), info
+        assert "Date: 2025-02-01" in casts[0]["header_block"]

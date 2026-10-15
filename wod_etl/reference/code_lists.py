@@ -202,12 +202,22 @@ def parse_code_list(text: str) -> List[Dict[str, Any]]:
                 if ":" in head:
                     names.add(normalise_label(head.split(":", 1)[1]))
         names.discard("")
+        # An entry the list itself retires is no answer: 'KAPITAN DRANITSYN ... DO NOT
+        # USE' made the ship's name ambiguous with the code to use.
+        if re.search(r"\bdo\s+not\s+use\b", label, re.IGNORECASE):
+            names = set()
         entry = {"code": code, "label": re.sub(r"\s+", " ", label), "names": sorted(names)}
         if header is not None:
             for name, value in zip(header[1:-1], r[1:-1]):
                 entry[name] = value.strip()
         entries.append(entry)
     return entries
+
+
+# Lists not downloaded just to confirm a number is in them. The accession list is every NCEI
+# accession there is: fetching it to verify one number cost each run a minute and a half of
+# timeouts, and NCEI assigned the number in the first place. A cached copy is still used.
+_NOT_FETCHED_TO_VERIFY = {("secondary_header", 1)}
 
 
 def lookup_code(namespace: str, field_id: int, value: Any, *,
@@ -226,6 +236,8 @@ def lookup_code(namespace: str, field_id: int, value: Any, *,
         return {**base, "status": "already_a_code" if numeric else "disabled",
                 "code": text.rstrip(".").split(".")[0] if numeric else None}
 
+    if numeric and (namespace, field_id) in _NOT_FETCHED_TO_VERIFY:
+        fetch = False
     listing = load_code_list(namespace, field_id, fetch=fetch)
     base.update(code_list=listing.get("url"), retrieved=listing.get("retrieved"),
                 list_status=listing.get("status"))
@@ -283,6 +295,11 @@ def describe_lookup(result: Dict[str, Any]) -> str:
     if st == "matched":
         return f"matched {result['code']} {result.get('label', '')}{where}{when}"
     if st == "ambiguous":
+        # 'CTD' names a kind of instrument, and every entry of that kind starts with it:
+        # offering two of them as the choice points at the wrong answer.
+        if len(re.sub(r"[^A-Za-z0-9]", "", str(result.get("value") or ""))) <= 4:
+            return (f"{result.get('value')!r} is too general to code{where}{when}: name the "
+                    f"model (e.g. 'SBE 19plus') in decisions.toml [metadata] Instrument")
         return (f"ambiguous{where}{when}: " + "; ".join(
             f"{c['code']} {c['label']}" for c in result.get("candidates", [])[:6])
             + " -- choose one with the submitter")

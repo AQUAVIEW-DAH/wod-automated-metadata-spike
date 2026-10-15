@@ -43,33 +43,41 @@ Run everything with `uv run` from the project root.
 
 ## Run an accession yourself
 
-No coding agent needed. One command runs every stage for one accession:
+No coding agent needed. Every accession runs in two steps, with your review in between:
 
 ```bash
-uv run wod-etl run 0303928                        # an accession number
+uv run wod-etl run 0303928                        # 1. an accession number, or
 uv run wod-etl run "https://www.ncei.noaa.gov/access/metadata/landing-page/bin/iso?id=gov.noaa.nodc:303535"
-uv run wod-etl run data/raw/0303928               # a folder already on disk, or a .tar.gz
+uv run wod-etl run data/raw/0303928               #    a folder on disk, or a .tar.gz
+#    review data/runs/0303928/decisions.toml
+uv run wod-etl confirm 0303928                    # 2. write what the review includes
 uv run wod-etl status 0303928                     # where it stopped, and what is open
 ```
 
-It resolves and downloads the accession, triages every file, stages what it can, writes the
-WOD NetCDF and verifies it. **When a judgement is needed** -- which unit a table is in, what
-an unlabelled file is, which of two sources has a station's date right -- it pauses and
-writes the questions, pre-filled with its proposals, into
-`data/runs/<accession>/decisions.toml`. Answer them and run the same command again: it
-continues from where it stopped, and redoes only what your answers changed.
+**`run`** resolves and downloads the accession, looks into every file and writes
+`data/runs/<accession>/decisions.toml`: for each file (alike files share one entry) **what
+data it holds, whether it goes into WOD, as which WOD dataset, and why** -- documentation,
+ADCP velocities, mooring records and sediment are left out with the reason. Nothing is
+processed. **Review the file** and change what you disagree with (`include`, `dataset`,
+`drop` a variable, add `[metadata]` such as the platform). **`confirm`** then writes every
+included file as WOD-standard, CF-compliant NetCDF -- Table 3a codes and units, depth from
+pressure where needed, provenance in each file -- and verifies it. Running a command again
+continues from where it stopped and redoes only what changed.
 
 | Exit code | Meaning |
 | --- | --- |
-| 0 | finished, output verified |
-| 1 | a stage failed -- the message says what failed, why, and how to fix it |
-| 2 | paused: answer the questions in decisions.toml, then rerun |
-| 3 | finished, but verification flagged the output (see report.md) |
-| 130 | interrupted -- rerun to continue |
+| 0 | `run`: decisions written for review · `confirm`: written and verified, or nothing to write |
+| 1 | a stage failed, or a file could not be written -- the message says what, why, and how to fix it |
+| 2 | `confirm`: decisions needed -- fill in what decisions.toml asks (or `run` again if the files changed), then confirm again |
+| 3 | `confirm`: written, but verification flagged the output (see report.md) |
+| 130 | interrupted -- run the same command again to continue |
 
-Everything about an accession lives in `data/runs/<accession>/`: `run.log` (every run,
-person or agent, appended), `report.md` (the summary to read first), `decisions.toml` and
-`state.json`. Outputs go to `data/processed/<accession>/pipeline/`. The full reference is
+Everything about an accession lives in `data/runs/<accession>/`: `decisions.toml` (the
+review), `report.md` (the run summary to read first), `run.log` and `events.jsonl` (every
+command, every file, cast and decision, appended) and `state.json`. The output goes to
+`data/processed/<accession>/` in WOD's own layout -- one file per WOD dataset and year, named
+as WOD names its files plus the accession: `wod_ctd_2008_0062621.nc` is accession 0062621's
+CTD casts of 2008, each cast saying which source file it came from. The full reference is
 [*Run it yourself* in the orchestration README](wod_etl/orchestration/README.md#run-it-yourself-wod-etl).
 
 ---

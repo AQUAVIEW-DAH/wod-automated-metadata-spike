@@ -114,9 +114,12 @@ def _copy_local(src: str, dest: Path, overwrite: bool) -> Dict[str, Any]:
     if dest.exists() and not overwrite:
         # A copy is only current if it still matches its source. Returning it regardless
         # meant a staged file regenerated under the same run id was never read again: the
-        # run reprocessed the stale copy and reported success.
+        # run reprocessed the stale copy and reported success. copy2 keeps the source's
+        # mtime to the nanosecond, so a copy is current when size and mtime are the SAME --
+        # "not newer, to the second" took another file of one size, written in the same
+        # second (a run id reused on another folder), for the one copied.
         s, d = src_p.stat(), dest.stat()
-        if s.st_size == d.st_size and int(s.st_mtime) <= int(d.st_mtime):
+        if s.st_size == d.st_size and s.st_mtime_ns == d.st_mtime_ns:
             return {"status": "cached", "source": src, "local_path": str(dest),
                     "size_bytes": d.st_size, "sha256": _sha256(dest)}
         note = "the source changed since the cached copy was made; copied again"

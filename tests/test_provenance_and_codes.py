@@ -272,3 +272,275 @@ class TestProvenanceReachesTheOutput:
         with nc.Dataset(out) as ds:
             assert ds.getncattr("comment") == "shared"
             assert list(ds["cast_notes"][:]) == ["only a", ""]
+
+
+class TestDepthFromPressure:
+    """WOD computes the depths of casts measured on pressure surfaces and keeps the pressure
+    as a variable (WOD manual, cast structure)."""
+
+    def _run(self, tmp_path, column):
+        d = tmp_path / "in"
+        d.mkdir()
+        (d / "cast.csv").write_text(
+            "# LAT: 30.0\n# LON: -140.0\n# DATE: 2015-11-09\n"
+            f"{column},Temperature (deg C)\n"
+            + "".join(f"{p},{20 - p / 100:.2f}\n" for p in (0, 10, 500, 1000)))
+        return process_accession(str(d), output_dir=str(tmp_path / "o"),
+                                 raw_dir=str(tmp_path / "r"), run_id="t_pressure",
+                                 resume=False, verify=False,
+                                 dataset_overrides={"cast.csv": "CTD"})
+
+    def test_decibars_become_depth_with_the_derivation_said(self, tmp_path):
+        import netCDF4 as nc
+
+        res = self._run(tmp_path, "Pressure (dbar)")
+        assert res["counts"].get("done") == 1, res
+        from wod_etl.staging import pressure_to_depth
+
+        with nc.Dataset(res["outputs"][0]) as ds:
+            z = ds["z"][:]
+            # UNESCO 1983 at 30 N: 1000 dbar is about 991 m, not 1000 m.
+            assert abs(float(z[-1]) - pressure_to_depth(1000.0, 30.0)) < 0.01
+            assert float(z[-1]) < 995 and float(z[0]) == 0.0
+            assert "depth computed from Pressure (dbar)" in ds.getncattr("comment")
+
+    def test_pressure_in_another_unit_is_refused_with_why(self, tmp_path):
+        res = self._run(tmp_path, "Pressure (kPa)")
+        assert not res["counts"].get("done")
+        reasons = " ".join(f["error"] for f in res["failures"]) + " ".join(res["skipped_reasons"])
+        assert "not in decibars" in reasons
+
+
+class TestCastsAFileLeavesOutAreReported:
+    def test_a_profile_with_no_position_is_counted_not_lost(self, tmp_path):
+        import netCDF4
+        import numpy as np
+
+        d = tmp_path / "in"
+        d.mkdir()
+        with netCDF4.Dataset(d / "casts.nc", "w") as ds:
+            ds.createDimension("profile", 2)
+            ds.createDimension("z", 4)
+            for name, units, values in (("time", "seconds since 1970-01-01", [1.47e9, 1.48e9]),
+                                        ("lat", "degrees_north", [56.8, np.nan]),
+                                        ("lon", "degrees_east", [-132.4, np.nan])):
+                v = ds.createVariable(name, "f8", ("profile",))
+                v.units = units
+                v[:] = values
+            zv = ds.createVariable("z", "f8", ("z",))
+            zv.units, zv.standard_name = "m", "depth"
+            zv[:] = [1.0, 2.0, 3.0, 4.0]
+            t = ds.createVariable("temperature", "f4", ("profile", "z"))
+            t.units = "degrees C"
+            t[:] = np.full((2, 4), 5.0)
+        res = process_accession(str(d), output_dir=str(tmp_path / "o"),
+                                raw_dir=str(tmp_path / "r"), run_id="t_noposition",
+                                resume=False, verify=False, dataset_overrides={"": "CTD"})
+        assert res["counts"].get("done") == 1 and res["dataset_types"] == {"CTD": 1}
+        (why, n), = res["casts_not_written"].items()
+        assert n == 1 and "missing required coordinate(s): latitude, longitude" in why
+
+
+class TestADecidedCTDStillFollowsTheResolutionRule:
+    def test_a_coarse_cast_decided_as_ctd_is_written_as_osd(self, tmp_path):
+        """Low-resolution CTD belongs in OSD (manual p.19), whoever named the dataset."""
+        d = tmp_path / "in"
+        d.mkdir()
+        (d / "coarse.csv").write_text(
+            "# LAT: 30.0\n# LON: -140.0\n# DATE: 2015-11-09\n"
+            "Depth (m),Temperature (deg C)\n" + "".join(f"{z},{20 - z / 100:.2f}\n"
+                                                      for z in range(0, 100, 10)))
+        res = process_accession(str(d), output_dir=str(tmp_path / "o"),
+                                raw_dir=str(tmp_path / "r"), run_id="t_coarse", resume=False,
+                                verify=False, dataset_overrides={"coarse.csv": "CTD"})
+        assert res["dataset_types"] == {"OSD": 1}
+
+
+class TestTheOutputIsCF:
+    def test_units_are_udunits_and_table_3a_wording_is_kept(self, tmp_path):
+        import netCDF4 as nc
+
+        out = tmp_path / "cf.nc"
+        write_ragged_profiles([make_cast()], str(out))
+        with nc.Dataset(out) as ds:
+            t = ds["temperature"]
+            assert t.units == "degree_C" and t.wod_units == "Degrees Celsius"
+            assert t.standard_name == "sea_water_temperature" and ds["z"].units == "m"
+
+    def test_missing_values_are_the_fill_value_not_nan(self, tmp_path):
+        import netCDF4 as nc
+
+        cast = make_cast(rows=3)
+        cast["df"].loc[1, "Temp_C"] = np.nan
+        out = tmp_path / "fill.nc"
+        write_ragged_profiles([cast], str(out))
+        with nc.Dataset(out) as ds:
+            ds.set_auto_mask(False)
+            raw = ds["temperature"][:]
+            assert raw[1] == ds["temperature"]._FillValue and not np.isnan(raw).any()
+
+
+def _write(tmp_path, name, text):
+    d = tmp_path / "in"
+    d.mkdir(exist_ok=True)
+    (d / name).write_text(text)
+    return d
+
+
+def _run_one(d, tmp_path, **kw):
+    return process_accession(str(d), output_dir=str(tmp_path / "o"), raw_dir=str(tmp_path / "r"),
+                             run_id=f"t_{tmp_path.name}", resume=False, verify=False, **kw)
+
+
+HEADER = "# LAT: 30.0\n# LON: -140.0\n# DATE: 2015-11-09\n# TIME: 04:38:30\n"
+
+
+class TestWhatIsWrittenIsWhatWasMeasured:
+    def test_a_level_with_nothing_measured_is_not_written(self, tmp_path):
+        d = _write(tmp_path, "ctd.csv", HEADER + "Depth (m),Temperature (deg C)\n"
+                   + "".join(f"{z},{'' if z > 5 else 20 - z / 10}\n" for z in range(10)))
+        res = _run_one(d, tmp_path, dataset_overrides={"ctd.csv": "CTD"})
+        assert res["levels_without_data"] == 4
+        with nc.Dataset(res["outputs"][0]) as ds:
+            assert ds.dimensions["z_obs"].size == 6
+
+    def test_the_time_keeps_its_seconds(self, tmp_path):
+        d = _write(tmp_path, "ctd.csv", HEADER + "Depth (m),Temperature (deg C)\n0,20\n1,19.9\n")
+        res = _run_one(d, tmp_path, dataset_overrides={"ctd.csv": "CTD"})
+        with nc.Dataset(res["outputs"][0]) as ds:
+            assert abs(float(ds["GMT_time"][0]) - (4 + 38 / 60 + 30 / 3600)) < 1e-4
+
+    def test_the_accession_is_written_into_every_cast(self, tmp_path):
+        d = _write(tmp_path, "ctd.csv", HEADER + "Depth (m),Temperature (deg C)\n0,20\n1,19.9\n")
+        res = _run_one(d, tmp_path, dataset_overrides={"ctd.csv": "CTD"}, accession="0189574")
+        with nc.Dataset(res["outputs"][0]) as ds:
+            text = " ".join(str(ds.getncattr(a)) for a in ds.ncattrs())
+            text += " ".join(str(v[:]) for n, v in ds.variables.items() if "secondary" in n)
+            assert "0189574" in text
+
+    def test_a_dropped_variable_and_review_metadata_are_applied(self, tmp_path):
+        d = _write(tmp_path, "ctd.csv", HEADER + "Depth (m),Temperature (deg C),Salinity (PSU)\n"
+                   "0,20,34.5\n1,19.9,34.6\n")
+        res = _run_one(d, tmp_path, dataset_overrides={"ctd.csv": "CTD"},
+                       file_options={"ctd.csv": {"drop": ["salinity"],
+                                                 "metadata": {"Platform": "Kapitan Dranitsyn"}}})
+        with nc.Dataset(res["outputs"][0]) as ds:
+            assert "salinity" not in ds.variables and "temperature" in ds.variables
+            assert "Salinity (PSU) (Salinity, left out by decisions.toml)" in ds.getncattr("comment")
+            assert "Kapitan Dranitsyn" in " ".join(str(ds.getncattr(a)) for a in ds.ncattrs())
+        assert any("left out by decisions.toml" in k for k in res["unstorable_columns_dropped"])
+
+    def test_a_flag_column_naming_no_variable_is_every_variables_originator_flag(self,
+                                                                                tmp_path):
+        d = _write(tmp_path, "ctd.csv", HEADER + "Depth (m),Temperature (deg C),flag\n"
+                   "0,20,0\n1,19.9,1\n")
+        res = _run_one(d, tmp_path, dataset_overrides={"ctd.csv": "CTD"})
+        with nc.Dataset(res["outputs"][0]) as ds:
+            assert list(ds["temperature_qc_originator"][:]) == [0.0, 1.0]
+
+
+class TestTheSourceIsReadAsItsOriginatorMeantIt:
+    def test_a_duplicate_cast_is_written_once(self, tmp_path):
+        import netCDF4
+
+        d = tmp_path / "in"
+        d.mkdir()
+        with netCDF4.Dataset(d / "casts.nc", "w") as ds:
+            ds.createDimension("profile", 3)
+            ds.createDimension("z", 4)
+            for name, units, values in (("time", "seconds since 1970-01-01",
+                                         [1.47e9, 1.47e9, 1.48e9]),
+                                        ("lat", "degrees_north", [56.8, 56.8, 56.9]),
+                                        ("lon", "degrees_east", [-132.4, -132.4, -132.3])):
+                v = ds.createVariable(name, "f8", ("profile",))
+                v.units = units
+                v[:] = values
+            zv = ds.createVariable("z", "f8", ("z",))
+            zv.units, zv.standard_name = "m", "depth"
+            zv[:] = [1.0, 2.0, 3.0, 4.0]
+            t = ds.createVariable("temperature", "f4", ("profile", "z"))
+            t.units = "degrees C"
+            t[:] = np.array([[5, 5.1, 5.2, 5.3], [5, 5.1, 5.2, 5.3], [6, 6.1, 6.2, 6.3]])
+        res = _run_one(d, tmp_path, dataset_overrides={"casts.nc": "CTD"})
+        assert res["dataset_types"] == {"CTD": 2}
+        (why, n), = res["casts_not_written"].items()
+        assert n == 1 and why.startswith("an exact duplicate of an earlier cast")
+
+    def test_a_float_fill_is_missing_not_a_value(self, tmp_path):
+        d = _write(tmp_path, "ctd.csv", HEADER + "Depth (m),Temperature (deg C)\n"
+                   "0,20\n1,-9.99e-29\n2,19.8\n")
+        res = _run_one(d, tmp_path, dataset_overrides={"ctd.csv": "CTD"})
+        with nc.Dataset(res["outputs"][0]) as ds:
+            assert ds.dimensions["z_obs"].size == 2                # the level held nothing
+
+    def test_the_depth_on_a_station_line_is_the_bottom_depth_and_minus_999_is_none(self):
+        from wod_etl.mapping.generate_field_mapping import parse_header_block
+
+        line = "Stn: KD5408 ;  Lat: 81.529N;  Lon:  30.857E;  Time: 2008.10.27;  Depth:  900m"
+        assert parse_header_block(line)["secondary_headers"]["10"]["value"] == 900.0
+        assert "10" not in parse_header_block(line.replace("900m", "-999m"))[
+            "secondary_headers"]
+
+    def test_a_source_line_naming_a_project_is_not_a_source_file(self):
+        from wod_etl.mapping.generate_field_mapping import parse_header_block
+
+        h = parse_header_block("Source:      NABOS             Comment: I/B Kapitan Dranitsyn")
+        assert h["sources"] == []
+        assert parse_header_block("# Source: data/raw/x/cast.csv")["sources"] == [
+            "data/raw/x/cast.csv"]
+
+    def test_a_key_value_line_with_commas_is_not_split_into_pairs(self):
+        from wod_etl.mapping import map_metadata
+
+        md = map_metadata("title: CTD profiles from LeConte Bay, Alaska, August 2016", [],
+                          None, "CTD")
+        kept = " ".join(str(v) for v in (md.get("unplaced") or md.get("metadata_not_placed")
+                                         or {}).values()) if isinstance(
+            md.get("unplaced") or md.get("metadata_not_placed"), dict) else str(md)
+        assert "='August 2016'" not in kept and "LeConte Bay='" not in kept
+
+
+class TestTheReviewHasTheLastWord:
+    def test_review_metadata_overrides_what_the_file_states(self, tmp_path):
+        d = _write(tmp_path, "ctd.csv", HEADER + "# Instrument: CTD\n# Project: wrong\n"
+                   "Depth (m),Temperature (deg C)\n0,20\n1,19.9\n")
+        res = _run_one(d, tmp_path, dataset_overrides={"ctd.csv": "CTD"},
+                       file_options={"ctd.csv": {"drop": [],
+                                                 "metadata": {"Project": "NABOS"}}})
+        with nc.Dataset(res["outputs"][0]) as ds:
+            attrs = " ".join(f"{a}={ds.getncattr(a)}" for a in ds.ncattrs())
+            assert "NABOS" in attrs and "wrong" not in attrs.split("metadata_not_placed")[0]
+
+    def test_a_single_level_ctd_cast_is_low_resolution_and_goes_to_osd(self, tmp_path):
+        d = _write(tmp_path, "one.csv", HEADER + "Depth (m),Temperature (deg C)\n2.5,20\n")
+        res = _run_one(d, tmp_path, dataset_overrides={"one.csv": "CTD"})
+        assert res["dataset_types"] == {"OSD": 1}
+
+
+class TestCodeListsAreReadAsWODMeansThem:
+    def test_an_entry_the_list_retires_is_no_match(self):
+        entries = parse_code_list("code_name,platform\n10125,KAPITAN DRANITSYN (DO NOT USE)\n"
+                                  "8553,KAPITAN DRANITSYN (I/B)\n")
+        from wod_etl.reference.code_lists import normalise_label
+
+        named = [e for e in entries if normalise_label("Kapitan Dranitsyn") in e["names"]]
+        assert [e["code"] for e in named] == ["8553"]
+
+    def test_a_generic_value_is_told_to_name_the_model_not_to_pick_a_candidate(self):
+        from wod_etl.reference.code_lists import describe_lookup
+
+        text = describe_lookup({"status": "ambiguous", "value": "CTD", "field": "v_5_instrument",
+                                "candidates": [{"code": "407", "label": "CTD: (MHI)"},
+                                               {"code": "408", "label": "CTD: (IO RAS)"}]})
+        assert "too general" in text and "407" not in text
+
+
+class TestKeyValueHeadersKeepTheirCommas:
+    def test_a_title_with_commas_is_one_value_and_two_pairs_on_a_line_are_two(self):
+        from wod_etl.mapping import map_metadata
+
+        md = map_metadata("title: CTD profiles from LeConte Bay, Alaska, August 2016\n"
+                          "Weather observer: K. Smith, deck 2", [], None, "CTD")
+        values = {u["key"]: u["value"] for u in md["unresolved"]}
+        assert values.get("title") == "CTD profiles from LeConte Bay, Alaska, August 2016"
+        assert values.get("Weather observer") == "K. Smith, deck 2"

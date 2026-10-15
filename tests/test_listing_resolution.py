@@ -111,8 +111,28 @@ class TestLandingPageResolution:
             raise httpx.ConnectError("503 forever")
         monkeypatch.setattr(lrd_module, "get_with_retries", down)
         res = list_remote_directory("0303535")
-        assert "could not read the landing page" in res["error"]
+        assert "could not find the data directory for accession 303535" in res["error"]
+        assert "landing-page" in res["error"] and "geoportal" in res["error"]
         assert "archive/accession/download/303535" in res["hint"]
+
+    def test_the_metadata_catalogue_is_asked_first_and_answers_when_the_page_does_not(
+            self, fake_ncei, monkeypatch):
+        """NCEI's landing page renders on request and can time out for minutes; the ISO
+        record from the catalogue names the same archive bundle in under a second."""
+        real = lrd_module.get_with_retries
+
+        def landing_down(url, **kw):
+            if "landing-page" in url:
+                raise httpx.ReadTimeout("The read operation timed out")
+            if "geoportal" in url:
+                return _Resp("<gmd:URL>https://www.ncei.noaa.gov/data/oceans/archive/arc0238/"
+                             "0303535/</gmd:URL>")
+            return real(url, **kw)
+        monkeypatch.setattr(lrd_module, "get_with_retries", landing_down)
+        r = resolve_accession_url(
+            "https://www.ncei.noaa.gov/access/metadata/landing-page/bin/iso?id=gov.noaa.nodc:303535")
+        assert r["url"] == ROOT and "geoportal" in r["resolved_from"]
+        assert not any("landing-page" in c for c in fake_ncei)
 
     def test_process_accession_keys_are_relative_to_the_resolved_version(self, fake_ncei,
                                                                         tmp_path):

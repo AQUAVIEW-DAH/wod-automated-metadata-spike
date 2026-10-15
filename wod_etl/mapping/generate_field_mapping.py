@@ -112,6 +112,11 @@ def generate_field_mapping(
     dropped: List[Dict[str, Any]] = []
     warnings: List[str] = []
     seen_codes = set()
+    # A flag column that names no variable (`flag`, `QC`) qualifies the whole level: it is
+    # the originator's flag of every variable measured there, kept verbatim.
+    level_flags = [f["flag_column"] for f in metadata["originator_flags"]
+                   if f["scope"] == "level or cast"]
+    level_flag = level_flags[0] if len(level_flags) == 1 else None
 
     for col in raw_columns:
         if col in consumed:
@@ -144,6 +149,23 @@ def generate_field_mapping(
             unmapped_cols.append(col)
             continue
 
+        # Table 3a says which datasets store each variable. A cast written as one that does
+        # not store it -- salinity in an MBT cast, phosphate in a CTD cast -- would carry a
+        # variable WOD has no place for there, so it is left out and reported, never written.
+        dataset = spec_result.get("wod_dataset_code")
+        spec_var = next((s for s in spec_result.get("standard_variables", [])
+                         if s.get("wod_code") == code), None)
+        if spec_var is not None and spec_var.get("valid_for_dataset") is False:
+            dropped.append({
+                "column": col, "variable": f"{var['name']}, not stored in {dataset}",
+                "kind": "not_in_dataset",
+                "reason": f"WOD stores {var['name']} in {', '.join(var['datasets'])}, not in "
+                          f"{dataset} (Table 3a).",
+                "route": "If it was measured and belongs in WOD, write the file as a dataset "
+                         "that stores it: set `dataset` in its decisions.toml entry."})
+            unmapped_cols.append(col)
+            continue
+
         if code in seen_codes:
             warnings.append(
                 f"Column '{col}' maps to WOD code {code} ({var['name']}), already claimed by "
@@ -171,7 +193,7 @@ def generate_field_mapping(
                 metadata["variable_specific_headers"].get(col, {}).get("headers", {}),
             "originator_flag_column": next(
                 (f["flag_column"] for f in metadata["originator_flags"]
-                 if f.get("flags_column") == col), None),
+                 if f.get("flags_column") == col), None) or level_flag,
         }
         fluor = fluorescence_rule(col)
         if fluor is not None and fluor.get("code") == code:
@@ -186,13 +208,6 @@ def generate_field_mapping(
             mapping["conversion_from"] = f"{source[0]}/{'l' if source[1] == 'volume' else 'kg'}"
             mapping["conversion_to"] = f"{target[0]}/{'l' if target[1] == 'volume' else 'kg'}"
 
-        spec_var = next((s for s in spec_result.get("standard_variables", [])
-                         if s.get("wod_code") == code), None)
-        if spec_var is not None and spec_var.get("valid_for_dataset") is False:
-            warnings.append(
-                f"WOD code {code} ({var['name']}) is not stored in dataset "
-                f"{spec_result.get('wod_dataset_code')} per Table 3a."
-            )
         column_mappings.append(mapping)
 
     extracted = _parse_header_block(raw_header_text)
@@ -208,7 +223,9 @@ def generate_field_mapping(
     for entry in dropped:
         warnings.append(f"Column '{entry['column']}' is {entry['variable'].replace('_', ' ')}: "
                         f"{entry['reason']} {entry['route']}")
-    unresolved_flags = [f for f in metadata["originator_flags"] if f["scope"] != "variable"]
+    unresolved_flags = [f for f in metadata["originator_flags"]
+                        if f["scope"] == "unresolved"
+                        or (f["scope"] == "level or cast" and level_flag is None)]
     if unresolved_flags:
         warnings.append(
             "Originator quality flag column(s) "
@@ -360,7 +377,8 @@ def _parse_header_block(raw_header_text: str) -> Dict[str, Any]:
             notes.append(_NOTE_LINE.sub("", line, count=1).strip())
             continue
         m = _SOURCE_LINE.match(line)
-        if m:
+        # Only a path is a source FILE: `Source: NABOS` in a data header names a project.
+        if m and re.fullmatch(r"\S*(?:[/\\]\S+|\.[A-Za-z0-9]{2,5})", m.group(1).split()[0]):
             sources.append(m.group(1).strip())
             continue
         m = _TIME_ZONE_LINE.match(line)
@@ -370,6 +388,7 @@ def _parse_header_block(raw_header_text: str) -> Dict[str, Any]:
 
         _parse_position(line, coords)
         _parse_datetime(line, coords)
+        _parse_station_depth(line, sec_headers, names)
 
         for sec_id, key_pat in _HEADER_PATTERNS.items():
             if str(sec_id) in sec_headers:
@@ -422,6 +441,20 @@ def _parse_position(line: str, coords: Dict[str, Any]) -> None:
             coords[key] = _apply_hemisphere(float(m.group(1)), m.group(2))
 
 
+def _parse_station_depth(line: str, sec_headers: Dict[str, Any], names) -> None:
+    """`Stn: KD5408; Lat: 81.529N; Lon: 30.857E; Time: 2008.10.27; Depth: 900m` -- a depth
+    on the line that places the station is the water depth there: secondary header 10. A
+    negative one is a missing-value code (`-999m`), never a depth."""
+    if "10" in sec_headers or not (re.search(r"\blat(?:itude)?\s*[:=]", line, re.IGNORECASE)
+                                   and re.search(r"\blon(?:g(?:itude)?)?\s*[:=]", line,
+                                                 re.IGNORECASE)):
+        return
+    m = re.search(r"\bdepth\s*[:=]\s*(-?\d+(?:\.\d+)?)\s*(?:m|meters?)?\b", line, re.IGNORECASE)
+    if m and float(m.group(1)) > 0:
+        sec_headers["10"] = {"name": names.get(10, "code 10"), "value": float(m.group(1)),
+                             "source": "the depth on the station's position line"}
+
+
 def _apply_hemisphere(value: float, hemi: Optional[str]) -> float:
     if hemi and hemi.upper() in ("S", "W"):
         return -abs(value)
@@ -430,8 +463,10 @@ def _apply_hemisphere(value: float, hemi: Optional[str]) -> float:
 
 def _parse_datetime(line: str, coords: Dict[str, Any]) -> None:
     if "year" not in coords:
-        m = re.search(r"\b(?:date|datetime|obs[_\s]*date)\b[:=\s]+(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})",
-                      line, re.IGNORECASE)
+        # `Time: 2009. 8.18` is a date too: expedition formats label the cast's date `Time`
+        # and pad its fields with spaces.
+        m = re.search(r"\b(?:date|datetime|obs[_\s]*date|time)\b[:=\s]+(\d{4})\s*[-/.]\s*"
+                      r"(\d{1,2})\s*[-/.]\s*(\d{1,2})\b", line, re.IGNORECASE)
         if not m:
             m = re.search(r"\b(?:date)\b[:=\s]+(\d{4})(\d{2})(\d{2})\b", line, re.IGNORECASE)
         if m:
@@ -444,10 +479,15 @@ def _parse_datetime(line: str, coords: Dict[str, Any]) -> None:
                     int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
     if "hour" not in coords:
-        m = re.search(r"\b(?:time|utc|gmt)\b[:=\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?", line, re.IGNORECASE)
+        m = re.search(r"\b(?:time|utc|gmt)\b[:=\s]+(\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?",
+                      line, re.IGNORECASE)
         if m:
             coords["hour"] = int(m.group(1))
             coords["minute"] = int(m.group(2))
+            # Kept, not rounded away: a cast's time is to the second when the source says
+            # so (knowledge/cast_structure.md: do not silently round).
+            if m.group(3):
+                coords["second"] = float(m.group(3))
 
     for key, kw in (("year", "year"), ("month", "month"), ("day", "day")):
         if key not in coords:

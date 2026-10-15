@@ -12,6 +12,7 @@ Print `report["text"]` for a readable summary, or use the structured fields.
 """
 import collections
 import glob
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -85,11 +86,18 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
     ranges: Dict[str, Dict[str, float]] = {}
     empty: collections.Counter = collections.Counter()
     text_vars: Dict[str, set] = collections.defaultdict(set)
+    sources: set = set()
 
     for path in ncs:
         with nc.Dataset(path) as ds:
             casts += len(ds.dimensions["casts"])
             obs += len(ds.dimensions["z_obs"])
+            # Which files the casts came from: a WOD file holds casts of many sources, so the
+            # number of NetCDF files says nothing about which staged files were written.
+            if "source_file" in ds.variables:
+                sources.update(str(x) for x in ds.variables["source_file"][:])
+            elif "source_file" in ds.ncattrs():
+                sources.add(str(ds.source_file))
             for name, var in ds.variables.items():
                 if name.endswith("_qc"):
                     vals, counts = np.unique(np.asarray(var[:]).astype(int), return_counts=True)
@@ -105,7 +113,7 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
                     text_vars[name].update(
                         str(v) for v in np.asarray(var[:]).ravel() if str(v))
                     continue
-                a = np.ma.filled(np.asarray(var[:], dtype=float), np.nan)
+                a = np.ma.filled(np.ma.asarray(var[:], dtype=float), np.nan)
                 finite = a[np.isfinite(a)]
                 if finite.size == 0:
                     empty[name] += 1
@@ -115,6 +123,11 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
                 r["min"] = min(r["min"], float(finite.min()))
                 r["max"] = max(r["max"], float(finite.max()))
                 r["n"] += int(finite.size)
+
+    # By the file's resolved path: a name alone would let another folder's cast.csv answer
+    # for this one's.
+    written = {os.path.realpath(x) for x in sources if "://" not in x}
+    staged_without_casts = [Path(p).name for p in staged if os.path.realpath(p) not in written]
 
     flag_summary = {}
     for name, counter in flags.items():
@@ -130,6 +143,7 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
         "staged_dir": str(staged_dir), "processed_dir": str(processed_dir),
         "dataset_type": dataset_type,
         "staged_files": len(staged), "netcdf_files": len(ncs),
+        "staged_without_casts": staged_without_casts,
         "casts": casts, "observations": obs,
         "wod_dataset_routing": dict(routing),
         "mapped_columns": dict(mapped),
@@ -152,9 +166,12 @@ def _render(r: Dict[str, Any]) -> str:
          f"  staged {r['staged_files']} files -> {r['netcdf_files']} NetCDF, "
          f"{r['casts']} casts, {r['observations']} levels",
          f"  routing: {r['wod_dataset_routing']}"]
-    if r["netcdf_files"] < r["staged_files"]:
-        L.append(f"  {r['staged_files'] - r['netcdf_files']} staged file(s) produced no "
-                 f"NetCDF -- see MISSING COORDINATES and CONTRACT ERRORS below")
+    if r.get("staged_without_casts"):
+        shown = ", ".join(r["staged_without_casts"][:5])
+        more = len(r["staged_without_casts"]) - 5
+        L.append(f"  {len(r['staged_without_casts'])} staged file(s) produced no cast: {shown}"
+                 + (f", ... (+{more} more)" if more > 0 else "")
+                 + " -- see MISSING COORDINATES and CONTRACT ERRORS below")
     L.append("  mapped:")
     for k, v in sorted(r["mapped_columns"].items()):
         L.append(f"      {v:5d}x  {k}")

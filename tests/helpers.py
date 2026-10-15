@@ -42,3 +42,32 @@ def cache_code_list(cache_dir, field, text, retrieved="2026-01-01T00:00:00+00:00
     (d / f"{field}.csv").write_text(text, encoding="utf-8")
     (d / f"{field}.json").write_text(json.dumps({"url": "test", "retrieved": retrieved}))
     code_lists.clear_cache_memo()
+
+
+JPEG_HEAD = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+
+
+def write_mooring_nc(path, *, days=30.0, levels=1,
+                     variables=(("T_20", "TEMPERATURE (C)", "C"),),
+                     mooring="18bs8a", instrument="Seabird SBE-39"):
+    """One instrument's record from a mooring, as PMEL's EcoFOCI writes it (EPIC): every
+    variable along time x depth x lat x lon, longitude in degree_west."""
+    import netCDF4
+
+    n = int(days * 24) + 1
+    with netCDF4.Dataset(path, "w") as ds:
+        ds.MOORING, ds.INST_TYPE = mooring, instrument
+        for dim, size in (("time", n), ("depth", levels), ("lat", 1), ("lon", 1)):
+            ds.createDimension(dim, size)
+        for name, units, values in (("time", "days since 1900-01-01",
+                                     43000 + np.arange(n) / 24),
+                                    ("depth", "dbar", 20 + 5 * np.arange(levels)),
+                                    ("lat", "degree_north", [62.19]),
+                                    ("lon", "degree_west", [174.69])):
+            v = ds.createVariable(name, "f8", (name,))
+            v.units = units
+            v[:] = values
+        for name, long_name, units in variables:
+            v = ds.createVariable(name, "f4", ("time", "depth", "lat", "lon"))
+            v.long_name, v.units = long_name, units
+            v[:] = np.full(v.shape, 5.0)

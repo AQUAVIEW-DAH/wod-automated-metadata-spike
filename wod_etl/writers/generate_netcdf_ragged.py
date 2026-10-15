@@ -22,6 +22,8 @@ from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE
 
 OBS_DIM = "z_obs"
 CAST_DIM = "casts"
+# Every file this writer makes says so: what a rerun may replace is only a file it wrote.
+TITLE = "WOD Intermediate Standardized Ocean Profile"
 
 # CF flag attributes are generated from Table 12 rather than transcribed, so the file's
 # flag_meanings can never disagree with the flags the QC phase actually assigned.
@@ -29,6 +31,39 @@ _OBS_FLAG_VALUES = flag_values_attr("observed_level")
 _OBS_FLAG_MEANINGS = flag_meanings_attr("observed_level")
 _DEPTH_FLAG_VALUES = flag_values_attr("depth")
 _DEPTH_FLAG_MEANINGS = flag_meanings_attr("depth")
+
+
+# CF wants `units` a UDUNITS string. Table 3a's own wording ("Degrees Celsius") is not one,
+# so it goes in `wod_units` and nothing a WOD reader relies on is lost. Keyed by Table 3a's
+# standard unit; the values are what the data already are -- no conversion happens here.
+CF_UNITS = {
+    "Degrees Celsius": "degree_C", "Dimensionless": "1", "Micromole kilogram-1": "umol kg-1",
+    "Microgram liter-1": "ug L-1", "Millimole liter-1": "mmol L-1", "Micro atmosphere": "uatm",
+    "Per meter": "m-1", "Decibar": "dbar", "Millibar": "mbar", "Degrees": "degree",
+    "Day": "day", "Tritium Unit": "1e-18", "Nanomole kilogram-1": "nmol kg-1",
+    "Percent": "percent", "Per mille": "1e-3", "Picomole kilogram-1": "pmol kg-1",
+}
+# CF standard names for the Table 3a variables that have one, as WOD stores them. pH has no
+# scale in WOD, so it gets none rather than a guessed one.
+CF_STANDARD_NAMES = {
+    1: "sea_water_temperature", 2: "sea_water_practical_salinity",
+    3: "moles_of_oxygen_per_unit_mass_in_sea_water",
+    4: "moles_of_phosphate_per_unit_mass_in_sea_water",
+    6: "moles_of_silicate_per_unit_mass_in_sea_water",
+    8: "moles_of_nitrate_and_nitrite_per_unit_mass_in_sea_water",
+    11: "mass_concentration_of_chlorophyll_in_sea_water",
+    17: "sea_water_alkalinity_expressed_as_mole_equivalent",
+    20: "partial_pressure_of_carbon_dioxide_in_sea_water",
+    21: "mole_concentration_of_dissolved_inorganic_carbon_in_sea_water",
+    24: "volume_beam_attenuation_coefficient_of_radiative_flux_in_sea_water",
+    25: "sea_water_pressure", 26: "air_temperature", 29: "air_pressure",
+    30: "latitude", 31: "longitude",
+}
+
+
+# Units of the secondary headers that are measurements, for CF: Table 4a names them in the
+# header's title ("Bottom depth (meters)").
+_HEADER_UNITS = {10: "m"}
 
 
 def cf_safe_name(name: str) -> str:
@@ -125,22 +160,35 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
                        "within this file; verify_output checks it across a run")
         for i, cid in enumerate(_cast_ids(casts)):
             idv[i] = cid
+        # An id a suffix made unique within this file, though casts of two SOURCE files had it:
+        # one cast exported twice, or two that cannot be told apart. Said here so verify
+        # finds it, as it did when each source had a file of its own.
+        shared = _ids_shared_by_sources(casts)
+        if shared:
+            idv.repeated_across_source_files = "; ".join(shared)
 
         rs = ds.createVariable("z_row_size", "i4", (CAST_DIM,))
         rs.long_name = "number of observations for this cast"
         rs.sample_dimension = OBS_DIM
         rs[:] = np.array(row_sizes, dtype="i4")
 
+        # Per cast, as WOD's own files carry it: a cast keeps its dataset when files are
+        # merged, which a file-level attribute does not survive.
+        dv_ = ds.createVariable("dataset", str, (CAST_DIM,))
+        dv_.long_name = "WOD dataset (Table 2)"
+        for i, code in enumerate(_dataset_codes(casts)):
+            dv_[i] = code
+
         _write_varying_secondary_headers(ds, casts)
 
         # ---- observation (per-level) variables -----------------------------
         zv = ds.createVariable("z", "f4", (OBS_DIM,), fill_value=NETCDF_FILL_VALUE)
-        zv.units = "meters"
+        zv.units = "m"
         zv.positive = "down"
         zv.axis = "Z"
         zv.standard_name = "depth"
         zv.long_name = "depth below sea surface"
-        zv[:] = _concat_depth(casts, total_obs)
+        zv[:] = np.ma.masked_invalid(_concat_depth(casts, total_obs))
 
         depth_flags = _concat_flags(casts, total_obs, depth=True)
         if depth_flags is not None:
@@ -157,13 +205,18 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
             data = _concat_values(casts, var, total_obs)
 
             v = ds.createVariable(name, "f4", (OBS_DIM,), fill_value=NETCDF_FILL_VALUE)
-            v.units = var["units"]
+            v.units = CF_UNITS.get(var["units"], var["units"])
+            v.wod_units = var["units"]
+            if var["wod_code"] in CF_STANDARD_NAMES:
+                v.standard_name = CF_STANDARD_NAMES[var["wod_code"]]
             v.long_name = var["wod_name"]
             v.wod_variable_code = np.int32(var["wod_code"])
             v.coordinates = "time lat lon z"
             if var.get("unit_abbrev"):
                 v.unit_abbrev = var["unit_abbrev"]
-            v[:] = data
+            # Missing is the declared _FillValue, not NaN under it: a CF reader masks the
+            # one and sees a number in the other.
+            v[:] = np.ma.masked_invalid(data)
 
             ancillary = []
             flags = _concat_flags(casts, total_obs, var=var)
@@ -181,7 +234,7 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
             # check -- so they get their own variable, no flag_values/flag_meanings, and an
             # attribute pointing at the code table that names the scheme. Translating them
             # would invent meaning; dropping them would lose the only QC the file has.
-            orig, orig_source = _concat_originator_flags(casts, total_obs, var)
+            orig, orig_sources, schemes = _concat_originator_flags(casts, total_obs, var)
             if orig is not None:
                 oname = f"{name}_qc_originator"
                 o = ds.createVariable(oname, "f4", (OBS_DIM,), fill_value=NETCDF_FILL_VALUE)
@@ -190,12 +243,12 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
                 o.comment = ("Values are the ORIGINATOR's, on the originator's scale. They "
                              "are not WOD Table 12 flags and must not be read as such. WOD "
                              "records which flag set was used as secondary header 96.")
-                o.source_column = orig_source
                 o.wod_secondary_header = np.int32(96)
                 o.code_table = (
                     "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/"
                     "s_96_origflagset.html")
-                o[:] = orig
+                _write_originator_flag_source(ds, o, oname, orig_sources, schemes)
+                o[:] = np.ma.masked_invalid(np.asarray(orig, dtype=float))
                 ancillary.append(oname)
 
             if ancillary:
@@ -203,8 +256,17 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
 
             # setncattr, not setattr: netCDF4 reserves a set of Python attribute names on
             # Variable ('scale', 'mask', 'name', 'dtype'...) and rebinding one raises.
-            for attr, value in _variable_metadata(casts, var).items():
+            shared, varying = _variable_metadata(casts, var)
+            for attr, value in shared.items():
                 v.setncattr(attr, value)
+            # What differs between the casts -- two source files naming the column, or
+            # stating its unit, differently -- is said per cast rather than the first
+            # cast's value claimed for all of them.
+            per_cast = [_per_cast_text(ds, f"{name}_{attr}", values,
+                                       f"{var['wod_name']}: {attr.replace('_', ' ')}")
+                        for attr, values in varying.items()]
+            if per_cast:
+                v.per_cast_attributes = " ".join(per_cast)
 
             written.append({"nc_name": name, "wod_name": var["wod_name"],
                             "wod_code": var["wod_code"], "units": var["units"]})
@@ -300,13 +362,16 @@ def _concat_flags(casts, total_obs, var=None, depth=False) -> Optional[np.ndarra
 
 
 def _concat_originator_flags(casts, total, var):
-    """The originator's flag column for one variable, concatenated across casts.
+    """The originator's flag column for one variable, concatenated across casts, with each
+    cast's flag column name and stated flag scheme (None for a cast without flags).
 
     Kept as float, not int: an originator flag is not always an integer -- some submitters
     use letters or decimals -- and coercing to int would silently rewrite them.
     """
     out = np.full(total, np.nan, dtype=float)
-    at, found, source = 0, False, None
+    at, found = 0, False
+    sources: List[Optional[str]] = []
+    schemes: List[Optional[Dict[str, Any]]] = []
     for c in casts:
         n = len(c["df"])
         mapping = next((m for m in c["contract"].get("column_mapping", [])
@@ -315,49 +380,115 @@ def _concat_originator_flags(casts, total, var):
         if fcol and fcol in c["df"].columns:
             out[at:at + n] = pd.to_numeric(c["df"][fcol], errors="coerce").to_numpy(dtype=float)
             found = True
-            source = source or fcol
+            sources.append(str(fcol))
+            schemes.append((c.get("column_attributes") or {}).get(fcol))
+        else:
+            sources.append(None)
+            schemes.append(None)
         at += n
-    return (out, source) if found else (None, None)
+    return (out, sources, schemes) if found else (None, None, None)
 
 
-def _variable_metadata(casts, var) -> Dict[str, Any]:
-    """Table 5a variable specific headers for one variable, as NetCDF attributes.
+def _write_originator_flag_source(ds, o, oname, sources, schemes) -> None:
+    """Which column the originator's flags came from, and the originator's own scheme where
+    the source states it (CF 3.5: what their 0 and 1 mean, so the numbers can be read).
+
+    Variable attributes when every flagged cast agrees -- one source file always does. Casts
+    from sources that differ get them per cast: one file's scheme is not another's."""
+    flagged = [i for i, s in enumerate(sources) if s is not None]
+    named = {sources[i] for i in flagged}
+    if len(named) == 1:
+        o.source_column = named.pop()
+    else:
+        _per_cast_text(ds, f"{oname}_source_column", ["" if s is None else s for s in sources],
+                       "column the originator's flags were read from")
+    stated = [schemes[i] for i in flagged]
+    readable = lambda s: bool(s and s.get("flag_meanings"))
+    if not any(readable(s) for s in stated):
+        return
+    values = lambda s: (" ".join(str(x) for x in np.atleast_1d(s["flag_values"]))
+                        if readable(s) and s.get("flag_values") is not None else "")
+    if all(readable(s) for s in stated) and \
+            len({(values(s), str(s["flag_meanings"])) for s in stated}) == 1:
+        scheme = stated[0]
+        if scheme.get("flag_values") is not None:
+            o.flag_values = np.asarray(np.atleast_1d(scheme["flag_values"]), dtype="f4")
+        o.flag_meanings = scheme["flag_meanings"]
+        return
+    _per_cast_text(ds, f"{oname}_flag_values", [values(s) for s in schemes],
+                   "the originator's flag values for this cast's source")
+    _per_cast_text(ds, f"{oname}_flag_meanings",
+                   [str(s["flag_meanings"]) if readable(s) else "" for s in schemes],
+                   "what the originator's flag values mean for this cast's source")
+
+
+def _per_cast_text(ds, name: str, values: List[str], long_name: str) -> str:
+    """A text value per cast, as a `casts` variable. Returns the name it was written as."""
+    base, n = name, 2
+    while name in ds.variables:
+        name, n = f"{base}_{n}", n + 1
+    v = ds.createVariable(name, str, (CAST_DIM,))
+    v.long_name = long_name
+    for i, x in enumerate(values):
+        v[i] = "" if x is None else str(x)
+    return name
+
+
+def _cast_variable_metadata(mapping: Dict[str, Any]) -> Dict[str, Any]:
+    """One cast's Table 5a variable specific headers for one variable, as attributes.
 
     The originator's unit and the measurement scale are the two that always matter: a
     conversion is only auditable against the unit the source declared, and a temperature is
     ambiguous without knowing whether it is on ITS-90 or IPTS-68.
     """
     attrs: Dict[str, Any] = {}
+    headers = mapping.get("variable_specific_headers") or {}
+    if mapping.get("originator_unit"):
+        attrs["originator_units"] = str(mapping["originator_unit"])
+        if "8" not in headers:
+            attrs["wod_variable_specific_header_8"] = str(mapping["originator_unit"])
+    if mapping.get("originator_scale"):
+        attrs["measurement_scale"] = str(mapping["originator_scale"])
+        if "3" not in headers:
+            attrs["wod_variable_specific_header_3"] = str(mapping["originator_scale"])
+    for vid, header in headers.items():
+        key = f"wod_variable_specific_header_{vid}"
+        if key in attrs or f"{key}_originator_text" in attrs:
+            continue
+        value, text, summary = split_coded_value(header)
+        if value is not None:
+            attrs[key] = (str(value) if not isinstance(value, (int, float)) else value)
+        if text is not None:
+            attrs[f"{key}_originator_text"] = str(text)
+        if summary is not None:
+            attrs[f"{key}_code_lookup"] = str(summary)
+    if mapping.get("comment"):
+        attrs["comment"] = str(mapping["comment"])
+    if mapping.get("raw_column"):
+        attrs["originator_column_name"] = str(mapping["raw_column"])
+    return attrs
+
+
+def _variable_metadata(casts, var):
+    """(attributes every cast holding the variable agrees on, {attribute: per-cast text} for
+    those that differ). A cast without the variable has '' in a per-cast list."""
+    per_cast: List[Optional[Dict[str, Any]]] = []
     for c in casts:
         mapping = next((m for m in c["contract"].get("column_mapping", [])
                         if m.get("wod_code") == var["wod_code"]), None)
-        if not mapping:
-            continue
-        headers = mapping.get("variable_specific_headers") or {}
-        if mapping.get("originator_unit") and "originator_units" not in attrs:
-            attrs["originator_units"] = str(mapping["originator_unit"])
-            if "8" not in headers:
-                attrs["wod_variable_specific_header_8"] = str(mapping["originator_unit"])
-        if mapping.get("originator_scale") and "measurement_scale" not in attrs:
-            attrs["measurement_scale"] = str(mapping["originator_scale"])
-            if "3" not in headers:
-                attrs["wod_variable_specific_header_3"] = str(mapping["originator_scale"])
-        for vid, header in headers.items():
-            key = f"wod_variable_specific_header_{vid}"
-            if key in attrs or f"{key}_originator_text" in attrs:
-                continue
-            value, text, summary = split_coded_value(header)
-            if value is not None:
-                attrs[key] = (str(value) if not isinstance(value, (int, float)) else value)
-            if text is not None:
-                attrs[f"{key}_originator_text"] = str(text)
-            if summary is not None:
-                attrs[f"{key}_code_lookup"] = str(summary)
-        if mapping.get("comment") and "comment" not in attrs:
-            attrs["comment"] = str(mapping["comment"])
-        if mapping.get("raw_column") and "originator_column_name" not in attrs:
-            attrs["originator_column_name"] = str(mapping["raw_column"])
-    return attrs
+        held = mapping is not None and mapping.get("raw_column") in c["df"].columns
+        per_cast.append(_cast_variable_metadata(mapping) if held else None)
+    present = [a for a in per_cast if a is not None]
+    shared: Dict[str, Any] = {}
+    varying: Dict[str, List[str]] = {}
+    for key in dict.fromkeys(k for a in present for k in a):
+        values = [a.get(key) for a in present]
+        if all(v is not None for v in values) and len({repr(v) for v in values}) == 1:
+            shared[key] = values[0]
+        else:
+            varying[key] = ["" if a is None or a.get(key) is None else str(a[key])
+                            for a in per_cast]
+    return shared, varying
 
 
 def _coord(cast, key) -> float:
@@ -411,14 +542,16 @@ def _cast_times(casts) -> Dict[str, Any]:
             continue
         known = pc.get("hour") is not None
         ts = day + pd.Timedelta(hours=int(pc.get("hour") or 0),
-                                minutes=int(pc.get("minute") or 0))
+                                minutes=int(pc.get("minute") or 0),
+                                seconds=float(pc.get("second") or 0))
         offset = utc_offset_hours(zone) if zone else None
         converted = bool(known and offset)
         if converted:
             ts = ts - pd.Timedelta(hours=offset)
         out["time"].append((ts - _EPOCH).total_seconds() / 86400.0)
         out["date"].append(int(ts.strftime("%Y%m%d")))
-        out["hours"].append(ts.hour + ts.minute / 60.0 if known else NETCDF_FILL_VALUE)
+        out["hours"].append(ts.hour + ts.minute / 60.0 + (ts.second + ts.microsecond / 1e6)
+                            / 3600.0 if known else NETCDF_FILL_VALUE)
         out["time_known"].append(known)
         out["date_known"].append(True)
         out["zone"].append(zone)
@@ -440,8 +573,10 @@ def _describe_time(tv, times) -> None:
         parts.append(f"{date_only} of {n} cast(s) have a date but no time of day: their time "
                      f"is 00:00 of that date by convention and GMT_time is fill. Do not read "
                      f"it as midnight")
-    if any(times["converted"]):
-        parts.append("converted to UTC from the stated time zone (see time_zone_of_source)")
+    converted = sum(times["converted"])
+    if converted:
+        parts.append(("" if converted == n else f"{converted} of {n} cast(s): ")
+                     + "converted to UTC from the stated time zone (see time_zone_of_source)")
     if parts:
         tv.comment = "; ".join(parts)
 
@@ -460,10 +595,12 @@ def _write_time_zones(ds, casts, times) -> None:
     unconverted = [z for z, k, c in zip(zones, times["time_known"], times["converted"])
                    if z and not c and utc_offset_hours(z) != 0.0]
     if unconverted:
+        n = len(zones)
         ds.setncattr("time_zone_note",
-                     "the source date/time is not UTC and was NOT converted -- either no time "
-                     "of day was stated, or the zone is not a numeric offset. A local date "
-                     "may be a different UTC date.")
+                     ("" if len(unconverted) == n else f"{len(unconverted)} of {n} cast(s): ")
+                     + "the source date/time is not UTC and was NOT converted -- either no "
+                     "time of day was stated, or the zone is not a numeric offset. A local "
+                     "date may be a different UTC date.")
 
 
 def _cast_id(cast, index) -> str:
@@ -507,6 +644,14 @@ def _cast_id(cast, index) -> str:
     return (cid or f"cast_{index:04d}")[:64]
 
 
+def _ids_shared_by_sources(casts) -> List[str]:
+    """Cast ids (before a suffix makes them unique) that casts of different sources share."""
+    sources: Dict[str, set] = {}
+    for i, c in enumerate(casts):
+        sources.setdefault(_cast_id(c, i), set()).add(str(c["contract"].get("source") or ""))
+    return sorted(cid for cid, s in sources.items() if len(s) > 1)
+
+
 def _cast_ids(casts) -> List[str]:
     """Every cast's id, made unique within the file by suffixing repeats."""
     ids, seen = [], {}
@@ -521,24 +666,56 @@ def _cast_ids(casts) -> List[str]:
     return ids
 
 
+def _dataset_codes(casts) -> List[str]:
+    return [str(c["contract"].get("wod_dataset_code") or "unresolved") for c in casts]
+
+
+def cast_year(cast: Dict[str, Any]) -> Optional[int]:
+    """The year of a cast's date as it is written -- UTC once a stated numeric zone is
+    applied -- which is the year WOD files the cast under. None when it has no date."""
+    times = _cast_times([cast])
+    return int(times["date"][0]) // 10000 if times["date_known"][0] else None
+
+
+def cast_time(cast: Dict[str, Any]) -> float:
+    """The cast's time as written (days since 1770), NaN when it has no date."""
+    return float(_cast_times([cast])["time"][0])
+
+
+def _shared_or_per_cast(ds, name: str, values: List[Optional[str]], long_name: str) -> None:
+    """A value every cast shares is a global attribute; values that differ are a `casts`
+    variable of the same name, so a file of several sources says which cast came from which.
+    Nothing is written when no cast has one."""
+    values = ["" if v is None else str(v) for v in values]
+    if len(set(values)) == 1:
+        if values[0]:
+            ds.setncattr(name, values[0])
+        return
+    _per_cast_text(ds, name, values, long_name)
+
+
 def _write_globals(ds, casts) -> None:
-    first = casts[0]["contract"]
-    ds.title = "WOD Intermediate Standardized Ocean Profile"
+    ds.title = TITLE
     ds.Conventions = CF_CONVENTIONS
     ds.featureType = "profile"
     ds.WOD_version = WOD_VERSION
-    ds.wod_dataset_type = str(first.get("wod_dataset_code") or "unresolved")
+    # WOD keeps one dataset per file; a file that mixes them says so here, and the per-cast
+    # `dataset` variable says which cast is which. It used to take the FIRST cast's dataset,
+    # labelling a single-level OSD cast written beside CTD casts as CTD.
+    codes = set(_dataset_codes(casts))
+    ds.wod_dataset_type = codes.pop() if len(codes) == 1 else "mixed"
     # The file that was read -- a path, not the reader's description of it. That moved to
     # `source_format`; it used to fill this attribute with 'delimited_text, delimiter comma'.
-    sources = list(dict.fromkeys(str(c["contract"].get("source") or "unknown") for c in casts))
-    ds.source_file = "; ".join(sources)
-    fmt = first.get("source_format")
-    if fmt:
-        ds.source_format = str(fmt)
-    raw = list(dict.fromkeys(p for c in casts
-                             for p in (c["contract"].get("source_files") or [])))
-    if raw:
-        ds.source_files_raw = "; ".join(raw)
+    _shared_or_per_cast(ds, "source_file",
+                        [str(c["contract"].get("source") or "unknown") for c in casts],
+                        "the source file this cast was read from")
+    _shared_or_per_cast(ds, "source_format",
+                        [c["contract"].get("source_format") for c in casts],
+                        "how this cast's source file was read")
+    _shared_or_per_cast(ds, "source_files_raw",
+                        ["; ".join(dict.fromkeys(c["contract"].get("source_files") or []))
+                         for c in casts],
+                        "the accession's own files this cast was staged from")
     _write_provenance(ds, casts)
     _write_character_data(ds, casts)
     # CF: institution is whose data this is, not what wrote the file. Secondary header 4
@@ -550,18 +727,41 @@ def _write_globals(ds, casts) -> None:
 
     _write_shared_secondary_headers(ds, casts)
 
-    logs = [c.get("transform_log") for c in casts if c.get("transform_log")]
-    applied = [t for lg in logs for t in lg.get("transformations_applied", [])]
-    if applied:
-        ds.unit_conversions = "; ".join(
-            f"{t['column']}: {t.get('from','?')} -> {t.get('to','?')}" for t in applied)
-    density = next((lg.get("seawater_density_kg_m3") for lg in logs
-                    if lg.get("seawater_density_kg_m3")), None)
-    if density:
-        ds.seawater_density_kg_m3 = float(density)
-        ds.seawater_density_provenance = next(
-            lg.get("seawater_density_provenance") for lg in logs
-            if lg.get("seawater_density_kg_m3"))
+    # Each cast's own conversions, each once: shared by every cast (one source's casts are)
+    # it is the file's attribute, and per cast when two sources converted differently -- a
+    # file of a thousand casts used to say it a thousand times, and of two sources the union.
+    logs = [c.get("transform_log") or {} for c in casts]
+    _shared_or_per_cast(ds, "unit_conversions",
+                        ["; ".join(dict.fromkeys(
+                            f"{t['column']}: {t.get('from', '?')} -> {t.get('to', '?')}"
+                            for t in lg.get("transformations_applied", []))) for lg in logs],
+                        "unit conversions applied to this cast's columns")
+    _write_density(ds, logs)
+
+
+def _write_density(ds, logs) -> None:
+    """The seawater density a per-volume to per-mass conversion assumed, where one did: the
+    file's attribute when every cast used the same one, per cast otherwise (fill for a cast
+    that converted nothing with it)."""
+    used = [(float(lg["seawater_density_kg_m3"]), str(lg.get("seawater_density_provenance")
+                                                       or ""))
+            if lg.get("seawater_density_kg_m3") else None for lg in logs]
+    stated = {u for u in used if u is not None}
+    if not stated:
+        return
+    if len(stated) == 1 and None not in used:
+        density, provenance = stated.pop()
+        ds.seawater_density_kg_m3 = density
+        if provenance:
+            ds.seawater_density_provenance = provenance
+        return
+    v = ds.createVariable("seawater_density_kg_m3", "f8", (CAST_DIM,),
+                          fill_value=NETCDF_FILL_VALUE)
+    v.units = "kg m-3"
+    v.long_name = "seawater density this cast's per-volume values were converted with"
+    v[:] = np.ma.masked_invalid(np.array([u[0] if u else np.nan for u in used], dtype=float))
+    _per_cast_text(ds, "seawater_density_provenance", [u[1] if u else "" for u in used],
+                   "where this cast's seawater density came from")
 
 
 def _write_provenance(ds, casts) -> None:
@@ -585,14 +785,25 @@ def _write_provenance(ds, casts) -> None:
         for i, notes in enumerate(own):
             v[i] = "\n".join(notes)
     stamp = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    sources = list(dict.fromkeys(str(c["contract"].get("source") or "unknown") for c in casts))
     ds.history = (f"{stamp} wod-agent-etl: standardized to WOD intermediate NetCDF from "
-                  f"{ds.source_file}")
-    unplaced = [u for c in casts for u in (c["contract"].get("unresolved_metadata") or [])]
-    if unplaced:
-        keys = list(dict.fromkeys(f"{u.get('key')}={u.get('value')!r}" for u in unplaced))
+                  + (sources[0] if len(sources) == 1 else
+                     f"{len(sources)} source files (variable source_file)"))
+    # Header keys with no WOD field, kept so they are not lost: those every cast shares in
+    # the file's attributes, the rest per cast -- two sources' `title` are two titles.
+    keys = [list(dict.fromkeys(f"{u.get('key')}={u.get('value')!r}"
+                               for u in (c["contract"].get("unresolved_metadata") or [])))
+            for c in casts]
+    shared = [k for k in keys[0] if all(k in other for other in keys[1:])]
+    if shared:
         ds.metadata_not_placed = (
             "header keys with no WOD field, kept here so they are not lost: "
-            + "; ".join(keys[:40]))
+            + "; ".join(shared[:40])
+            + (f" (and {len(shared) - 40} more)" if len(shared) > 40 else ""))
+    own = [[k for k in ks if k not in shared] for ks in keys]
+    if any(own):
+        _per_cast_text(ds, "cast_metadata_not_placed", ["; ".join(ks) for ks in own],
+                       "this cast's header keys with no WOD field, kept so they are not lost")
 
 
 def _write_character_data(ds, casts) -> None:
@@ -708,11 +919,15 @@ def _write_shared_secondary_headers(ds, casts) -> None:
 def _write_varying_secondary_headers(ds, casts) -> None:
     """Headers that differ between casts, written on the `casts` dimension."""
     for sec_id, name, key, values, code_table, texts, lookups in _secondary_header_columns(casts):
+        url = code_table.get("csv") or code_table.get("html") or code_table.get("pdf")
         for suffix, series in (("_originator_text", texts), ("_code_lookup", lookups)):
             if any(x is not None for x in series) and not _is_shared(series):
                 tv = ds.createVariable(f"{key}{suffix}", str, (CAST_DIM,))
                 tv.long_name = (f"{name}: originator's text, not a code" if suffix ==
                                 "_originator_text" else f"{name}: code lookup result")
+                # The list the text was looked up in, as a shared header carries it.
+                if url:
+                    tv.code_table = url
                 for i, x in enumerate(series):
                     tv[i] = "" if x is None else str(x)
         if _is_shared(values):
@@ -726,20 +941,23 @@ def _write_varying_secondary_headers(ds, casts) -> None:
             ds.setncattr(f"{key}_status",
                          "present in this file but its value is not stated in the source; "
                          "it must come from the submitter or the accession documentation")
-            url = code_table.get("csv") or code_table.get("html") or code_table.get("pdf")
             if url:
                 ds.setncattr(f"{key}_code_table", url)
             continue
         if all(v is None or isinstance(v, (int, float)) for v in values):
-            v = ds.createVariable(key, "f8", (CAST_DIM,), fill_value=np.nan)
-            v[:] = np.array([np.nan if x is None else float(x) for x in values], dtype=float)
+            # The declared fill for a cast that does not state it, like every other numeric
+            # variable here -- not NaN.
+            v = ds.createVariable(key, "f8", (CAST_DIM,), fill_value=NETCDF_FILL_VALUE)
+            v[:] = np.ma.masked_invalid(np.array([np.nan if x is None else float(x)
+                                                  for x in values], dtype=float))
+            if str(sec_id).isdigit() and int(sec_id) in _HEADER_UNITS:
+                v.units = _HEADER_UNITS[int(sec_id)]
         else:
             v = ds.createVariable(key, str, (CAST_DIM,))
             for i, x in enumerate(values):
                 v[i] = "" if x is None else str(x)
         v.long_name = str(name)
         v.wod_secondary_header_id = str(sec_id)
-        url = code_table.get("csv") or code_table.get("html") or code_table.get("pdf")
         if url:
             v.code_table = url
 

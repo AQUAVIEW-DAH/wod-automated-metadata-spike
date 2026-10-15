@@ -105,7 +105,7 @@ result = process_accession(
 ```
 
 That call does discovery, download, format identification, dataset classification, column
-and metadata mapping, unit conversion, writing and validation for every file. It does **not** run WOD QC unless you ask
+and metadata mapping, unit conversion, writing and validation per file, then one file per WOD dataset and year: `wod_ctd_2008_<acc>.nc`. It does **not** run WOD QC unless you ask
 (`run_qc=True`).
 
 **Do not pass `dataset_type` unless you mean to force it.** It is optional, and omitting it
@@ -167,8 +167,8 @@ an unrecognised layout disappears from a run.
 `coded_headers_not_resolved` (coded metadata kept as text -- no unique code matched).
 
 Retry failures after fixing the cause: `process_accession(url, run_id="<same id>",
-retry_failed=True)`. Every run is logged to `data/runs/<acc>/run.log`; a person runs the
-same workflow with `uv run wod-etl run <acc>`
+retry_failed=True)`. Every run is logged to `data/runs/<acc>/run.log`; a person runs it
+in two steps, `uv run wod-etl run <acc>` then `confirm <acc>`
 ([`orchestration/README.md`](../../../wod_etl/orchestration/README.md)).
 
 ## The dataset is decided per file

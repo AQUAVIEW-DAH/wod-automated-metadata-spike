@@ -284,7 +284,7 @@ Every output file guarantees:
 | **Alignment** | `z` **and every measured variable** live on the shared `z_obs` dimension, so a measurement is always index-aligned with its depth. Per-variable observation dimensions are a hard validation error. |
 | **Per cast** | `lat`, `lon`, `time`, `cast_id` (`cf_role = profile_id`). |
 | **Per level** | `z` (`positive = down`, metres), `z_qc`, one variable per WOD code, and a `<var>_qc` for each. |
-| **Identification** | Every measured variable carries `wod_variable_code`, plus `units` holding the Table 3a **standard** unit — conversion has already happened. |
+| **Identification** | Every measured variable carries `wod_variable_code`, `units` as the UDUNITS string of the Table 3a **standard** unit (`degree_C`, `1`, `umol kg-1`) so CF readers parse it, `wod_units` with Table 3a's own wording (`Degrees Celsius`), and a CF `standard_name` where one exists — conversion has already happened. Missing values are the `_FillValue`. |
 | **Flags** | Table 12 values, with `flag_values` and `flag_meanings`. Nothing is ever deleted. |
 | **Metadata** | `secondary_header_<id>_<name>` attributes, keyed by Table 4a ID. |
 | **Provenance** | `unit_conversions`, and `seawater_density_kg_m3` + `seawater_density_provenance` whenever an assumed density was used. |

@@ -144,6 +144,7 @@ fixed-width, NetCDF arrives with no extension, and `.txt` is sometimes a Sea-Bir
 | `netcdf_classic`, `netcdf_64bit_offset`, `netcdf_64bit_data`, `netcdf4_hdf5` | magic bytes |
 | `spreadsheet_xlsx`, `opendocument`, `archive_zip` | ZIP magic, then the member list |
 | `pdf`, `gzip`, `bzip2`, `xz`, `sqlite`, `access_db` | magic bytes |
+| `image` (JPEG, PNG, GIF, TIFF) | magic bytes -- a document, never a table |
 | `sea_bird_cnv` | `*END*` / `# name 0 =` markers |
 | `json`, `xml` | parses as JSON, or opens with a tag |
 | `delimited_text` | one delimiter splits ≥60% of rows into the same field count |
@@ -290,10 +291,46 @@ reports together, so a folder verdict describes a mixture.
 | `document` | documentation, metadata, or an NCEI bundle file |
 | `inspect` | the evidence did not decide |
 
+Every file also carries what the person reviewing `decisions.toml` reads: **`data`** (what
+it holds, in a line), **`include`** (whether it goes into WOD), **`dataset`** (the WOD
+dataset it would be written as, Table 2 -- XCTD is written as CTD), **`why`** (the
+evidence, citing Table 3a where it decides) and, when a variable is a copy of another,
+**`drop`**. `data` lists only the variables the proposed dataset stores (Table 3a: MBT
+stores temperature only), and `why` says what is not written.
+
 **NCEI's own bundle files are recognised by name** -- `NCEI-Readme.txt`, `journal.txt`,
-`<accession>.md5`, `*-ISO-19115-2.xml`, `*_preview.jpg`, the confirmation e-mails and
+`<accession>.md5`, `*-ISO-19115-2.xml`, `*_preview.jpg`, `<accession>_map.jpg`, the
+confirmation e-mails, the Send2NCEI submission report `<ID>-report.txt`, and
 `<accession>_lonlat.txt`, which is two numeric columns that sniff as a table. `ncei_bundle`
-says what each is for. `process_accession` skips them before downloading.
+says what each is for. `process_accession` skips them before downloading. **Documentation
+is recognised by content too**: a text file that is prose to its end (head and tail, so a
+data file under a long header is not mistaken for one), or one named as documentation
+(`readme`, `*description*`, `notes`) whatever its body sniffs as.
+
+**A NetCDF file is opened, not peeked at.** It has no text head, so triage reads its global
+attributes (as header text: `MOORING`, `INST_TYPE`, `platform` name the dataset) and its
+variables (as columns: long name and unit, since `TEMPERATURE (C)` says what `T_20` does
+not). A file whose every variable is one value per time step, at a position that does not
+move, over a day or more, is one instrument's record from a mooring: `exclude`, with
+`exclusion = "moored instrument time series"`, `belongs_in_wod = true` and a `time_series`
+summary (platform, instrument, samples, days). In WOD those are MRB, where a profile is
+the concurrent readings of all of a mooring's instruments at one time (manual p.17) -- a
+single record is one level of thousands of profiles, and wod-etl cannot assemble them yet.
+The same shape on a platform that moves, with no depth axis, is an underway record (a keel
+CTD, a thermosalinograph): `exclusion = "underway record along a track"` -- SUR in WOD,
+one cast per position, which wod-etl does not split out yet. A moving record with a depth
+or pressure variable (a glider) is left to the usual classification.
+
+The **instrument** a NetCDF file names -- a global `instrument`, `INST_TYPE`,
+`instrumentType`, RBR's `model`, or an `instrument` container variable's `make_model` --
+counts like the path: `instrumentType: adcp` *with* velocity variables makes a file a
+current record even though it also logs its transducer's temperature (an ADCP's scalar
+record, with no velocity, stays a moored temperature record). An SV&T probe (sound velocity
+and temperature, no conductivity cell) is a digital BT: MBT. Plain `SVP` is not a drifter.
+The **depth increment** of the depth axis is read, so CTD is decided by WOD's own rule
+(< 2 m, manual p.19). A measured variable that **equals another at every level** -- a
+salinity filled with the temperature -- is proposed as `drop`. **Seabed sediment** (grain
+size, d50) is its own exclusion: WOD holds the water column.
 
 `classify_file` is the same triage for one local file; the dry run uses it. Per file the
 result also carries the dataset type, `empty_columns` and `measurement_density`.

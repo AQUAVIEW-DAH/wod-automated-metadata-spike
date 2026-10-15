@@ -67,7 +67,7 @@ An unreadable file returns `status: "FAIL"` with `fatal_error` rather than raisi
 
 ---
 
-## `verify_output(processed_dir, sample_levels=200_000)`
+## `verify_output(processed_dir, sample_levels=SAMPLE_LEVELS, paths=None)`
 
 **Judges the numbers. `process_accession` runs it at the end of every run.**
 
@@ -82,15 +82,26 @@ report["passed"], report["finding_counts"], report["findings"]
 print(report["text"])
 ```
 
+`paths` checks exactly those files rather than every `*.nc` in the folder -- what a run wrote.
+Every value is range-checked up to `SAMPLE_LEVELS` (5,000,000) per variable; past that the
+report says how many were not.
+
+**A file of several source files is judged source by source** where it matters: the copy
+check and the depth-axis checks run on each source's casts (the per-cast `source_file`), as
+they did when each source had a file of its own. One source's salinity copied from its
+temperature must not hide among another source's real salinity, and the finding's `file`
+names the source.
+
 | Finding | Severity | What it means |
 | --- | --- | --- |
 | `systematically_out_of_range` | high | ≥50% of a variable's levels are impossible. That is a **unit or a conversion**, not bad data |
 | `flat_depth_axis` | high | every level at one depth, so it is not a profile — usually a bottom-depth column on the vertical axis |
 | `negative_depth` | high | depth is positive down; a negative one is an unapplied sign convention |
+| `identical_variables` | high | two measured variables equal at every level of a source -- one is a copy of the other (a salinity column filled with the temperature passes every range check); leave the copy out with `drop` |
 | `unreadable_output` | high | the pipeline wrote a file it cannot read back |
 | `all_fill` | medium | the column mapped but held nothing, or the conversion produced NaN throughout |
 | `constant_value` | medium | a stuck sensor, an unrecognised fill value, or per-cast metadata mapped as a measurement |
-| `duplicate_cast_id` | high | two casts in the run share a `cast_id` -- one cast to any tool that merges the files |
+| `duplicate_cast_id` | high | two casts in the run share a `cast_id` -- one cast to any tool that merges the files. Within one WOD file the writer suffixes a repeated id (`_02`); a suffixed id whose base belongs to another source file still counts: it is one cast id in two sources |
 | `out_of_range_levels` | medium / low | some extreme levels. Normal in real casts at low severity; worth reading above 2% |
 | `near_zero_offset` | low | values below a lower bound of **zero** by at most a tenth of the variable's own 99th percentile: a fluorometer dark count, an analyser blank. Kept as submitted, **not** counted as out of range, and never clipped |
 

@@ -1,7 +1,8 @@
-"""Run the staging recipes a person confirmed in decisions.toml.
+"""Run the staging recipes a person reviewed in decisions.toml.
 
 An agent stages an accession by composing the staging primitives in a script; a person
-running `wod-etl run` describes the same steps in decisions.toml instead, and this runs them.
+running `wod-etl` describes the same steps in decisions.toml instead, and `wod-etl confirm`
+runs them.
 It is deliberately small -- three profile shapes and two taxa shapes, the ones accessions
 keep arriving in -- with a `script` kind as the way out for anything else:
 
@@ -19,6 +20,7 @@ Every value a recipe adds that the source files do not state -- a position from 
 list, a unit named in decisions.toml, a conflict settled by the person -- is written into the
 staged file's notes, and from there into the NetCDF's `comment`.
 """
+import logging
 import os
 import re
 import subprocess
@@ -26,10 +28,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from wod_etl import config
+from wod_etl import config, runlog
 from wod_etl.staging import (group_rows, join_station_list, melt_matrix, normalise_station,
                              pivot_long, read_station_list, read_table, write_staged_cast,
                              write_staged_haul)
+
+log = logging.getLogger(__name__)
 
 DEFAULT_DEPTH_COLUMN = "Depth (m)"
 
@@ -114,7 +118,7 @@ def _metadata(accession: str, plan_meta: Dict[str, Any], recipe: Dict[str, Any],
 
 def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
                        accession: str, plan: Dict[str, Any]) -> Dict[str, Any]:
-    """Stage one confirmed profile recipe into `out_dir/<name>/`. Returns written, skipped,
+    """Stage one profile recipe into `out_dir/<name>/`. Returns written, skipped,
     and the notes recorded."""
     root, out = Path(data_root), Path(out_dir) / name
     out.mkdir(parents=True, exist_ok=True)
@@ -127,7 +131,7 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
     mapping = recipe.get("station_map") or {}
     skip = {str(c) for c in recipe.get("skip_casts") or []}
     base_notes = list(recipe.get("notes") or []) + [
-        f"Staged by `wod-etl run` from decisions.toml [profiles.{name}] (kind = {kind})."]
+        f"Staged by `wod-etl confirm` from decisions.toml [profiles.{name}] (kind = {kind})."]
     sources = [f"{root / f}" for f in recipe.get("files") or []] + [
         str(root / recipe["station_list"])]
     written, skipped = [], []
@@ -207,19 +211,45 @@ def _run_script(name: str, recipe: Dict[str, Any], root: Path, out: Path,
     if not script.exists():
         raise FileNotFoundError(f"script {recipe['script']} does not exist")
     env = {**os.environ, "WOD_STAGING_OUT": str(out), "WOD_ACCESSION": accession,
-           "WOD_DATA_ROOT": str(root)}
+           "WOD_DATA_ROOT": str(root),
+           # Resolved here: a relative WOD_PROJECT_ROOT would resolve again from the
+           # child's cwd, which is ROOT, and find a workspace inside this one.
+           "WOD_PROJECT_ROOT": str(config.ROOT),
+           runlog.TO_STDERR_ENV: "1"}
+    # A script may print anything, in any encoding; that must not fail a script that worked.
     proc = subprocess.run([sys.executable, str(script)], cwd=str(config.ROOT), env=env,
-                          capture_output=True, text=True)
+                          capture_output=True, encoding="utf-8", errors="replace")
+    _log_output(recipe["script"], proc)
     if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-15:]
+        tail = (proc.stderr.strip() or proc.stdout.strip()).splitlines()[-15:]
         raise RuntimeError(f"script {recipe['script']} exited {proc.returncode}:\n"
-                           + "\n".join(tail))
+                           + "\n".join(tail) + "\n(all of its output is in run.log)")
     written = sorted(str(p) for p in out.rglob("*.csv"))
     if not written:
         raise RuntimeError(f"script {recipe['script']} wrote nothing into $WOD_STAGING_OUT "
                            f"({out})")
     return {"recipe": name, "written": written, "skipped": [], "script_output":
             (proc.stdout or "").strip().splitlines()[-20:]}
+
+
+MAX_LOGGED_LINES = 200
+
+
+def _log_output(script: str, proc: subprocess.CompletedProcess) -> None:
+    """What the script printed, and the log lines its wod_etl calls sent to stderr, into
+    this run's log -- whether it worked or not."""
+    base = logging.INFO if proc.returncode == 0 else logging.WARNING
+    runlog.event(log, base, f"script {script} exited {proc.returncode}", kind="script",
+                 script=script, exit_code=proc.returncode)
+    for stream, text in (("stdout", proc.stdout), ("stderr", proc.stderr)):
+        lines = (text or "").rstrip().splitlines()
+        if len(lines) > MAX_LOGGED_LINES:
+            log.log(base, "script %s %s: %d earlier line(s) not kept", script, stream,
+                    len(lines) - MAX_LOGGED_LINES)
+        for line in lines[-MAX_LOGGED_LINES:]:
+            level = next((getattr(logging, w) for w in ("ERROR", "WARNING")
+                          if line.startswith(w + " ")), base)
+            log.log(level, "script %s %s: %s", script, stream, line)
 
 
 def _cast_file(cast: str, width: int) -> str:
@@ -238,7 +268,8 @@ def _num(text) -> float:
 # --------------------------------------------------------------------- taxa
 def run_taxa_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir, accession: str,
                     plan: Dict[str, Any]) -> Dict[str, Any]:
-    """Stage one confirmed taxa recipe: one haul file per sample into `out_dir/<name>/`."""
+    """Stage one taxa recipe: one haul file per sample into `out_dir/<name>/`. (The pipeline
+    leaves plankton out for now; this stays for an agent's staging script.)"""
     root, out = Path(data_root), Path(out_dir) / name
     out.mkdir(parents=True, exist_ok=True)
     stations, _ = _station_lookup(root, recipe)
@@ -246,7 +277,7 @@ def run_taxa_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir, acces
     missing = {str(v).lower() for v in recipe.get("missing_values") or ["na", ""]}
     unit = recipe.get("unit")
     base_notes = list(recipe.get("notes") or []) + [
-        f"Staged by `wod-etl run` from decisions.toml [taxa.{name}] (kind = "
+        f"Staged from decisions.toml [taxa.{name}] (kind = "
         f"{recipe.get('kind')}).",
         f"Counts are '{unit}' as stated in decisions.toml." if unit else
         "No unit stated for the counts."]

@@ -1,4 +1,5 @@
-"""decisions.toml: written by the script, edited by a person, never overwritten."""
+"""decisions.toml: written by `wod-etl run`, reviewed by a person, never overwritten."""
+import re
 import tomllib
 
 import pytest
@@ -22,23 +23,23 @@ class TestTomlWriter:
         assert "'" in text and tomllib.loads(text)["cross"]["row_pattern"] == pattern
 
     def test_odd_keys_are_quoted(self):
-        text = dec.section(dec.item_header("files", "data/0-data/x y.csv"), {"action": ""})
-        assert tomllib.loads(text)["files"]["data/0-data/x y.csv"]["action"] == ""
+        text = dec.section(dec.item_header("files", "data/0-data/x y.csv"), {"include": False})
+        assert tomllib.loads(text)["files"]["data/0-data/x y.csv"]["include"] is False
 
 
 class TestAppendOnly:
     def test_the_persons_edits_and_comments_survive_an_append(self, tmp_path):
         p = tmp_path / "decisions.toml"
-        dec.append(p, [dec.section("profiles.ctd", {"confirmed": False})], "0303928", "run 1")
-        p.write_text(p.read_text().replace("confirmed = false",
-                                           "confirmed = true   # checked against the readme"))
+        dec.append(p, [dec.section('files."a.csv"', {"include": True})], "0303928", "run 1")
+        p.write_text(p.read_text().replace("include = true",
+                                           "include = false   # a calibration cast"))
         dec.append(p, [dec.section('conflicts."date:6"', {"resolution": ""})], "0303928",
                    "run 2")
         text = p.read_text()
-        assert "confirmed = true   # checked against the readme" in text
-        assert "# ---- added by run 2 ----" in text
+        assert "include = false   # a calibration cast" in text
+        assert "# ---- added by run 2 ----" in text and "uv run wod-etl confirm 0303928" in text
         data = tomllib.loads(text)
-        assert data["profiles"]["ctd"]["confirmed"] is True and "date:6" in data["conflicts"]
+        assert data["files"]["a.csv"]["include"] is False and "date:6" in data["conflicts"]
 
     def test_nothing_to_add_leaves_the_file_alone(self, tmp_path):
         p = tmp_path / "decisions.toml"
@@ -48,73 +49,168 @@ class TestAppendOnly:
 
     def test_a_syntax_error_is_reported_with_where(self, tmp_path):
         p = tmp_path / "decisions.toml"
-        p.write_text("accession = \"0303928\"\n[metadata\n")
+        p.write_text("accession = \"0303928\"\n[files\n")
         data, err = dec.load(p)
         assert data == {} and "not valid TOML" in err and "line" in err
 
 
-def _triage(files):
-    return {"root": "/nowhere", "files": [
-        {"path": p, "action": a, "reason": "nothing names an instrument", "format": "csv",
-         "dataset_type": None, **extra} for p, a, extra in files]}
+def _file(path, action="process", include=None, dataset="CTD", data="CTD profiles: "
+          "temperature", why="CTD by its path", **extra):
+    include = action in ("process", "stage") if include is None else include
+    return {"path": path, "action": action, "include": include,
+            "dataset": dataset if include else None, "data": data, "why": why,
+            "format": "csv", "reader": "delimited", "dataset_type": dataset if include else None,
+            "reason": why, **extra}
 
 
-class TestProposals:
-    def test_look_alike_files_are_one_question(self):
-        t = _triage([(f"data/par/PAR_202409{d:02d}.txt", "inspect", {}) for d in range(1, 31)]
-                    + [("data/nav/track.dat", "inspect", {})])
-        text = "\n".join(dec.propose(t, {}))
-        assert '[files."data/par/*.txt"]' in text and "Applies to 30 files" in text
-        assert '[files."data/nav/track.dat"]' in text
+def _doc(path, data="NCEI readme"):
+    return _file(path, action="document", data=data, why="documentation, not data")
 
-    def test_an_item_already_decided_is_not_proposed_again(self):
-        t = _triage([("data/par/a.txt", "inspect", {}), ("data/par/b.txt", "inspect", {})])
-        decisions = {"files": {"data/par/*.txt": {"action": "skip"}}}
-        assert not any("[files." in s for s in dec.propose(t, decisions))
+
+def _triage(*files):
+    return {"root": "/nowhere", "files": list(files)}
+
+
+def _entries(triage, decisions=None):
+    return tomllib.loads("\n".join(dec.propose(triage, decisions or {}))).get("files") or {}
+
+
+class TestEveryFileGetsAnEntry:
+    def test_alike_files_share_one_entry_under_a_pattern(self):
+        t = _triage(*[_file(f"data/par/PAR_202409{d:02d}.txt") for d in range(1, 31)],
+                    _file("data/nav/track.dat", action="inspect", data="unidentified"))
+        entries = _entries(t)
+        assert set(entries) == {"data/par/*", "data/nav/track.dat"}
+        assert entries["data/par/*"]["include"] is True
+        assert entries["data/nav/track.dat"]["include"] is False
+
+    def test_a_pattern_never_takes_in_a_file_decided_differently(self):
+        t = _triage(*[_file(f"d/RBRsolo_SN10{i}.nc", action="exclude", data="moored record",
+                            why="MRB") for i in range(5)],
+                    *[_file(f"d/SBE37SM_SN0{i}.nc", action="exclude", data="moored record",
+                            why="MRB") for i in range(2)],
+                    _file("d/workhorse300_up.nc", action="exclude", data="current velocity",
+                          why="no velocity"))
+        keys = set(_entries(t))
+        assert keys == {"d/RBRsolo_*.nc", "d/SBE37SM_*.nc", "d/workhorse300_up.nc"}
+
+    def test_a_shared_part_of_the_name_makes_the_pattern_when_the_ends_do_not(self):
+        names = ["LeConte_Aug2016_CTD_data.nc", "LeConte_May2017_CTD_data_withTurbidity.nc",
+                 "LeConte_Sept2018_CTD_kayak_data.nc"]
+        t = _triage(*[_file(f"d/{n}") for n in names],
+                    _file("d/LeConte_Sept2018_keelCTD_kayak_data.nc", action="exclude",
+                          data="underway record", why="SUR"),
+                    _file("d/LeConte_Aug2016_ADCP_data.nc", action="exclude",
+                          data="current velocity", why="no velocity"))
+        assert "d/LeConte_*_CTD_*.nc" in _entries(t)
+
+    def test_a_star_does_not_reach_into_a_subfolder(self):
+        assert dec.matches("data/0-data/*.nc", "data/0-data/a.nc")
+        assert not dec.matches("data/0-data/*.nc", "data/0-data/moorings/a.nc")
+
+    def test_documentation_in_a_folder_is_one_entry_whatever_it_is(self):
+        t = _triage(_doc("about/journal.txt", "NCEI accession journal"),
+                    _doc("about/0303928_map.jpg", "NCEI map of the sample locations"))
+        entries = _entries(t)
+        assert list(entries) == ["about/*"] and entries["about/*"]["include"] is False
+        assert "journal" in entries["about/*"]["data"] and "map" in entries["about/*"]["data"]
+
+    def test_what_is_written_comes_first_then_what_is_left_out_then_documentation(self):
+        t = _triage(_doc("NCEI-Readme.txt"),
+                    _file("a/sed.nc", action="exclude", data="sediment", why="no sediment"),
+                    _file("b/ctd.csv"))
+        assert list(_entries(t)) == ["b/ctd.csv", "a/sed.nc", "NCEI-Readme.txt"]
+
+    def test_a_file_already_decided_is_not_proposed_again(self):
+        t = _triage(_file("data/par/a.txt"), _file("data/par/b.txt"))
+        assert not _entries(t, {"files": {"data/par/*": {"include": False}}})
+
+    def test_one_files_own_entry_overrides_its_groups_pattern(self):
+        decisions = {"files": {"d/*.csv": {"include": True}, "d/b.csv": {"include": False}}}
+        assert dec.file_decision(decisions, "d/a.csv")["include"] is True
+        assert dec.file_decision(decisions, "d/b.csv")["include"] is False
+        assert dec.decision_key(decisions, "d/b.csv") == "d/b.csv"
 
     def test_a_long_format_group_gets_a_recipe_with_unit_placeholders(self):
         lf = lambda keys, var: {"variable_column": "parm", "value_column": "value",
                                 "key_columns": keys, "variables_sampled": [var]}
-        t = _triage([("d/X1_CTD_Temp.csv", "stage", {"long_format": lf(["StNo", "dep"],
-                                                                          "Temperature")}),
-                     ("d/X1_CTD_Sal.csv", "stage", {"long_format": lf(["StNo", "depth"],
-                                                                         "Salinity")}),
-                     ("d/X1_Stations.csv", "sidecar", {})])
-        recipe = tomllib.loads("\n".join(dec.propose(t, {})))["profiles"]["x1_ctd"]
+        t = _triage(_file("d/X1_CTD_Temp.csv", action="stage",
+                          long_format=lf(["StNo", "dep"], "Temperature")),
+                    _file("d/X1_CTD_Sal.csv", action="stage",
+                          long_format=lf(["StNo", "depth"], "Salinity")),
+                    _file("d/X1_Stations.csv", action="sidecar", data="station list",
+                          why="locates casts", columns=["Station", "Lat", "Lon"]))
+        parsed = tomllib.loads("\n".join(dec.propose(t, {})))
+        recipe = parsed["profiles"]["x1_ctd"]
         assert recipe["columns"]["Temperature"] == "Temperature (UNIT?)"
-        assert recipe["station_list"] == "d/X1_Stations.csv"
-        assert recipe["cast_key"] == "StNo" and recipe["confirmed"] is False
+        assert recipe["station_list"] == "d/X1_Stations.csv" and "confirmed" not in recipe
+        assert recipe["cast_key"] == "StNo"
         assert recipe["key_aliases"] in ({"depth": ["dep"]}, {"dep": ["depth"]})
+        assert "[profiles.x1_ctd]" in parsed["files"]["d/X1_CTD_*.csv"]["why"]
+        assert "track" in parsed and "metadata" in parsed
+        # The station list is what is checked, so it is no source to check it against.
+        assert "Candidates found: d/X1_Stations.csv" not in "\n".join(dec.propose(t, {}))
+
+    def test_without_a_recipe_there_are_no_station_checks_but_metadata_is_offered(self):
+        parsed = tomllib.loads("\n".join(dec.propose(_triage(_file("a.csv")), {})))
+        assert "track" not in parsed and "cross_check" not in parsed
+        assert parsed["metadata"] == {}                     # every key commented, to fill in
 
 
 class TestValidation:
-    def test_a_pattern_settles_every_file_it_matches(self):
-        t = _triage([("data/par/a.txt", "inspect", {}), ("data/par/b.txt", "inspect", {})])
-        items, plan = dec.validate({"files": {"data/par/*.txt": {"action": "skip"}}}, t, {}, [])
-        assert not [i for i in items if i["blocking"]]
-        assert {s["key"] for s in plan["skipped"]} == {"data/par/a.txt", "data/par/b.txt"}
+    def test_include_must_be_true_or_false(self):
+        t = _triage(_file("x.csv"))
+        items, _ = dec.validate({"files": {"x.csv": {"include": "yes"}}}, t, {}, [])
+        assert [i for i in items if i["blocking"] and "include = 'yes'" in i["what"]]
 
-    def test_process_needs_a_real_dataset(self):
-        t = _triage([("x.csv", "inspect", {})])
-        items, _ = dec.validate({"files": {"x.csv": {"action": "process",
-                                                     "process_as": "BOTTLE"}}}, t, {}, [])
+    def test_a_file_with_no_entry_blocks(self):
+        items, _ = dec.validate({"files": {}}, _triage(_file("x.csv")), {}, [])
+        assert any("have no entry" in i["what"] for i in items if i["blocking"])
+
+    def test_an_included_file_needs_a_wod_dataset(self):
+        t = _triage(_file("x.csv", action="inspect", include=False))
+        items, _ = dec.validate({"files": {"x.csv": {"include": True}}}, t, {}, [])
+        assert any("which WOD dataset" in i["what"] for i in items if i["blocking"])
+        items, _ = dec.validate({"files": {"x.csv": {"include": True, "dataset": "BOTTLE"}}},
+                                t, {}, [])
         assert any("not a WOD dataset" in i["what"] for i in items if i["blocking"])
-        items, plan = dec.validate({"files": {"x.csv": {"action": "process",
-                                                        "process_as": "OSD"}}}, t, {}, [])
+        items, plan = dec.validate({"files": {"x.csv": {"include": True, "dataset": "OSD"}}},
+                                   t, {}, [])
         assert not [i for i in items if i["blocking"]]
         assert plan["direct"] == ["x.csv"] and plan["dataset_overrides"] == {"x.csv": "OSD"}
 
-    def test_an_unconfirmed_taxa_recipe_does_not_block(self):
-        items, _ = dec.validate({"taxa": {"norpac": {"confirmed": False, "file": "n.csv"}}},
-                                _triage([]), {}, [])
-        assert items and not any(i["blocking"] for i in items)
+    def test_the_reviewed_dataset_is_what_the_file_is_written_as(self):
+        """Processing does not classify again from less evidence: it sees no NetCDF
+        instrument attribute, and an SV&T probe's casts came out CTD instead of MBT."""
+        t = _triage(_file("ctd.csv"), _file("mvp.nc", dataset="MBT"))
+        _, plan = dec.validate({"files": {"ctd.csv": {"include": True, "dataset": "CTD"},
+                                          "mvp.nc": {"include": True, "dataset": "MBT"}}},
+                               t, {}, [])
+        assert plan["dataset_overrides"] == {"ctd.csv": "CTD", "mvp.nc": "MBT"}
+
+    def test_left_out_files_are_listed_with_why(self):
+        t = _triage(_file("a.csv"), _file("b.nc", action="exclude", data="currents",
+                                          why="no velocity code"))
+        decisions = {"files": {"a.csv": {"include": True},
+                               "b.nc": {"include": False, "why": "no velocity code"}}}
+        _, plan = dec.validate(decisions, t, {}, [])
+        assert plan["left_out"] == [{"key": "b.nc", "data": None, "why": "no velocity code"}]
+        assert [e["key"] for e in plan["entries"]] == ["a.csv", "b.nc"]
+
+    def test_a_recipe_for_files_left_out_is_not_checked(self):
+        t = _triage(_file("d/l.csv", action="stage"))
+        decisions = {"files": {"d/l.csv": {"include": False}},
+                     "profiles": {"l": {"kind": "long", "files": ["d/l.csv"],
+                                        "columns": {"T": "T (UNIT?)"}}}}
+        items, plan = dec.validate(decisions, t, {}, [])
+        assert not [i for i in items if i["blocking"]] and not plan["profiles"]
 
     def test_a_settled_conflict_reopens_when_its_values_change(self):
         conflict = {"id": "date:6", "station": "6", "field": "date", "what": "dates differ",
                     "how_to_fix": "...", "values": {"list": "2015-11-12", "report": "2015-11-11"},
                     "values_hash": "new"}
         decided = {"conflicts": {"date:6": {"resolution": "keep", "values_hash": "old"}}}
-        items, _ = dec.validate(decided, _triage([]), {}, [conflict])
+        items, _ = dec.validate(decided, _triage(), {}, [conflict])
         assert any("values changed" in i["what"] for i in items)
 
     @pytest.mark.parametrize("resolution,expected", [
@@ -128,8 +224,179 @@ class TestValidation:
                     "values_hash": "h"}
         decided = {"conflicts": {"date:6": {"resolution": resolution, "values_hash": "h",
                                             "note": "fishing log"}}}
-        items, plan = dec.validate(decided, _triage([]), {}, [conflict])
+        items, plan = dec.validate(decided, _triage(), {}, [conflict])
         assert not [i for i in items if i["blocking"]]
         o = plan["station_overrides"]["6"]
         assert {k: v for k, v in o.items() if k != "notes"} == expected
         assert "fishing log" in o["notes"][0]
+
+
+class TestHowAnIncludedFileIsWritten:
+    def test_drop_and_metadata_reach_the_plan_with_the_accessions_metadata(self):
+        t = _triage(_file("a.nc"), _file("b.nc"))
+        decisions = {"metadata": {"Platform": "R/V Pelican"},
+                     "files": {"a.nc": {"include": True, "dataset": "CTD",
+                                        "drop": ["salinity"],
+                                        "metadata": {"Cruise": "NABOS-08"}},
+                               "b.nc": {"include": True, "dataset": "CTD"}}}
+        items, plan = dec.validate(decisions, t, {}, [])
+        assert not [i for i in items if i["blocking"]]
+        assert plan["file_options"] == {
+            "a.nc": {"drop": ["salinity"],
+                     "metadata": {"Platform": "R/V Pelican", "Cruise": "NABOS-08"}},
+            "b.nc": {"drop": [], "metadata": {"Platform": "R/V Pelican"}}}
+
+    def test_a_malformed_drop_or_metadata_blocks(self):
+        t = _triage(_file("a.nc"))
+        for bad in ({"drop": "salinity"}, {"metadata": "NABOS"}):
+            items, _ = dec.validate({"files": {"a.nc": {"include": True, "dataset": "CTD",
+                                                        **bad}}}, t, {}, [])
+            assert [i for i in items if i["blocking"]], bad
+
+    def test_a_proposed_drop_is_written_into_the_entry(self):
+        t = _triage(_file("ship.nc", data="CTD profiles: temperature", drop=["salinity"]))
+        assert _entries(t)["ship.nc"]["drop"] == ["salinity"]
+
+
+class TestAFileWithItsOwnEntryDoesNotBreakItsNeighboursGroup:
+    def test_alike_files_keep_their_pattern_when_it_also_takes_in_a_file_decided_alone(self):
+        names = ["LeConte_Aug2016_CTD_data.nc", "LeConte_Jul2017_CTD_data.nc",
+                 "LeConte_Sept2018_CTD_kayak_data.nc"]
+        t = _triage(*[_file(f"d/{n}") for n in names],
+                    _file("d/LeConte_Sept2018_CTD_ship_data.nc", data="CTD profiles: temperature",
+                          drop=["salinity"]),
+                    _file("d/LeConte_Aug2016_ADCP_data.nc", action="exclude",
+                          data="current velocity", why="no velocity"))
+        decided = tomllib.loads("\n".join(dec.propose(t, {})))
+        keys = {dec.decision_key(decided, f"d/{n}") for n in names}
+        assert len(keys) == 1 and dec.is_pattern(keys.pop())          # one shared entry
+        assert dec.file_decision(decided, "d/LeConte_Sept2018_CTD_ship_data.nc")["drop"] == [
+            "salinity"]
+        assert dec.file_decision(decided, "d/LeConte_Aug2016_ADCP_data.nc")["include"] is False
+
+
+class TestTheMetadataTemplateIsValidOnceUncommented:
+    def test_every_proposed_key_parses_when_the_reviewer_uncomments_it(self):
+        text = "\n".join(dec.propose(_triage(_file("a.csv")), {}))
+        uncommented = re.sub(r"^# ([a-z_]+ = )", r"\1", text, flags=re.M)
+        meta = tomllib.loads(uncommented)["metadata"]
+        assert {"platform", "institution", "project", "cruise", "principal_investigator",
+                "probe_type", "instrument"} <= set(meta)
+
+
+ISO = """<gmi:MI_Metadata xmlns:gmd="http://www.isotc211.org/2005/gmd"
+ xmlns:gco="http://www.isotc211.org/2005/gco" xmlns:gmi="http://www.isotc211.org/2005/gmi">
+ <gmd:identificationInfo><gmd:MD_DataIdentification>
+  <gmd:pointOfContact><gmd:CI_ResponsibleParty>
+   <gmd:individualName><gco:CharacterString>David Sutherland</gco:CharacterString></gmd:individualName>
+   <gmd:role><gmd:CI_RoleCode codeListValue="principalInvestigator"/></gmd:role>
+  </gmd:CI_ResponsibleParty></gmd:pointOfContact>
+  <gmd:descriptiveKeywords><gmd:MD_Keywords>
+   <gmd:keyword><gco:CharacterString>LeConte Glacier Ice-Ocean Interactions</gco:CharacterString></gmd:keyword>
+   <gmd:type><gmd:MD_KeywordTypeCode codeListValue="project"/></gmd:type>
+  </gmd:MD_Keywords></gmd:descriptiveKeywords>
+ </gmd:MD_DataIdentification></gmd:identificationInfo>
+ <gmi:acquisitionInformation><gmi:MI_AcquisitionInformation>
+  <gmi:platform><gmi:MI_Platform><gmi:identifier><gmd:MD_Identifier><gmd:code>
+   <gco:CharacterString>MV Steller</gco:CharacterString></gmd:code></gmd:MD_Identifier>
+  </gmi:identifier></gmi:MI_Platform></gmi:platform>
+  <gmi:platform><gmi:MI_Platform><gmi:identifier><gmd:MD_Identifier><gmd:code>
+   <gco:CharacterString>MV Pelican</gco:CharacterString></gmd:code></gmd:MD_Identifier>
+  </gmi:identifier></gmi:MI_Platform></gmi:platform>
+ </gmi:MI_AcquisitionInformation></gmi:acquisitionInformation>
+</gmi:MI_Metadata>"""
+
+
+class TestMetadataTheAccessionStatesIsProposed:
+    def test_one_value_is_set_and_several_are_offered_to_choose_from(self, tmp_path):
+        (tmp_path / "WL01P3-ISO-19115-2.xml").write_text(ISO)
+        t = {"root": str(tmp_path), "files": [_doc("WL01P3-ISO-19115-2.xml", "ISO 19115 metadata"),
+                                              _file("a.nc")]}
+        text = "\n".join(dec.propose(t, {}))
+        meta = tomllib.loads(text)["metadata"]
+        assert meta == {"project": "LeConte Glacier Ice-Ocean Interactions",
+                        "principal_investigator": "David Sutherland"}
+        assert '# platform = "MV Steller"\n#   or: MV Pelican' in text
+
+
+class TestTheFileReadsByOutcome:
+    def _write(self, tmp_path, triage):
+        p = tmp_path / "decisions.toml"
+        dec.append(p, dec.propose(triage, {}), "0303928", "run 1", triage=triage)
+        return p.read_text()
+
+    def test_a_summary_then_metadata_then_one_section_per_outcome(self, tmp_path):
+        t = _triage(_file("data/a.csv"), _file("data/b.csv"),
+                    _file("data/adcp.nc", action="exclude", data="current velocity",
+                          why="WOD stores no current velocity", exclusion="current velocity"),
+                    _file("data/m.nc", action="exclude", data="moored record", why="MRB",
+                          exclusion="moored instrument time series", belongs_in_wod=True),
+                    _doc("NCEI-Readme.txt"))
+        text = self._write(tmp_path, t)
+        assert "#   IN       2 files  as CTD (2)" in text
+        assert "#   OUT      1 file   WOD takes them, but wod-etl cannot write them yet" in text
+        order = ["[metadata]", "# ==== IN:", "# ==== OUT: WOD takes these",
+                 "# ==== OUT: not something WOD stores", "# ==== DOCUMENTATION:"]
+        assert [text.index(h) for h in order] == sorted(text.index(h) for h in order)
+        entry = text[text.index('[files."data/'):]
+        assert entry.index("include =") < entry.index("data =") < entry.index("why =")
+        assert tomllib.loads(text)["files"]["NCEI-Readme.txt"] == {
+            "include": False, "data": "NCEI readme"}               # its heading says why
+        assert max(len(line) for line in text.splitlines() if line.startswith("#")) <= 100
+
+
+class TestAnExistingFileIsReformattedKeepingItsDecisions:
+    OLD = '''accession = "0303928"
+
+[files."data/*.csv"]
+data = "CTD profiles: temperature"
+include = true
+dataset = "CTD"
+why = "CTD by its path ('CTD') and depth increment 1.00 m is high-resolution (< 2.0 m)"
+
+[metadata]
+Platform = "Shunyo-Maru"
+"Principal investigator" = "A. Person"
+
+[files."data/a.csv"]
+data = "CTD profiles: temperature"
+include = true
+dataset = "CTD"
+why = "the cast the PI asked for"
+metadata = { Cruise = "SHU1505" }
+
+[files."data/b.csv"]
+data = "CTD profiles: temperature"
+include = false
+dataset = "CTD"
+why = "CTD by its path ('CTD') and depth increment 1.00 m is high-resolution (< 2.0 m)"
+'''
+
+    def test_values_are_kept_and_only_untouched_reasons_and_dead_entries_change(self,
+                                                                                tmp_path):
+        p = tmp_path / "decisions.toml"
+        p.write_text(self.OLD)
+        old_why = "CTD by its path ('CTD') and depth increment 1.00 m is high-resolution (< 2.0 m)"
+        new_why = "CTD by its path ('CTD') and levels 1.00 m apart (< 2.0 m)"
+        old = _triage(_file("data/a.csv", why=old_why), _file("data/b.csv", why=old_why))
+        new = _triage(_file("data/a.csv", why=new_why), _file("data/b.csv", why=new_why))
+        res = dec.reformat(p, new, old)
+        assert res["written"] and res["dropped"] == ["data/*.csv"]   # both files have their own
+        d = tomllib.loads(p.read_text())
+        assert d["files"]["data/a.csv"]["why"] == "the cast the PI asked for"   # the review's
+        assert d["files"]["data/a.csv"]["metadata"] == {"cruise": "SHU1505"}
+        assert d["files"]["data/b.csv"] == {"include": False, "dataset": "CTD",
+                                            "data": "CTD profiles: temperature",
+                                            "why": new_why}
+        assert d["metadata"] == {"platform": "Shunyo-Maru",
+                                 "principal_investigator": "A. Person"}
+        assert (tmp_path / "decisions.toml.bak").read_text() == self.OLD
+        text = p.read_text()
+        assert text.index("[metadata]") < text.index("# ==== IN:") < text.index(
+            "# ==== OUT: left out by the review")
+
+    def test_a_file_that_does_not_parse_is_left_alone(self, tmp_path):
+        p = tmp_path / "decisions.toml"
+        p.write_text("broken = [\n")
+        res = dec.reformat(p, _triage(_file("data/a.csv")))
+        assert not res["written"] and p.read_text() == "broken = [\n"

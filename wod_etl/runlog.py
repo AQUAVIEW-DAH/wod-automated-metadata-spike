@@ -1,7 +1,7 @@
 """A log per accession: what was run against it, by whom, and what happened.
 
-Every run touching an accession -- `wod-etl run` typed by a person, or a coding agent
-calling `process_accession` -- appends to the same two files:
+Every run touching an accession -- `wod-etl run` or `confirm` typed by a person, or a
+coding agent calling `process_accession` -- appends to the same two files:
 
     data/runs/<accession>/run.log        human-readable, one line per event
     data/runs/<accession>/events.jsonl   the same events as JSON, one object per line
@@ -24,17 +24,21 @@ import contextvars
 import datetime as dt
 import json
 import logging
+import os
 import subprocess
+import sys
 import uuid
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from wod_etl import config
 
 LOGGER_NAME = "wod_etl"
 TEXT_LOG = "run.log"
 EVENTS_LOG = "events.jsonl"
+# Set for a script recipe's subprocess: log to stderr, which the parent run records.
+TO_STDERR_ENV = "WOD_LOG_TO_STDERR"
 
 # The log open in this context, if any. Re-entrant: a pipeline that opens the log and then
 # calls process_accession must not attach a second pair of handlers and write every line
@@ -102,36 +106,36 @@ def accession_log(accession: str, actor: str = "agent",
                   banner: bool = True) -> Iterator[Dict[str, Any]]:
     """Log everything `wod_etl` does inside the block to the accession's run log.
 
-    `actor` says who ran it: `"cli"` for `wod-etl run`, `"agent"` or `"library"` for a call
-    from Python. The yielded dict has `status`, which the caller may set; it is written in the
-    closing line. Nested calls reuse the log already open.
+    `actor` says who ran it: `"cli"` for the `wod-etl` command, `"agent"` or `"library"` for
+    a call from Python; `arguments["command"]` (`run`, `confirm`) names what was run. The
+    yielded dict has `status`, which the caller may set; it is written in the closing line.
+    Nested calls reuse the log already open.
     """
     current = _ACTIVE.get()
     if current is not None:
         yield current
         return
 
-    folder = run_dir(accession)
-    folder.mkdir(parents=True, exist_ok=True)
-    context = {"accession": str(accession), "actor": actor, "dir": str(folder),
+    context = {"accession": str(accession), "actor": actor, "dir": None,
                "invocation": dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
                              + "-" + uuid.uuid4().hex[:6],
                "status": None}
     logger = logging.getLogger(LOGGER_NAME)
-    text = logging.FileHandler(folder / TEXT_LOG, encoding="utf-8")
-    text.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-                                        "%Y-%m-%dT%H:%M:%S%z"))
-    jsonl = _JsonLines(folder / EVENTS_LOG, context)
+    handlers = _handlers(accession, context)
     old_level = logger.level
-    logger.addHandler(text)
-    logger.addHandler(jsonl)
+    for h in handlers:
+        logger.addHandler(h)
     if logger.getEffectiveLevel() > logging.INFO:
         logger.setLevel(logging.INFO)
     token = _ACTIVE.set(context)
     log = logging.getLogger(f"{LOGGER_NAME}.runlog")
+    # Banners belong to a run folder. There is none under a parent run (a banner there would
+    # open a second run inside the parent's) or when the folder cannot be written.
+    banner = banner and context["dir"] is not None
     if banner:
         event(log, logging.INFO,
-              f"===== {actor} run {context['invocation']} on accession {accession} =====",
+              f"===== {actor} {(arguments or {}).get('command') or 'run'} "
+              f"{context['invocation']} on accession {accession} =====",
               kind="start", actor=actor, arguments=arguments or {}, git=_git_head(),
               config=config.describe())
     try:
@@ -148,10 +152,34 @@ def accession_log(accession: str, actor: str = "agent",
                   f"{context.get('status') or 'finished'} =====",
                   kind="end", status=context.get("status"))
         _ACTIVE.reset(token)
-        logger.removeHandler(text)
-        logger.removeHandler(jsonl)
-        text.close()
+        for h in handlers:
+            logger.removeHandler(h)
+            h.close()
         logger.setLevel(old_level)
+
+
+def _handlers(accession: str, context: Dict[str, Any]) -> List[logging.Handler]:
+    """run.log and events.jsonl in the accession's folder, or stderr under a parent run.
+
+    `wod-etl confirm` sets TO_STDERR_ENV for a script recipe's subprocess and copies what it
+    prints into its own run log, under its own invocation. The subprocess opening the run
+    folder as well would log a second invocation, under an accession guessed from a path.
+    """
+    if os.environ.get(TO_STDERR_ENV):
+        h = logging.StreamHandler(sys.stderr)
+        h.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        return [h]
+    folder = run_dir(accession)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        text = logging.FileHandler(folder / TEXT_LOG, encoding="utf-8")
+    except OSError as e:
+        print(f"wod_etl: no run log for accession {accession}: {e}", file=sys.stderr)
+        return []
+    text.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+                                        "%Y-%m-%dT%H:%M:%S%z"))
+    context["dir"] = str(folder)
+    return [text, _JsonLines(folder / EVENTS_LOG, context)]
 
 
 def accession_log_for(source: Any, accession: Optional[str] = None, actor: str = "library",

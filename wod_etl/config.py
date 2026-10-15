@@ -33,7 +33,9 @@ RAW_DIR = DATA_DIR / "raw"
 STAGING_DIR = DATA_DIR / "staging"
 PROCESSED_DIR = DATA_DIR / "processed"
 MANIFEST_DIR = STAGING_DIR / "manifests"
-# One folder per accession: its run log, pipeline state, decisions file and report.
+# One folder per accession: its run log, pipeline state, decisions file and report, and
+# work/, the copies of the inputs the process stage reads. It is not configurable apart
+# from DATA_DIR: its lock and state describe the outputs under staging/ and processed/.
 RUNS_DIR = DATA_DIR / "runs"
 
 KNOWLEDGE_DIR = ROOT / "knowledge"

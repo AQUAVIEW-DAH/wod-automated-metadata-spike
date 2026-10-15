@@ -64,7 +64,17 @@ back is a correct answer, not a bug.
 | `unknown` | Not a WOD dataset at all. `note` lists the valid names. |
 
 `valid_for_dataset` flags a variable that Table 3a does not store in the resolved dataset —
-e.g. phosphate in a CTD file. It becomes a contract warning, not an error.
+e.g. phosphate in a CTD file, salinity in an MBT cast. `generate_field_mapping` **leaves it
+out** and lists it in `dropped_columns` (`kind = "not_in_dataset"`, with the datasets that do
+store it): a cast never carries a variable its dataset has no place for. If it was measured
+and belongs in WOD, write the file as a dataset that stores it.
+
+Header parsing also reads: a cast date labelled `Time:` (`Time: 2009. 8.18`) and seconds of
+a time of day; a `Depth:` on the line that gives the station's position as the bottom depth
+(secondary header 10; a negative one is a missing-value code); a `Source:` line as a source
+FILE only when its value is a path. A `key: value` line keeps its commas -- a value ends at
+the next `Key:`, a `;` or `|`, not at a comma -- and ACDD's `creator_name` is the principal
+investigator.
 
 ### Helpers (importable from `skills.mapping.query_wod_spec`)
 

@@ -62,13 +62,22 @@ _RATIO_TOLERANCE = 0.15
 NEAR_ZERO_FRACTION = 0.1
 
 
-def verify_output(processed_dir, sample_levels: int = 200_000) -> Dict[str, Any]:
+# The range check is vectorised, so every value of an accession is checked up to this many
+# per variable; past it the report says how many were not.
+SAMPLE_LEVELS = 5_000_000
+
+
+def verify_output(processed_dir, sample_levels: int = SAMPLE_LEVELS,
+                  paths: Optional[List[str]] = None) -> Dict[str, Any]:
     """Check every NetCDF in a directory against the manual's acceptable ranges.
 
-    `sample_levels` caps how many observations of one variable are range-checked, so a
-    multi-million-level dataset stays cheap. The cap is reported when it bites.
+    `paths` checks exactly those files instead -- the ones a run wrote, not whatever else is
+    in the folder. `sample_levels` caps how many observations of one variable are
+    range-checked, so a multi-million-level dataset stays cheap. The cap is reported when it
+    bites.
     """
-    paths = sorted(glob.glob(str(Path(processed_dir) / "*.nc")))
+    paths = (sorted(str(p) for p in paths) if paths is not None
+             else sorted(glob.glob(str(Path(processed_dir) / "*.nc"))))
     report: Dict[str, Any] = {
         "processed_dir": str(processed_dir),
         "netcdf_files": len(paths),
@@ -78,7 +87,7 @@ def verify_output(processed_dir, sample_levels: int = 200_000) -> Dict[str, Any]
         "flag_distribution": {},
         "findings": [],
         "checked": ["acceptable_range", "near_zero_offset", "all_fill", "constant_value",
-                    "depth_axis", "unique_cast_id"],
+                    "depth_axis", "unique_cast_id", "identical_variables"],
     }
     if not paths:
         report["passed"] = True
@@ -134,12 +143,19 @@ def _read_one(path, per_variable, flags, report, sample_levels, cast_ids=None) -
         report["casts"] += len(ds.dimensions.get("casts", ()) or ())
         report["observations"] += len(ds.dimensions.get("z_obs", ()) or ())
         if cast_ids is not None and "cast_id" in ds.variables:
-            for cid in np.asarray(ds.variables["cast_id"][:]).ravel():
-                cast_ids.setdefault(str(cid), []).append(Path(path).name)
+            _register_cast_ids(ds, Path(path).name, cast_ids)
 
         z = _numeric(ds.variables["z"]) if "z" in ds.variables else None
-        if z is not None:
-            _check_depth_axis(Path(path).name, z, report["findings"])
+        # A file of several sources is judged source by source, as each was when it had a
+        # file of its own: one source's salinity copied from its temperature, or its
+        # bottom depth on the vertical axis, must not hide among another's good casts.
+        measured = _measured(ds)
+        for source, levels in _source_levels(ds):
+            where = Path(path).name + (f" ({source})" if source else "")
+            if z is not None:
+                _check_depth_axis(where, z if levels is None else z[levels],
+                                  report["findings"])
+            _check_copies(where, measured, report["findings"], levels)
 
         for name, var in ds.variables.items():
             if name.endswith("_qc"):
@@ -169,35 +185,117 @@ def _read_one(path, per_variable, flags, report, sample_levels, cast_ids=None) -
             # Keep values and their depths together: the acceptable range is depth-dependent,
             # so a value cannot be judged without the level it was measured at.
             room = sample_levels - len(entry["values"])
-            if room > 0:
-                keep = np.flatnonzero(finite)[:room]
-                entry["values"].extend(data[keep].tolist())
-                entry["depths"].extend((z[keep].tolist() if z is not None
-                                        and z.size == data.size
-                                        else [np.nan] * keep.size))
-            elif finite.any():
+            present = np.flatnonzero(finite)
+            keep = present[:max(room, 0)]
+            entry["values"].extend(data[keep].tolist())
+            entry["depths"].extend((z[keep].tolist() if z is not None
+                                    and z.size == data.size
+                                    else [np.nan] * keep.size))
+            # Said whenever the cap bites -- mid-file too -- so "verified" never claims
+            # values that were not checked.
+            if keep.size < present.size:
                 entry["truncated"] = True
+                entry["not_checked"] = entry.get("not_checked", 0) + int(present.size - keep.size)
+
+
+# Fewer shared levels than this and two variables agreeing proves nothing.
+MIN_LEVELS_FOR_A_COPY = 10
+
+
+def _measured(ds) -> Dict[str, np.ndarray]:
+    """Every measured variable of a file, as floats with fill as NaN."""
+    out = {n: _numeric(v) for n, v in ds.variables.items()
+           if getattr(v, "wod_variable_code", None) is not None
+           and not n.endswith(("_qc", "_qc_originator"))}
+    return {n: a for n, a in out.items() if a is not None}
+
+
+def _cast_sources(ds) -> Optional[List[str]]:
+    """Each cast's source file, from the per-cast variable or the file's attribute."""
+    n = len(ds.dimensions.get("casts", ()) or ())
+    if "source_file" in ds.variables:
+        sources = [str(s) for s in np.asarray(ds.variables["source_file"][:]).ravel()]
+        return sources if len(sources) == n else None
+    return [str(getattr(ds, "source_file", ""))] * n
+
+
+def _register_cast_ids(ds, name: str, cast_ids: Dict[str, List[str]]) -> None:
+    """Record each cast id of a file. An id the writer says casts of two source files share
+    (`repeated_across_source_files`) is recorded once more: it is one id in two sources, as
+    it was found when each source had a file of its own."""
+    var = ds.variables["cast_id"]
+    for cid in np.asarray(var[:]).ravel():
+        cast_ids.setdefault(str(cid), []).append(name)
+    for cid in str(getattr(var, "repeated_across_source_files", "") or "").split("; "):
+        if cid:
+            cast_ids.setdefault(cid, []).append(name)
+
+
+def _source_levels(ds) -> List[tuple]:
+    """[(source, level indices)] -- one entry per source file the casts came from, or a
+    single `("", None)` (every level) for a file of one source."""
+    n = len(ds.dimensions.get("casts", ()) or ())
+    if "source_file" not in ds.variables or "z_row_size" not in ds.variables or not n:
+        return [("", None)]
+    sources = _cast_sources(ds)
+    rows = np.ma.filled(np.ma.asarray(ds.variables["z_row_size"][:]), 0).astype(int).ravel()
+    if sources is None or rows.size != n:
+        return [("", None)]
+    level_cast = np.repeat(np.arange(n), rows)
+    out = []
+    for source in dict.fromkeys(sources):
+        casts = np.flatnonzero(np.asarray(sources) == source)
+        out.append((source, np.flatnonzero(np.isin(level_cast, casts))))
+    return out
+
+
+def _check_copies(name: str, measured: Dict[str, np.ndarray], findings,
+                  levels: Optional[np.ndarray] = None) -> None:
+    """Two measured variables equal at every level: one is a copy of the other. A salinity
+    column filled with the temperature passes every range check -- 5 to 8 is a possible
+    salinity -- and only this catches it. `levels` limits it to one source's levels."""
+    names = list(measured)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            x, y = measured[a], measured[b]
+            if levels is not None:
+                if x.shape != y.shape or levels.size == 0 or levels.max() >= x.size:
+                    continue
+                x, y = x[levels], y[levels]
+            both = np.isfinite(x) & np.isfinite(y)
+            if x.shape == y.shape and both.sum() >= MIN_LEVELS_FOR_A_COPY \
+                    and np.array_equal(x[both], y[both]) \
+                    and np.array_equal(np.isfinite(x), np.isfinite(y)):
+                findings.append(_finding(
+                    "identical_variables", "high", name, b,
+                    f"{b} equals {a} at every one of {int(both.sum())} levels",
+                    "One is a copy of the other, not a measurement. Find out which the "
+                    "originator meant, and leave the copy out: drop = [\"" + b + "\"] in its "
+                    "decisions.toml entry."))
 
 
 def _numeric(var) -> Optional[np.ndarray]:
     try:
         if var.dtype == str or np.asarray(var[:]).dtype.kind in "USO":
             return None
-        return np.ma.filled(np.asarray(var[:], dtype=float), np.nan).ravel()
+        # np.ma, not np: a plain array drops the mask, and every _FillValue then reads as a
+        # measured -9999.
+        return np.ma.filled(np.ma.asarray(var[:], dtype=float), np.nan).ravel()
     except (ValueError, TypeError):
         return None
 
 
 # ------------------------------------------------------------------ judging
 def _summarize(name, v, findings) -> Dict[str, Any]:
-    from wod_etl.qc_transforms.apply_qc_auditing import range_at_depth
+    from wod_etl.qc_transforms.apply_qc_auditing import range_at_depth, ranges_at_depths
 
     out = {"wod_code": v["wod_code"], "units": v["units"],
            "n": v["n"], "n_finite": v["n_finite"],
            "min": None if v["n_finite"] == 0 else round(v["min"], 6),
            "max": None if v["n_finite"] == 0 else round(v["max"], 6),
            "levels_range_checked": len(v["values"]),
-           "sample_truncated": v["truncated"]}
+           "sample_truncated": v["truncated"],
+           "values_not_range_checked": v.get("not_checked", 0)}
 
     if v["n_finite"] == 0:
         findings.append(_finding(
@@ -219,19 +317,10 @@ def _summarize(name, v, findings) -> Dict[str, Any]:
     if values.size == 0:
         return out
 
-    lo = np.full(values.size, -np.inf)
-    hi = np.full(values.size, np.inf)
-    have_bounds = False
-    # Bounds change with depth but only across 33 listed levels, so resolve once per
-    # distinct depth rather than once per observation.
-    for depth in np.unique(np.where(np.isfinite(depths), depths, 0.0)):
-        bounds = range_at_depth(v["wod_code"], float(depth))
-        if bounds is None:
-            break
-        have_bounds = True
-        at = np.isclose(np.where(np.isfinite(depths), depths, 0.0), depth)
-        lo[at], hi[at] = bounds
-    if not have_bounds:
+    bounds = ranges_at_depths(v["wod_code"], depths)
+    if bounds is not None:
+        lo, hi = bounds
+    else:
         out["acceptable_range"] = "not defined for this variable in Appendix 11"
         return out
 
@@ -304,8 +393,10 @@ def _check_cast_ids(cast_ids: Dict[str, List[str]], findings) -> None:
         f"{len(repeated)} cast id(s) occur more than once across {len(cast_ids)} id(s): "
         f"{shown}",
         "cast_id is the CF profile_id: two casts sharing one are one cast to any tool that "
-        "merges these files. Give each cast an accession, cruise, cast or station and date "
-        "in its staged header -- the writer builds the id from those."))
+        "merges these files. If it is one cast in two source files, leave one of them out "
+        "(include = false); if they are different casts, give each an accession, cruise, "
+        "cast or station and date in its staged header -- the writer builds the id from "
+        "those."))
 
 
 def _suspect_cause(values, lo, hi) -> str:

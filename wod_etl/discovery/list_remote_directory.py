@@ -158,8 +158,11 @@ def accession_number(text: str):
     return None
 
 
+# A folder named as NCEI writes an accession -- seven digits, zero-padded (0062621) -- or an
+# archive of one. A bare 5-6 digit folder is too often a date (201511, 151109) to be read as
+# an accession, and output named for the wrong accession is worse than one named for none.
 _ACCESSION_COMPONENT = re.compile(
-    r"^0*(\d{5,7})(?:\.(?:tar\.gz|tgz|tar\.bz2|tar|zip))?$", re.IGNORECASE)
+    r"^(?:0(\d{6})|0*(\d{5,7})\.(?:tar\.gz|tgz|tar\.bz2|tar|zip))$", re.IGNORECASE)
 
 
 def accession_for(text_or_path) -> Optional[str]:
@@ -167,7 +170,8 @@ def accession_for(text_or_path) -> Optional[str]:
 
     Works on everything an accession is cited as or stored under: a landing page, an
     `/archive/accession/<n>` or `/archive/arc0238/<n>/` URL, a bare number, a tarball name,
-    and a local path such as `data/staging/0303928/CTD_20261012`. `accession_number` returns
+    and a local path such as `data/staging/0303928/CTD_20261012` -- a folder named as NCEI
+    writes an accession, seven digits zero-padded; `201511` in a path is a date, not one. `accession_number` returns
     the number with its leading zeros stripped (`303928`) and finds nothing in a path; this is
     the one to key files and folders by.
     """
@@ -183,7 +187,7 @@ def accession_for(text_or_path) -> Optional[str]:
         for part in reversed(parts):
             m = _ACCESSION_COMPONENT.match(part)
             if m:
-                number = m.group(1)
+                number = m.group(1) or m.group(2)
                 break
     return number.lstrip("0").zfill(7) if number else None
 
@@ -199,17 +203,24 @@ def _is_accession_reference(text: str) -> bool:
 _ARCHIVE_PATH = re.compile(r"/archive/(arc\d{4})/(\d{5,7})/?", re.IGNORECASE)
 LANDING_PAGE_URL = ("https://www.ncei.noaa.gov/access/metadata/landing-page/bin/iso"
                     "?id=gov.noaa.nodc:{number}")
+# The same ISO record as plain XML from NCEI's metadata catalogue. It answers in under a second
+# where the landing page, rendered on request, can take a minute or time out altogether -- and
+# it carries the same archive path.
+ISO_RECORD_URL = ("https://www.ncei.noaa.gov/metadata/geoportal/rest/metadata/item/"
+                  "gov.noaa.nodc:{number}/xml")
 DATA_DIR_URL = "https://www.ncei.noaa.gov/data/oceans/archive/{arc}/{number}/"
 
 
 def resolve_accession_url(text: str) -> Dict[str, Any]:
     """The HTTPS data directory for an accession, from its landing page, URL or number.
 
-    `{"url", "accession_number", "arc", "landing_page"}` on success. NCEI renders the file
-    listing with JavaScript, so the directory cannot be computed from the number -- but the
-    landing page's static HTML carries the FTP download link, and the archive bundle
-    (`arc0238`) in that link is the missing piece. Fetched with retries; on failure the
-    result carries `error` and a `hint` naming the page to open by hand.
+    `{"url", "accession_number", "arc", "landing_page", "resolved_from"}` on success. NCEI
+    renders the file listing with JavaScript, so the directory cannot be computed from the
+    number -- but the accession's ISO record names its archive bundle (`arc0238`), the
+    missing piece. It is read from NCEI's metadata catalogue first, and from the landing
+    page's static HTML (which carries the FTP download link) when the catalogue does not
+    answer. Fetched with retries; on failure the result carries `error` and a `hint` naming
+    the page to open by hand.
     """
     number = accession_number(text)
     if number is None:
@@ -217,21 +228,23 @@ def resolve_accession_url(text: str) -> Dict[str, Any]:
     padded = number.zfill(7)
     page = (text if str(text).startswith("http") and _LANDING_PAGE.search(str(text))
             else LANDING_PAGE_URL.format(number=padded))
-    try:
-        html = get_with_retries(page).text
-    except Exception as e:                              # noqa: BLE001 - reported, not raised
-        out = _diagnose_empty(text)
-        out["error"] = (f"could not read the landing page {page} to find the data directory "
-                        f"({type(e).__name__}: {e})")
-        return out
-    for m in _ARCHIVE_PATH.finditer(html):
-        if m.group(2).lstrip("0") == number:
-            arc = m.group(1).lower()
-            return {"url": DATA_DIR_URL.format(arc=arc, number=padded),
-                    "accession_number": number, "arc": arc, "landing_page": page}
+    tried = []
+    for source in (ISO_RECORD_URL.format(number=padded), page):
+        try:
+            body = get_with_retries(source).text
+        except Exception as e:                          # noqa: BLE001 - reported, not raised
+            tried.append(f"{source} ({type(e).__name__}: {e})")
+            continue
+        for m in _ARCHIVE_PATH.finditer(body):
+            if m.group(2).lstrip("0") == number:
+                arc = m.group(1).lower()
+                return {"url": DATA_DIR_URL.format(arc=arc, number=padded),
+                        "accession_number": number, "arc": arc, "landing_page": page,
+                        "resolved_from": source}
+        tried.append(f"{source} (names no archive directory for accession {number})")
     out = _diagnose_empty(text)
-    out["error"] = (f"the landing page {page} names no archive directory for accession "
-                    f"{number}; it may not be public yet")
+    out["error"] = (f"could not find the data directory for accession {number}: "
+                    + "; ".join(tried) + ". It may not be public yet, or NCEI did not answer")
     return out
 
 

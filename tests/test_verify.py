@@ -290,3 +290,23 @@ class TestVerifierJudgesWhatAReaderWouldMisread:
         assert not r["passed"]
         dup = next(f for f in r["findings"] if f["finding"] == "duplicate_cast_id")
         assert dup["severity"] == "high" and "a.nc" in dup["evidence"]
+
+
+class TestACopiedVariableIsNotVerified:
+    def test_salinity_equal_to_temperature_at_every_level_is_a_high_finding(self, tmp_path):
+        from helpers import make_cast
+
+        from wod_etl.verify import verify_output
+        from wod_etl.writers import write_ragged_profiles
+
+        cast = make_cast(rows=12)
+        cast["df"]["Sal"] = cast["df"]["Temp_C"]
+        cast["df"]["Sal_qc_flag"] = 0
+        cast["contract"]["column_mapping"].append(
+            {"raw_column": "Sal", "wod_code": 2, "wod_name": "Salinity",
+             "target_unit": "Dimensionless"})
+        write_ragged_profiles([cast], str(tmp_path / "copy.nc"))
+        report = verify_output(str(tmp_path))
+        assert not report["passed"]
+        f = next(f for f in report["findings"] if f["finding"] == "identical_variables")
+        assert f["variable"] == "salinity" and "drop" in f["action"]

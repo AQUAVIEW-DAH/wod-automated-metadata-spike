@@ -169,7 +169,7 @@ def _attach_time(df: pd.DataFrame, contract: Dict[str, Any], warnings: List[str]
         ts = pd.Timestamp(
             year=int(c["year"]), month=int(c["month"]), day=int(c["day"]),
             hour=int(c.get("hour", 0)), minute=int(c.get("minute", 0)),
-        )
+        ) + pd.Timedelta(seconds=float(c.get("second") or 0))
     except (ValueError, TypeError) as e:
         warnings.append(f"Could not build a timestamp from {c}: {e}")
         return df

@@ -91,6 +91,26 @@ class TestTheLogItself:
         text = (isolated_runs_dir / "0303928" / "run.log").read_text()
         assert "run raised ValueError: bad input" in text
 
+    def test_a_run_folder_that_cannot_be_written_does_not_stop_the_work(self, tmp_path,
+                                                                        monkeypatch, capsys):
+        from wod_etl import config
+
+        in_the_way = tmp_path / "a_file"
+        in_the_way.write_text("")
+        monkeypatch.setattr(config, "RUNS_DIR", in_the_way / "runs")
+        with runlog.accession_log("0303928") as ctx:
+            logging.getLogger("wod_etl.x").info("carrying on")
+        assert ctx["dir"] is None and "no run log for accession 0303928" in capsys.readouterr().err
+
+    def test_under_a_parent_run_the_log_goes_to_stderr(self, tmp_path, monkeypatch, capsys,
+                                                       isolated_runs_dir):
+        monkeypatch.setenv(runlog.TO_STDERR_ENV, "1")
+        write_staged_cast(tmp_path / "staging" / "0303928" / "c.csv", ["Depth (m)"], [[0]],
+                          latitude=1, longitude=2, date="2020-01-01")
+        assert not (isolated_runs_dir / "0303928").exists()
+        err = capsys.readouterr().err
+        assert "INFO wod_etl.staging.write_cast: staged" in err and "=====" not in err
+
     def test_reruns_append(self, isolated_runs_dir):
         for _ in range(2):
             with runlog.accession_log("0303928"):

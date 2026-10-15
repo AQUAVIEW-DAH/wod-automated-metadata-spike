@@ -133,9 +133,9 @@ class TestEndToEnd:
         out = tmp_path / "out"
         res = process_accession(str(accession), dataset_type="XCTD",
                                 output_dir=str(out), raw_dir=str(tmp_path / "raw"), run_id="t_e2e_2", resume=False)
-        for path in res["outputs"]:
+        for path in res["outputs"] + res["per_file_outputs"]:
             assert validate_intermediate_netcdf(path)["passed"]
-        target = next(p for p in res["outputs"] if "cast_01" in p)
+        target = next(p for p in res["per_file_outputs"] if "cast_01" in p)
         with nc.Dataset(target) as ds:
             assert ds.variables["z"][1] == pytest.approx(9.99744, rel=1e-4)   # 32.8 ft
             assert ds.variables["temperature"][0] == pytest.approx(9.111, rel=1e-3)  # 48.4 F
@@ -144,7 +144,7 @@ class TestEndToEnd:
         res = process_accession(str(accession), dataset_type="XCTD",
                                 output_dir=str(tmp_path / "out"), raw_dir=str(tmp_path / "raw"),
                                 run_id="t_e2e_3", resume=False)
-        target = next(p for p in res["outputs"] if "cast_02" in p)
+        target = next(p for p in res["per_file_outputs"] if "cast_02" in p)
         with nc.Dataset(target) as ds:
             assert len(ds.dimensions["casts"]) == 2
             assert list(ds.variables["z_row_size"][:]) == [2, 2]
@@ -254,7 +254,12 @@ class TestFilesAreIdentifiedNotJustNamed:
     def test_both_files_are_processed(self, nested):
         res = self._run(nested)
         assert res["counts"]["done"] == 2
-        assert len(res["outputs"]) == 2
+        assert len(res["per_file_outputs"]) == 2
+        # one dataset, one year: one WOD file, and each cast says which file it came from
+        [out] = res["outputs"]
+        with nc.Dataset(out) as ds:
+            sources = [str(x) for x in ds["source_file"][:]]
+        assert [s.rsplit("/", 2)[-2] for s in sources] == ["stationA", "stationB"]
 
     def test_manifest_keys_are_distinct(self, nested):
         import json
@@ -264,8 +269,9 @@ class TestFilesAreIdentifiedNotJustNamed:
 
     def test_outputs_do_not_overwrite_each_other(self, nested):
         self._run(nested)
-        assert sorted(p.name for p in (nested / "out").glob("*.nc")) == [
-            "stationA__data.nc", "stationB__data.nc"]
+        per_file = nested / "out" / "per_file" / "t_collide"
+        assert sorted(p.name for p in per_file.glob("*.nc")) == [
+            "stationA__data.csv.nc", "stationB__data.csv.nc"]
 
     def test_raw_copies_keep_their_provenance_path(self, nested):
         self._run(nested)
@@ -279,7 +285,8 @@ class TestFilesAreIdentifiedNotJustNamed:
         res = process_accession(str(d), dataset_type="CTD", output_dir=str(tmp_path / "out"),
                                 raw_dir=str(tmp_path / "raw"), run_id="t_flat", resume=False)
         assert res["counts"]["done"] == 1
-        assert [p.name for p in (tmp_path / "out").glob("*.nc")] == ["cast_01.nc"]
+        assert [p.name for p in (tmp_path / "out" / "per_file" / "t_flat").glob("*.nc")] == [
+            "cast_01.csv.nc"]
 
 
 class TestGlobalAttributes:

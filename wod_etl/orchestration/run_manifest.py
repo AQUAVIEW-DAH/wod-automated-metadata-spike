@@ -138,7 +138,10 @@ def summarize(manifest: Dict[str, Any]) -> Dict[str, Any]:
         {"key": it["key"], "stage": it.get("stage"), "error": it.get("error")}
         for it in items if it["status"] == FAILED
     ]
-    outputs = [it["output_path"] for it in items if it.get("output_path")]
+    # Only a file that is done has an output: one that failed on a later attempt has none,
+    # whatever an earlier attempt wrote.
+    outputs = [it["output_path"] for it in items
+               if it.get("output_path") and it["status"] == DONE]
 
     return {
         "run_id": manifest["run_id"],

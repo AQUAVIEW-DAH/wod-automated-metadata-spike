@@ -502,6 +502,85 @@ class TestPerFileTriage:
         assert "pivot_long" in failed["U2015-015_CTD_Temp.csv"]["error"]
 
 
+class TestBinaryFilesAreOpenedNotAskedAbout:
+    """A binary file has no text head. Triage must look inside it, or it asks a person what
+    every NetCDF file and every picture in the accession is."""
+
+    @staticmethod
+    def _triage(root):
+        return {f["path"]: f for f in classify_accession(str(root))["files"]}
+
+    def test_a_moored_instruments_record_is_mrb_data_not_a_question(self, tmp_path):
+        from helpers import write_mooring_nc
+
+        write_mooring_nc(tmp_path / "18bs8a_s39_0051m.cf.nc")
+        # An ADCP's own thermistor beside its roll and heading: plain "degrees" is not a
+        # position, so the record does not "move".
+        write_mooring_nc(tmp_path / "18bsp8a_wcp_scal.cf.nc", instrument="RDI ADCP",
+                         variables=(("T_20", "TEMPERATURE (C)", "C"),
+                                    ("Hdg_1215", "INST Heading", "degrees")))
+        for name, f in self._triage(tmp_path).items():
+            assert f["action"] == "exclude", (name, f["reason"])
+            assert f["exclusion"] == "moored instrument time series"
+            assert f["belongs_in_wod"] is True and "MRB" in f["reason"]
+        series = self._triage(tmp_path)["18bs8a_s39_0051m.cf.nc"]["time_series"]
+        assert series["platform"] == "18bs8a" and series["instrument"] == "Seabird SBE-39"
+        assert series["days"] == 30.0
+
+    def test_an_adcp_velocity_file_is_excluded_as_currents(self, tmp_path):
+        from helpers import write_mooring_nc
+
+        write_mooring_nc(tmp_path / "vel.nc", levels=13, instrument="RDI ADCP",
+                         variables=(("u_1205", "Eastward Velocity", "cm/s"),
+                                    ("v_1206", "Northward Velocity", "cm/s")))
+        f = self._triage(tmp_path)["vel.nc"]
+        assert f["action"] == "exclude" and f["exclusion"] == "current velocity"
+
+    def test_a_cast_recorded_against_time_is_not_a_mooring(self, tmp_path):
+        from helpers import write_mooring_nc
+
+        write_mooring_nc(tmp_path / "cast.nc", days=0.5, mooring="")
+        f = self._triage(tmp_path)["cast.nc"]
+        assert f["time_series"] is None and f["exclusion"] != "moored instrument time series"
+
+    @staticmethod
+    def _track(path, *columns):
+        n = 48
+        with netCDF4.Dataset(path, "w") as ds:
+            ds.createDimension("time", n)
+            for name, units, values in (("time", "hours since 2020-01-01", np.arange(n)),
+                                        ("lat", "degrees_north", np.linspace(60, 61, n)),
+                                        ("lon", "degrees_east", np.linspace(-170, -169, n)),
+                                        ("TEMP", "degC", np.full(n, 5.0))) + columns:
+                v = ds.createVariable(name, "f8", ("time",))
+                v.units = units
+                v[:] = values
+
+    def test_a_track_is_an_underway_record_not_a_mooring(self, tmp_path):
+        self._track(tmp_path / "track.nc")
+        f = self._triage(tmp_path)["track.nc"]
+        assert f["time_series"]["moving"] is True and f["action"] == "exclude"
+        assert f["exclusion"] == "underway record along a track" and "SUR" in f["why"]
+
+    def test_a_glider_is_not_an_underway_record(self, tmp_path):
+        """Moving, with its depth changing along the path: its dives are profiles."""
+        self._track(tmp_path / "glider.nc", ("PRES", "dbar", np.abs(np.sin(np.arange(48))) * 500))
+        f = self._triage(tmp_path)["glider.nc"]
+        assert f["time_series"] is None and f["exclusion"] != "underway record along a track"
+
+    def test_pictures_and_ncei_maps_are_documents(self, tmp_path):
+        from helpers import JPEG_HEAD
+
+        (tmp_path / "about").mkdir()
+        (tmp_path / "about" / "0302602_map.jpg").write_bytes(JPEG_HEAD + b"\x00" * 64)
+        (tmp_path / "gear.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+        assert sniff_format(str(tmp_path / "gear.png"))["format_family"] == "image"
+        files = self._triage(tmp_path)
+        assert {p: f["action"] for p, f in files.items()} == {
+            "about/0302602_map.jpg": "document", "gear.png": "document"}
+        assert files["about/0302602_map.jpg"]["ncei_bundle"].startswith("NCEI's map")
+
+
 class TestDryRunReadsLocalFiles:
     """It classified by file NAME, so a staged folder of CTD casts came back dataset null."""
 
@@ -533,3 +612,109 @@ class TestDryRunReadsLocalFiles:
         skipped = {s["key"]: s["reason"] for s in res["would_skip"]}
         assert "NCEI bundle" in skipped["NCEI-Readme.txt"]
         assert "NCEI bundle" in skipped["about/0303928_lonlat.txt"]
+
+
+class TestTriageSaysWhatEachFileIsAndWhy:
+    """What a reviewer reads in decisions.toml: data, include, dataset, why."""
+
+    @staticmethod
+    def _triage(root):
+        return {f["path"]: f for f in classify_accession(str(root))["files"]}
+
+    @staticmethod
+    def _nc(path, globals_=None, container=None, variables=(), dims=(("profile", 1),
+                                                                     ("z", 12))):
+        import netCDF4
+
+        with netCDF4.Dataset(path, "w") as ds:
+            for k, v in (globals_ or {}).items():
+                ds.setncattr(k, v)
+            for name, size in dims:
+                ds.createDimension(name, size)
+            if container:
+                c = ds.createVariable("instrument", "i4", ())
+                for k, v in container.items():
+                    c.setncattr(k, v)
+            for name, var_dims, attrs, values in variables:
+                v = ds.createVariable(name, "f8", var_dims)
+                for k, a in attrs.items():
+                    v.setncattr(k, a)
+                v[:] = values
+
+    def _profile_vars(self, salinity=None):
+        z = np.arange(12, dtype=float)
+        t = (20 - z / 10).reshape(1, 12)
+        s = (34 + z / 100).reshape(1, 12) if salinity is None else salinity
+        return [("time", ("profile",), {"units": "seconds since 1970-01-01"}, [1.7e9]),
+                ("lat", ("profile",), {"units": "degrees_north"}, [27.7]),
+                ("lon", ("profile",), {"units": "degrees_east"}, [-96.1]),
+                ("depth", ("profile", "z"), {"units": "m", "standard_name": "depth"},
+                 z.reshape(1, 12)),
+                ("temperature", ("profile", "z"), {"units": "degree_C",
+                                                   "long_name": "temperature"}, t),
+                ("salinity", ("profile", "z"), {"units": "1e-3",
+                                                "long_name": "salinity"}, s)]
+
+    def test_a_sound_velocity_and_temperature_probe_is_mbt_and_svp_is_no_drifter(self,
+                                                                              tmp_path):
+        self._nc(tmp_path / "20250201043830_BL.nc", {"title": "SVP_MVP profile"},
+                 {"long_name": "SVP", "make_model": "MVP",
+                  "serial_number": "AML Oceanographic MVP30-350 with SVP&T"},
+                 self._profile_vars())
+        f = self._triage(tmp_path)["20250201043830_BL.nc"]
+        assert (f["include"], f["dataset"]) == (True, "MBT")
+        assert f["data"] == "MBT profiles: temperature"
+        assert "salinity is computed from sound speed" in f["why"] and f["drop"] == ["salinity"]
+
+    def test_a_variable_that_copies_another_is_proposed_as_dropped(self, tmp_path):
+        z = np.arange(12, dtype=float)
+        self._nc(tmp_path / "ctd_ship.nc", {"title": "CTD profiles"}, None,
+                 self._profile_vars(salinity=(20 - z / 10).reshape(1, 12)))
+        f = self._triage(tmp_path)["ctd_ship.nc"]
+        assert f["drop"] == ["salinity"] and f["data"] == "CTD profiles: temperature"
+        assert "a copy, not a measurement" in f["why"]
+
+    def test_seabed_sediment_is_left_out_as_not_water_column(self, tmp_path):
+        self._nc(tmp_path / "LeConte_2017_seabedsedimentsizes.nc",
+                 {"title": "seabed sediment-size distributions"}, None,
+                 [("lat", ("n",), {"units": "degrees_north"}, [56.8, 56.9]),
+                  ("lon", ("n",), {"units": "degrees_east"}, [-132.4, -132.3]),
+                  ("d50", ("n",), {"long_name": "median grain size", "units": "phi"},
+                   [1.0, 2.0])], dims=(("n", 2),))
+        f = self._triage(tmp_path)["LeConte_2017_seabedsedimentsizes.nc"]
+        assert (f["action"], f["exclusion"]) == ("exclude", "seabed sediment")
+        assert "WOD stores no seabed or sediment property" in f["why"]
+
+    def test_an_adcp_named_by_its_attribute_is_currents_though_it_logs_temperature(self,
+                                                                                  tmp_path):
+        n = 48
+        self._nc(tmp_path / "workhorse300_upward_SN15645.nc",
+                 {"instrumentType": "adcp", "manufacturer": "teledyne rdi"}, None,
+                 [("time", ("time",), {"units": "hours since 2018-09-01"}, np.arange(n)),
+                  ("distance", ("distance",), {"units": "m"}, np.arange(5.0)),
+                  ("u", ("distance", "time"), {"long_name": "Eastward velocity",
+                                              "units": "m s-1"}, np.zeros((5, n))),
+                  ("t", ("time",), {"long_name": "Temperature", "units": "degree_C"},
+                   np.full(n, 5.0))], dims=(("time", n), ("distance", 5)))
+        f = self._triage(tmp_path)["workhorse300_upward_SN15645.nc"]
+        assert (f["action"], f["exclusion"]) == ("exclude", "current velocity")
+
+    def test_prose_is_documentation_and_a_data_file_under_a_long_header_is_not(self,
+                                                                                tmp_path):
+        (tmp_path / "mooring_description.txt").write_text(
+            "# Downstream deep mooring\n\n## Instrument layout\n\nAlso see the diagram.\n"
+            "| Type | Pos (m) | Serial |\n| RBR Solo | 45 | 100028 |\n")
+        long_header = "".join(f"# comment line {i} about the cruise and its people\n"
+                              for i in range(400))
+        (tmp_path / "cast.txt").write_text(
+            long_header + "Depth Temperature Salinity\n"
+            + "".join(f"{z} {20 - z / 10:.2f} 34.5\n" for z in range(300)))
+        files = self._triage(tmp_path)
+        assert files["mooring_description.txt"]["action"] == "document"
+        assert files["cast.txt"]["action"] != "document"
+
+    def test_an_ncei_submission_report_is_a_bundle_file(self, tmp_path):
+        (tmp_path / "H1CMAX-report.txt").write_text(
+            "The submitter provided the following profile information:\nName: E. Eidam\n")
+        f = self._triage(tmp_path)["H1CMAX-report.txt"]
+        assert f["action"] == "document" and f["data"] == "NCEI submission report"

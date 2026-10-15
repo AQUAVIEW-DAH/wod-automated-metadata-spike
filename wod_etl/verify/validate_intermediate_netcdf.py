@@ -62,6 +62,10 @@ def _check_globals(ds, errors, warnings, checks):
     if getattr(ds, "wod_dataset_type", None) == "unresolved":
         warnings.append("wod_dataset_type is 'unresolved': the dataset could not be "
                         "determined, usually because the cast's depth increment was unknown")
+    if getattr(ds, "wod_dataset_type", None) == "mixed":
+        warnings.append("wod_dataset_type is 'mixed': the casts are of more than one WOD "
+                        "dataset (the variable `dataset` says which). WOD keeps one dataset "
+                        "per file")
 
 
 def _check_dimensions(ds, errors, checks):

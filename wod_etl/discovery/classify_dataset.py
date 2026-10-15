@@ -53,6 +53,11 @@ INSTRUMENT_SIGNALS: Dict[str, List[tuple]] = {
     "MBT": [
         (r"\bmbt\b|\bdbt\b", 5, "names MBT/DBT"),
         (r"mechanical\s+bathythermograph", 5, "mechanical bathythermograph in prose"),
+        # A sound velocity and temperature probe (SV&T, SVP&T) has no conductivity cell: it
+        # records temperature against pressure, which is a digital BT (manual p.19). Any
+        # salinity beside it was computed from sound speed, and MBT does not store it.
+        (r"\bsvp?\s?&\s?t\b|\bsound[\s_-]?(?:velocity|speed)[\s_-]?(?:and|&)[\s_-]?"
+         r"temperature\b", 6, "a sound velocity and temperature probe: a digital BT"),
     ],
     "OSD": [
         (r"\bbottle\b|\bbtl\b|\bniskin\b|\bnansen\b|\brosette\b", 5, "bottle sampling gear"),
@@ -84,7 +89,8 @@ INSTRUMENT_SIGNALS: Dict[str, List[tuple]] = {
     ],
     "DRB": [
         (r"drift(ing)?[\s_-]?buoy|\bdrifter\b", 6, "drifting buoy"),
-        (r"\bsvp\b|\bdrb\b", 4, "drifter programme or names DRB"),
+        # Not plain "SVP": in a hydrographic survey that is a sound velocity profile.
+        (r"\bsvp[\s_-]?(?:drifter|buoy)s?\b|\bdrb\b", 4, "drifter programme or names DRB"),
     ],
     "UOR": [
         (r"\buor\b|undulating\s+oceanographic", 6, "undulating recorder"),
@@ -137,6 +143,9 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
                    "preservative, counting and weighing method. Only the submitter has it, "
                    "and the plankton writer records what is missing.",
         "belongs_in_wod": True,
+        "label": "plankton: counts or biomass from net samples",
+        "why": "plankton belongs in WOD as taxa records (Tables 6a/7a), which this pipeline "
+               "does not write for now",
     },
     "fisheries catch data": {
         "signals": [
@@ -154,11 +163,15 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
                    "trawl table often re-states station positions -- use it to cross-check "
                    "the station list (wod_etl.staging.reconcile_stations).",
         "belongs_in_wod": False,
+        "label": "fish catch",
+        "why": "fish catch is not WOD data (no Table 3a variable); it belongs in a fisheries "
+               "archive",
     },
     "current velocity": {
         "signals": [
             (r"\badcp\b|\bladcp\b|\blowered\s+adcp\b", 6, "names ADCP"),
-            (r"\bcurrent(?:s|_speed|_direction)?\b|\bu_vel|\bv_vel|\bvel_(?:east|north)\b",
+            (r"\bcurrent(?:s|_speed|_direction)?\b|\bu_vel|\bv_vel|\bvel_(?:east|north)\b|"
+             r"\b(?:east|north|vertical|error)(?:ward)?[\s_-]+velocity\b",
              4, "velocity component"),
         ],
         "route": "Not in WOD Table 3a. WOD stores no velocity variable; there is no code to "
@@ -169,6 +182,8 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
                    "casts taken on the same station. Harvest those into the profiles they "
                    "align with, and cite the file you took them from.",
         "belongs_in_wod": False,
+        "label": "current velocity (ADCP)",
+        "why": "WOD stores no current velocity: Table 3a has no variable code for it",
     },
     "genomic / eDNA data": {
         "signals": [(r"\bedna\b|\bmetabarcod|\bamplicon\b|\botu\b|\basv\b|"
@@ -177,6 +192,8 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
         "harvest": "Sample position, depth and time may still identify the cast the sample "
                    "came from. Nothing else here is usable.",
         "belongs_in_wod": False,
+        "label": "genomic / eDNA data",
+        "why": "WOD stores no genomic data (not in Table 3a)",
     },
     "bathymetry / seafloor depth": {
         "signals": [(r"\bmultibeam\b|\bbathymetr|\bswath\b|\bsounding\b|\bgebco\b|"
@@ -187,6 +204,9 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
                    "cast's secondary header 10. Match on position and take it, rather than "
                    "leaving bottom depth empty. Record which file the value came from.",
         "belongs_in_wod": False,
+        "label": "bathymetry / seafloor depth",
+        "why": "not a water-column profile: WOD keeps bottom depth only as a cast's header "
+               "value (secondary header 10)",
     },
     "contaminant chemistry": {
         "signals": [(r"\bpah\b|\bpcb\b|\bmicroplastic|trace\s+metal|\bcontaminant", 6,
@@ -195,6 +215,20 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
         "harvest": "Sample station, bottle depth and time, where they identify a cast that IS "
                    "being written.",
         "belongs_in_wod": False,
+        "label": "contaminant chemistry",
+        "why": "WOD stores no contaminant measurements (not in Table 3a)",
+    },
+    "seabed sediment": {
+        "signals": [(r"\bgrain[\s_-]?size|\bsediment[\s_-]?(?:size|grain|core|sample|type)s?\b|"
+                     r"\bseabed\b|\bsea[\s_-]?floor[\s_-]?sediment|\bgrab[\s_-]?sample|\bd50\b",
+                     6, "seabed sediment samples")],
+        "route": "Not in WOD Table 3a: WOD holds the water column, not the seabed.",
+        "harvest": "Sample positions and times only, where they locate a cast that is being "
+                   "written.",
+        "belongs_in_wod": False,
+        "label": "seabed sediment samples",
+        "why": "not water-column data: WOD stores no seabed or sediment property (not in "
+               "Table 3a)",
     },
 }
 
@@ -216,6 +250,9 @@ AMBIGUOUS_BIOLOGICAL = {
                "volume filtered, preservative, counting method). If it is catch, haul "
                "positions may cross-check the station list.",
     "belongs_in_wod": None,
+    "label": "biological samples: plankton or fish catch",
+    "why": "plankton is not written for now and fish catch is not WOD data, so it is left "
+           "out either way",
 }
 
 # A file that only LOCATES casts: station, latitude, longitude, maybe a date -- and no
@@ -228,7 +265,39 @@ SIDECAR = {
     "harvest": "Position, date and (if present) time for every station it lists. Check them "
                "against any other source in the accession with reconcile_stations.",
     "belongs_in_wod": False,
+    "label": "station list: positions and dates of stations",
+    "why": "it measures nothing: it locates casts, and is read by the reshaping recipe that "
+           "needs it rather than written itself",
 }
+
+# One instrument at one place, recording for days: a mooring's record. In WOD a moored
+# buoy's PROFILE is the set of concurrent readings from its instruments at their depths
+# (manual p.17), so a file like this is one level of thousands of profiles. Decided by the
+# file's shape, not its words: a SBE-37 on a mooring names a CTD maker.
+MOORED_SERIES = "moored instrument time series"
+MOORED = {
+    "route": "Belongs in WOD as MRB (moored buoy), where a profile is the concurrent "
+             "readings of a mooring's instruments at their depths at one time (manual p.17). "
+             "Building those means combining every instrument of a deployment by time, "
+             "which wod-etl does not do yet: these files are not written.",
+    "belongs_in_wod": True,
+    "why": "a mooring's record belongs in WOD as MRB, where one profile is all of a "
+           "mooring's instruments at one time; wod-etl cannot build MRB profiles yet",
+}
+# The same shape on a platform that moves, with no depth axis: a keel CTD or a
+# thermosalinograph logging along a track. In WOD each position is its own surface cast
+# (SUR); read as it stands, the track becomes one 'cast' whose levels are time steps.
+UNDERWAY_SERIES = "underway record along a track"
+UNDERWAY = {
+    "route": "Belongs in WOD as SUR (surface-only), one cast per position and time along the "
+             "track. wod-etl does not split a track into casts yet: these files are not "
+             "written.",
+    "belongs_in_wod": True,
+    "why": "a surface record along a path belongs in WOD as SUR, one cast per position and "
+           "time; wod-etl cannot split a track into casts yet",
+}
+MIN_SERIES_DAYS = 1.0             # a CTD cast recorded against time spans minutes
+MAX_POSITION_SPREAD_DEG = 0.01    # more than this along time and the platform moves
 
 # Columns WOD has no code for are NOT decided here. `explain_column` in
 # wod_etl/mapping/query_wod_spec.py is the single registry -- it is what `match_variable`
@@ -249,16 +318,20 @@ def classify_dataset(
     depth_increment_m: Optional[float] = None,
     n_levels: Optional[int] = None,
     extra_context: str = "",
+    instrument: str = "",
 ) -> Dict[str, Any]:
     """Identify a file's WOD dataset from whatever evidence it carries.
 
     Every argument is optional; pass what you have. `path` should be the file's path
     relative to the accession root, because the folder name is often the only label a
-    submitter gives ("2-CTD/", "plankton/").
+    submitter gives ("2-CTD/", "plankton/"). `instrument` is what a self-describing file
+    says recorded it -- a NetCDF attribute such as `instrumentType: adcp` -- and carries the
+    path's authority: it is the file describing itself, not prose about the accession.
     """
     columns = [str(c) for c in (columns or [])]
     haystacks = {
         "path": (str(path or "").replace("\\", "/"), 1.0),
+        "instrument": (instrument or "", 1.0),
         "header": (header_text or "", 1.0),
         "columns": (" ".join(columns), 0.8),
         "context": (extra_context or "", 0.6),
@@ -273,7 +346,8 @@ def classify_dataset(
                      "matched": "a staged haul (Taxa-Records): write it with "
                                 "wod_etl.orchestration.process_taxa",
                      "evidence": ["header marks a staged haul"], "score": None,
-                     "alternatives": None, "belongs_in_wod": True, "kind": "staged_haul"}
+                     "alternatives": None, "belongs_in_wod": True, "kind": "staged_haul",
+                     "label": cat["label"], "why": cat["why"]}
     long_format = _long_format(columns)
     # A long table carrying its station's coordinates ('Station, Lat, Lon, parm, depth,
     # value') has no mappable measurement column either -- its measurements are in 'value'
@@ -337,27 +411,40 @@ def classify_dataset(
 # Files every NCEI accession bundle carries, written by NCEI rather than the submitter. None
 # of them is data, and one of them looks like it: `<accession>_lonlat.txt` is two columns of
 # numbers -- NCEI's bounding box or position summary -- and sniffs as a table.
+# Each is (name pattern, short label, what it is for).
 NCEI_BUNDLE_FILES = [
-    (r"^NCEI-Readme\.txt$", "NCEI bundle readme: explains the accession layout"),
-    (r"^journal\.txt$", "NCEI accession journal: what NCEI did, and the submitter's source"),
-    (r"^\d{5,7}\.md5$", "NCEI checksums"),
-    (r"^\d{5,7}_lonlat\.txt$",
+    (r"^NCEI-Readme\.txt$", "NCEI readme", "NCEI bundle readme: explains the accession layout"),
+    (r"^journal\.txt$", "NCEI accession journal",
+     "NCEI accession journal: what NCEI did, and the submitter's source"),
+    (r"^\d{5,7}\.md5$", "NCEI checksums", "NCEI checksums"),
+    (r"^\d{5,7}_lonlat\.txt$", "NCEI position summary",
      "NCEI's position summary for the accession (often just a bounding box; NCEI may have "
      "corrected positions in it). Not data, and not a source of cast positions -- at most a "
      "cross-check that every staged cast falls inside it"),
-    (r"-ISO-19115-2\.xml$|^\d{5,7}\.\d+\.\d+\.xml$",
+    (r"-ISO-19115-2\.xml$|^\d{5,7}\.\d+\.\d+\.xml$", "ISO 19115 metadata",
      "ISO 19115 metadata record: read it for variables, units, instruments and coverage"),
-    (r"_preview\.(?:jpe?g|png|gif)$", "submitter's preview map: read it for station layout"),
-    (r"confirmation_email\.txt$|^\d*-?email\.txt$",
+    (r"_preview\.(?:jpe?g|png|gif)$", "submitter's preview map",
+     "submitter's preview map: read it for station layout"),
+    (r"^\d{5,7}_map\.(?:jpe?g|png|gif)$", "NCEI map of the sample locations",
+     "NCEI's map of the accession's sample locations"),
+    (r"confirmation_email\.txt$|^\d*-?email\.txt$", "correspondence with the submitter",
      "correspondence with the submitter: read it for anything the data files do not say"),
+    # Send2NCEI names a submission with six capitals and digits: `H1CMAX-report.txt`.
+    (r"(?-i:^[A-Z0-9]{6}-report\.txt$)", "NCEI submission report",
+     "NCEI submission report: the submitter's contacts and the metadata they entered"),
 ]
 
 
-def ncei_bundle_role(name: str) -> Optional[str]:
-    for pattern, role in NCEI_BUNDLE_FILES:
-        if re.search(pattern, name, re.IGNORECASE):
-            return role
+def _bundle_entry(name: str) -> Optional[tuple]:
+    for entry in NCEI_BUNDLE_FILES:
+        if re.search(entry[0], name, re.IGNORECASE):
+            return entry
     return None
+
+
+def ncei_bundle_role(name: str) -> Optional[str]:
+    entry = _bundle_entry(name)
+    return entry[2] if entry else None
 
 
 def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Dict[str, Any]:
@@ -391,17 +478,36 @@ def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Di
 
     columns = _columns_from_head(head, fmt)
     readable = bool(fmt.get("readable", False))
-    bundle = ncei_bundle_role(p.name)
+    bundle = _bundle_entry(p.name)
+    nc = _netcdf_evidence(p) if readable and not bundle and fmt.get("reader") == "netcdf" \
+        else None
+    if nc:
+        columns = nc["columns"]
     # An unreadable file is not classified. A readme naming an accession's folders scores
     # every instrument in it, and a dataset_type on a file nothing can read is noise that
     # reads like a decision. Neither is an NCEI bundle file, whatever its shape.
-    verdict = (classify_dataset(path=rel, columns=columns, header_text=head)
+    increment = (nc or {}).get("depth_increment") if nc else \
+        _text_depth_increment(head, columns) if readable and not bundle else None
+    verdict = (classify_dataset(path=rel, columns=columns,
+                                header_text=nc["header"] if nc else head,
+                                instrument=(nc or {}).get("instrument", ""),
+                                depth_increment_m=increment)
                if readable and not bundle else
                {"dataset_type": None, "confidence": "none",
                 "verdict": "ncei_bundle" if bundle else "unreadable",
                 "is_wod_profile_data": False, "exclusion": None, "evidence": [],
                 "unstorable_columns": [], "long_format": None})
-    density = _column_density(head, fmt, columns) if readable and not bundle else None
+    series = (nc or {}).get("time_series")
+    if series and not verdict.get("exclusion"):
+        kind, cat = (UNDERWAY_SERIES, UNDERWAY) if series["moving"] else (MOORED_SERIES, MOORED)
+        what = (f"{'along a track' if series['moving'] else 'one instrument at one place'}"
+                + (f" ({series['instrument']})" if series.get("instrument") else "")
+                + f": {series['samples']} samples over {series['days']} days")
+        verdict = {**verdict, "is_wod_profile_data": False, "exclusion": {
+            **cat, "reason": kind, "harvest": None, "matched_in": "shape",
+            "confidence": "high", "matched": what, "evidence": [what]}}
+    density = (_column_density(head, fmt, columns) if readable and not bundle and not nc
+               else None)
     long_format = verdict.get("long_format")
     if long_format:
         long_format = {**long_format,
@@ -410,14 +516,26 @@ def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Di
 
     exclusion = verdict.get("exclusion") or {}
     if bundle:
-        action, reason = "document", bundle
+        action, reason = "document", bundle[2]
+    elif _DOCUMENT_NAME.search(p.name) and fmt.get("reader") != "netcdf":
+        action, reason = "document", ("named as documentation (a readme, description or "
+                                      "notes); read it, it is not processed")
     elif not readable and fmt.get("is_document"):
         action, reason = "document", f"{fmt['format_family']}: documentation or metadata"
+    elif fmt.get("format_family") == "unstructured_text" and _prose_throughout(p, fmt,
+                                                                               peek_bytes):
+        action, reason = "document", ("prose all the way through: a readme, notes or a "
+                                      "description. Read it; it is not processed.")
     elif not readable:
         action, reason = "inspect", (f"{fmt['format_family']}: does not read as any known "
                                      f"table. If it holds data, find out what wrote it.")
     elif exclusion.get("kind") == "sidecar":
         action, reason = "sidecar", exclusion["route"]
+    elif exclusion.get("reason") in (MOORED_SERIES, UNDERWAY_SERIES):
+        action, reason = "exclude", (f"{exclusion['reason']}, {exclusion['matched']}: "
+                                     + ("one level of many MRB profiles, not a profile"
+                                        if exclusion["reason"] == MOORED_SERIES else
+                                        "a track of surface casts, not a profile"))
     elif exclusion:
         action, reason = "exclude", f"not WOD profile data: {exclusion['reason']}"
     elif long_format:
@@ -431,10 +549,10 @@ def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Di
                                         " and there is no depth axis")
                                      + ". Read the readme, then say what it is.")
 
-    return {
+    entry = {
         "path": rel, "format": fmt["format_family"], "reader": fmt["reader"],
         "readable": readable, "action": action, "reason": reason,
-        "ncei_bundle": bundle,
+        "ncei_bundle": bundle[2] if bundle else None,
         "dataset_type": verdict["dataset_type"], "confidence": verdict["confidence"],
         "is_wod_profile_data": verdict["is_wod_profile_data"],
         "exclusion": exclusion.get("reason"),
@@ -448,8 +566,182 @@ def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Di
         # One file per depth and one file per variable are invisible in any single file.
         "columns": columns or None,
         "sampled_rows": (density or {}).get("sampled_rows"),
+        "time_series": series,
+        "copies": (nc or {}).get("copies") or None,
         "evidence": verdict["evidence"][:3],
     }
+    entry.update(_summary(entry, verdict, exclusion, fmt, bundle,
+                          instrument=(nc or {}).get("instrument", "")))
+    return entry
+
+
+def wod_dataset(dataset_type: Optional[str]) -> Optional[str]:
+    """The WOD dataset (Table 2) a classification is written as. XCTD is an instrument, not a
+    dataset: it is written as CTD, or as OSD cast by cast when its levels are coarse (manual
+    p.19)."""
+    from wod_etl.reference import wod_datasets
+
+    if not dataset_type:
+        return None
+    return dataset_type if dataset_type in wod_datasets() else {"XCTD": "CTD"}.get(dataset_type)
+
+
+_SV_PROBE = re.compile(r"\bsvp?\s?&\s?t\b|\bsound[\s_-]?(?:velocity|speed)[\s_-]?(?:and|&)"
+                       r"[\s_-]?temperature\b", re.IGNORECASE)
+
+
+def _summary(entry, verdict, exclusion, fmt, bundle, instrument: str = "") -> Dict[str, Any]:
+    """What the file holds, whether it goes into WOD, and why -- a line each, for the person
+    who reviews the decisions. `reason` keeps the long form for the agent and the log."""
+    action, columns = entry["action"], entry["columns"] or []
+    out = {"include": action in ("process", "stage"), "dataset": None}
+    if action == "document":
+        named = _DOCUMENT_NAME.search(entry["path"].rsplit("/", 1)[-1])
+        return {**out, "data": bundle[1] if bundle else
+                "text: a readme, notes or a description" if named else _DOCUMENT_LABELS.get(
+                    fmt.get("format_family"), f"{fmt.get('format_family')} document"),
+                "why": "documentation, not data: read it, nothing to process"}
+    if action == "process":
+        dataset = wod_dataset(verdict["dataset_type"])
+        copies = entry.get("copies") or []
+        # A probe with no conductivity cell (SV&T) cannot measure salinity: any salinity
+        # beside it was computed from sound speed. Proposed as dropped, so it stays out
+        # even if the review writes the file as a dataset that stores salinity.
+        if _SV_PROBE.search(instrument or "") and "Salinity" in _variable_names(columns):
+            copies = copies + [{"copy": "Salinity", "of": "sound speed",
+                                "computed": True}]
+        copied = {c["copy"] for c in copies}
+        unstorable = {str(u.get("variable", "")).replace("_", " ")
+                      for u in verdict.get("unstorable_columns") or [] if u.get("variable")}
+        names = _variable_names(columns)
+        stored = [n for n in _variable_names(columns, dataset) if n not in copied]
+        others = [n for n in names if n not in stored and n not in copied]
+        sources = [_evidence_source(e) for e in verdict.get("evidence") or []][:2]
+        # Short: what decided the dataset, then only what is NOT written and why. What it
+        # holds is `data`, and repeating it here made every line three sentences long.
+        notes = ([] if stored else ["no column maps to a variable WOD stores: check what it "
+                                    "holds"])
+        if others:
+            notes.append(f"not written: {_and(n.lower() for n in others)} "
+                         f"(not stored in {dataset})")
+        if unstorable:
+            notes.append(f"not written: {_and(sorted(unstorable))} (no WOD code)")
+        notes += [f"its {c['copy'].lower()} is computed from {c['of']} by a probe with no "
+                  f"conductivity cell: left out (drop)" if c.get("computed") else
+                  f"its {c['copy'].lower()} equals its {c['of'].lower()} at every level -- "
+                  f"a copy, not a measurement: left out (drop)" for c in copies]
+        return {**out, "dataset": dataset,
+                "drop": sorted(c.lower() for c in copied) or None,
+                "data": f"{dataset} profiles: " + (", ".join(n.lower() for n in stored)
+                                                   or "no variable recognised"),
+                "why": (f"{verdict['dataset_type']} by {' and '.join(sources)}"
+                        if sources else str(verdict["dataset_type"]))
+                       + "".join(f"; {n}" for n in notes)
+                       + (" -- a weak guess: check the dataset"
+                          if verdict.get("confidence") == "low" else "")}
+    if action == "stage":
+        # The variables are not named here: they differ file by file ('Temp', 'Salinity')
+        # while the files are one table split up, and the reshaping recipe lists them.
+        return {**out, "dataset": wod_dataset(verdict["dataset_type"]),
+                "data": f"profiles in long format: one row per station, depth and "
+                        f"{entry['long_format']['variable_column']!r}",
+                "why": "measurements named in a column rather than a header row: they are "
+                       "reshaped into one cast per station before processing"}
+    if action in ("sidecar", "exclude"):
+        series = entry.get("time_series") or {}
+        if exclusion.get("reason") == MOORED_SERIES:
+            data = (f"moored instrument record: {series.get('instrument') or 'one instrument'}"
+                    f" at one place, {series.get('days')} days")
+        elif exclusion.get("reason") == UNDERWAY_SERIES:
+            data = (f"underway record along a track: "
+                    f"{', '.join(n.lower() for n in _variable_names(columns)) or 'surface data'}"
+                    f", {series.get('days')} days")
+        else:
+            data = exclusion.get("label") or exclusion.get("reason")
+        return {**out, "data": data, "why": exclusion.get("why") or exclusion.get("route")}
+    cols = [c for c in columns if c][:5]
+    return {**out, "data": f"unidentified {str(fmt.get('format_family')).replace('_', ' ')}"
+                           + (f": columns {', '.join(cols)}" if cols else ""),
+            "why": (("nothing names an instrument" + ("" if _has_depth_axis(columns) else
+                                                      " and there is no depth axis"))
+                     if entry["readable"] else "nothing here can read it")
+                   + ": left out until someone says what it is"}
+
+
+# A text file named as documentation is documentation, whatever its body sniffs as -- a
+# mooring description with a markdown table of instrument depths reads as a pipe-delimited
+# table, and the 'mooring' in its name then made it MRB data.
+_DOCUMENT_NAME = re.compile(
+    r"(?:^|[_\-. ])(?:readme|read[_-]?me|description|notes?|abstract|documentation|"
+    r"instructions?)(?:[_\-. ][^.]*)?\.(?:txt|md|rst|text|rtf|docx?|pdf)$", re.IGNORECASE)
+
+_DOCUMENT_LABELS = {"image": "image: a photo, map or diagram", "pdf": "PDF document",
+                    "xml": "XML metadata", "json": "JSON metadata",
+                    "unstructured_text": "text: a readme, notes or a description",
+                    "archive_zip": "zip archive", "zip_container": "zip archive",
+                    "gzip": "compressed file", "bzip2": "compressed file",
+                    "xz": "compressed file", "sqlite": "SQLite database",
+                    "access_db": "Access database"}
+_EVIDENCE = re.compile(r"^(\w+) matches (['\"])(.*?)\2: (.*)$")
+_EVIDENCE_FIELDS = {"path": "its path", "instrument": "its instrument attribute",
+                    "header": "its header", "columns": "its columns", "context": "the readme"}
+
+
+def _evidence_source(evidence: str) -> str:
+    """'path matches 'CTD': names CTD' -> "its path ('CTD')". Shape evidence is a sentence
+    already ('depth increment 1.00 m is high-resolution') and is kept as it is."""
+    m = _EVIDENCE.match(evidence)
+    if m:
+        return f"{_EVIDENCE_FIELDS.get(m.group(1), m.group(1))} ('{m.group(3)}')"
+    # The spacing, said briefly: 'levels 0.50 m apart (< 2.0 m)'.
+    m = re.match(r"depth increment ([\d.]+) m is (?:high|low)-resolution \(([<>=]+ [\d.]+) m\)",
+                 evidence)
+    return f"levels {m.group(1)} m apart ({m.group(2)} m)" if m else evidence
+
+
+def _and(words) -> str:
+    words = list(words)
+    return " and ".join(words) if len(words) < 3 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def _variable_names(columns, dataset: Optional[str] = None) -> List[str]:
+    """The Table 3a names of the measurements among `columns`, in order, once each -- only
+    those Table 3a stores in `dataset`, when one is given."""
+    try:
+        from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE, match_variable
+        from wod_etl.reference import wod_variables
+    except ImportError:
+        return []
+    table, out = wod_variables(), []
+    for c in columns:
+        code = match_variable(c)
+        if code is None or code == DEPTH_SENTINEL_CODE or code in _LOCATING_CODES:
+            continue
+        entry = table.get(code) or {}
+        name = entry.get("name") or f"code {code}"
+        if dataset and dataset not in (entry.get("datasets") or []):
+            continue
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def _prose_throughout(path: Path, fmt, peek_bytes: int) -> bool:
+    """Whether a file that sniffed as prose is prose to its end. The sniff reads the head, and
+    a data file under a long header reads as prose there -- its tail does not."""
+    from wod_etl.discovery.sniff_format import _sniff_text
+
+    size = fmt.get("size_bytes") or 0
+    if size <= peek_bytes:
+        return True
+    try:
+        with path.open("rb") as fh:
+            fh.seek(size - peek_bytes)
+            tail = fh.read().decode(fmt.get("encoding") or "utf-8", errors="replace")
+    except OSError:
+        return False
+    tail = tail.split("\n", 1)[-1]                 # the first line is cut part way
+    return _sniff_text(tail, size).get("format_family") == "unstructured_text"
 
 
 FILE_ACTIONS = ("process", "stage", "sidecar", "exclude", "document", "inspect")
@@ -593,26 +885,31 @@ def _split_camel(text: str) -> str:
 
 
 def _score_exclusions(haystacks) -> Dict[str, Dict[str, Any]]:
-    """Per category: the score and evidence from the file's PATH and its COLUMNS, kept apart.
+    """Per category: the score and evidence from what the file says about ITSELF (its path,
+    or a self-describing file's instrument attribute) and from its COLUMNS, kept apart.
 
     The two are kept apart because they carry different authority: a path that names
     plankton excludes the file outright, while a column that does only excludes a file with
-    no profile measurement beside it.
+    no profile measurement beside it. An instrument attribute sits between: a moored ADCP's
+    export names no ADCP in its path and carries its transducer's temperature beside the
+    velocities, and `instrumentType: adcp` WITH those velocity columns is what says the file
+    is a current record. Alone it does not -- an ADCP's scalar record, its thermistor and its
+    heading, holds no velocity at all.
     """
     out: Dict[str, Dict[str, Any]] = {}
     for reason, cat in EXCLUSION_CATEGORIES.items():
         signals = list(cat["signals"])
         if reason in _SHARED_BY:
             signals.append(SHARED_BIOLOGICAL_SIGNAL)
-        entry = {"path": 0.0, "columns": 0.0, "evidence": []}
+        entry = {"path": 0.0, "instrument": 0.0, "columns": 0.0, "evidence": []}
         for pattern, weight, why in signals:
-            for field in ("path", "columns"):
+            for field in ("path", "instrument", "columns"):
                 m = _search(pattern, haystacks[field][0])
                 if m:
                     entry[field] += weight
                     entry["evidence"].append(f"{field} matches {m.group(0)!r}: {why}")
                     break                       # one hit per signal, not per field
-        if entry["path"] or entry["columns"]:
+        if entry["path"] or entry["instrument"] or entry["columns"]:
             out[reason] = entry
     return out
 
@@ -635,9 +932,9 @@ def _find_exclusion(haystacks, columns):
     # A column-only hit on a file that carries a profile is reported, not acted on.
     eligible = {}
     for reason, e in scores.items():
-        if e["path"] or not profile_columns:
+        if e["path"] or (e["instrument"] and e["columns"]) or not profile_columns:
             eligible[reason] = e
-        else:
+        elif e["columns"]:
             prose_flags.append(
                 f"{e['evidence'][0]} -- but the file also carries mappable profile columns "
                 f"({', '.join(profile_columns[:4])}), so it is processed as a profile "
@@ -658,7 +955,7 @@ def _find_exclusion(haystacks, columns):
     if not eligible:
         return None, prose_flags
 
-    total = {r: e["path"] + e["columns"] for r, e in eligible.items()}
+    total = {r: e["path"] + e["instrument"] + e["columns"] for r, e in eligible.items()}
     ranked = sorted(total.items(), key=lambda kv: -kv[1])
     best, best_score = ranked[0]
     tied = [r for r, sc in ranked if sc == best_score]
@@ -679,10 +976,11 @@ def _find_exclusion(haystacks, columns):
         confidence = "high" if best_score >= 4 and margin >= 2 else "medium"
 
     return {"reason": reason, "route": cat["route"], "harvest": cat["harvest"],
-            "matched_in": "path" if entry["path"] else "columns",
+            "matched_in": next(f for f in ("path", "instrument", "columns") if entry[f]),
             "confidence": confidence, "matched": evidence[0], "evidence": evidence,
             "score": best_score, "alternatives": alternatives or None,
-            "belongs_in_wod": cat["belongs_in_wod"]}, prose_flags
+            "belongs_in_wod": cat["belongs_in_wod"], "label": cat.get("label"),
+            "why": cat.get("why")}, prose_flags
 
 
 # Table 3a gives latitude, longitude and julian day variable codes. They locate a cast; they
@@ -827,6 +1125,178 @@ def _confidence(score: float) -> str:
     return "none"
 
 
+_TIME_UNITS = re.compile(r"^\s*(second|minute|hour|day)s?\s+since\b", re.I)
+_DAYS_PER = {"second": 1 / 86400, "minute": 1 / 1440, "hour": 1 / 24, "day": 1.0}
+# degree_north, degrees_east, degree_W -- not plain "degrees", which is a heading or a roll.
+_POSITION_UNITS = re.compile(r"^degrees?_?(?:north|east|west|south)$|^degrees?_[nesw]$", re.I)
+_PLATFORM_ATTRS = ("MOORING", "platform_code", "platform_name", "platform", "station_name")
+# Attributes that name what recorded the file: EPIC's INST_TYPE, ACDD's instrument, the
+# instrumentType and instrumentSubtype an ADCP export writes, RBR's model.
+_INSTRUMENT_ATTR = re.compile(r"^(?:inst_type|instrument(?:_?(?:sub)?type|_?model|_?name)?|"
+                              r"make_model|model|sensor(?:_?(?:type|model))?)$", re.I)
+# Enough points to see a record's span and whether its position moves, without reading the
+# millions a logger sampling at 2 Hz holds.
+_SERIES_SAMPLE = 10000
+
+
+def _netcdf_evidence(path) -> Optional[Dict[str, Any]]:
+    """What a NetCDF file says about itself: global attributes as header text, variables as
+    columns, its instrument attributes, and a `time_series` summary when it is one
+    instrument's record (at one place, or along a track).
+
+    A binary file has no text head, so without this triage saw nothing in a NetCDF file and
+    asked a person what every one of them was. Columns are long names with units:
+    `TEMPERATURE (C)` says what `T_20` does not.
+    """
+    try:
+        import netCDF4
+        import numpy as np
+
+        with netCDF4.Dataset(str(path)) as ds:
+            attrs = {a: _attr_text(ds.getncattr(a)) for a in ds.ncattrs()}
+            variables = dict(ds.variables)
+            columns = [_nc_column(name, v) for name, v in variables.items()
+                       if not _container(name, v)]
+            # NCEI's templates describe the instrument in a container variable --
+            # `instrument:make_model = "MVP"` -- rather than in a global attribute.
+            described = [_attr_text(v.getncattr(a)) for name, v in variables.items()
+                         if _container(name, v) for a in v.ncattrs()
+                         if a in ("long_name", "make_model", "serial_number", "comment")]
+            series = _time_series(ds, variables, np)
+            copies = _copies(variables, np)
+            increment = _depth_increment(variables, np)
+    except Exception:                                   # noqa: BLE001 - the reader reports it
+        return None
+    named = [v for k, v in attrs.items() if v and _INSTRUMENT_ATTR.match(k)] + \
+        [d for d in described if d]
+    if series:
+        series["platform"] = next((attrs[a] for a in _PLATFORM_ATTRS if attrs.get(a)), None)
+        series["instrument"] = named[0] if named else None
+    return {"header": "\n".join(f"{k}: {v}" for k, v in attrs.items() if v),
+            "columns": columns, "instrument": " ".join(dict.fromkeys(named)),
+            "time_series": series, "copies": copies, "depth_increment": increment}
+
+
+def _depth_increment(variables, np) -> Optional[float]:
+    """The median spacing of a NetCDF file's depth axis -- WOD's rule for CTD against OSD is
+    the depth increment (< 2 m is high-resolution, manual p.19), not the instrument's name."""
+    for name, v in variables.items():
+        described = f"{name} {getattr(v, 'standard_name', '')}".lower()
+        if v.ndim == 0 or not re.search(r"\bdepth\b|^z\b", described) \
+                or v.size > MAX_COPY_CHECK_VALUES:
+            continue
+        z = np.ma.filled(np.ma.asarray(v[:], dtype="float64"), np.nan)
+        z = z.reshape(-1, z.shape[-1]) if z.ndim > 1 else z.reshape(1, -1)
+        steps = np.abs(np.diff(z, axis=-1))
+        steps = steps[np.isfinite(steps) & (steps > 0)]
+        return round(float(np.median(steps)), 3) if steps.size else None
+    return None
+
+
+# Above this many values a variable is not read whole at triage.
+MAX_COPY_CHECK_VALUES = 5_000_000
+
+
+def _copies(variables, np) -> List[Dict[str, str]]:
+    """Measured variables that equal an earlier one at every level: `salinity` filled with
+    the `temperature`. The later one is taken for the copy; the review can say otherwise."""
+    try:
+        from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE, match_variable
+        from wod_etl.reference import wod_variables
+    except ImportError:
+        return []
+    table = wod_variables()
+    measured = []
+    for name, v in variables.items():
+        code = match_variable(_nc_column(name, v))
+        if code is None or code == DEPTH_SENTINEL_CODE or code in _LOCATING_CODES \
+                or v.size > MAX_COPY_CHECK_VALUES or v.ndim == 0:
+            continue
+        measured.append((name, (table.get(code) or {}).get("name", name),
+                         np.ma.filled(np.ma.asarray(v[:], dtype="float64"), np.nan)))
+    out = []
+    for i, (a, a_name, x) in enumerate(measured):
+        for b, b_name, y in measured[i + 1:]:
+            both = np.isfinite(x) & np.isfinite(y)
+            if x.shape == y.shape and both.sum() >= 10 and np.array_equal(x[both], y[both]) \
+                    and np.array_equal(np.isfinite(x), np.isfinite(y)):
+                out.append({"copy": b_name, "of": a_name})
+    return out
+
+
+def _container(name: str, v) -> bool:
+    """A variable that holds attributes, not data: `instrument`, `instrument_ctd`, `crs`."""
+    return v.ndim == 0 and bool(re.match(r"^(?:instrument|sensor|platform)", name, re.I))
+
+
+def _attr_text(value) -> str:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", "replace")
+    return " ".join(str(value).split())[:300]
+
+
+def _nc_column(name: str, v) -> str:
+    label = str(getattr(v, "long_name", "") or getattr(v, "standard_name", "") or name).strip()
+    units = str(getattr(v, "units", "") or "").strip()
+    if units and "since" not in units and f"({units.lower()})" not in label.lower():
+        label = f"{label} ({units})"
+    return label
+
+
+def _time_series(ds, variables, np) -> Optional[Dict[str, Any]]:
+    """{"samples", "days", "moving"} when every measurement is one value per time step over a
+    day or more: one instrument's record on a mooring, or -- `moving` -- a record logged along
+    a track. Anything else -- a profile, a cast recorded against time, a chain of depths, a
+    glider whose depth changes along its path -- is left to the usual classification."""
+    time_name = next((n for n, v in variables.items() if len(v.dimensions) == 1
+                      and _TIME_UNITS.match(str(getattr(v, "units", "")))), None)
+    if time_name is None:
+        return None
+    tvar = variables[time_name]
+    tdim = tvar.dimensions[0]
+    n = len(ds.dimensions[tdim])
+    step = max(1, n // _SERIES_SAMPLE)
+
+    def sample(v):
+        cut = tuple(slice(None, None, step) if d == tdim else slice(None) for d in v.dimensions)
+        values = np.ma.compressed(np.ma.asarray(v[cut], dtype="float64"))
+        return np.append(values, np.ma.compressed(np.ma.asarray(v[-1:], dtype="float64"))) \
+            if v.dimensions == (tdim,) else values
+
+    t = sample(tvar)
+    if t.size < 2:
+        return None
+    days = float(t.max() - t.min()) * _DAYS_PER[_TIME_UNITS.match(tvar.units).group(1).lower()]
+    if days < MIN_SERIES_DAYS:
+        return None
+    coordinates = {name for name, v in variables.items() if v.dimensions == (name,)}
+    data = {name: v for name, v in variables.items() if name not in coordinates and v.ndim
+            and getattr(v.dtype, "kind", "U") not in "SU"}          # not a name or a label
+    if not data:
+        return None
+    for v in data.values():
+        if tdim not in v.dimensions or any(len(ds.dimensions[d]) != 1
+                                           for d in v.dimensions if d != tdim):
+            return None
+    moving = False
+    for v in variables.values():
+        if _POSITION_UNITS.match(str(getattr(v, "units", ""))) and tdim in v.dimensions:
+            pos = sample(v)
+            if pos.size and float(pos.max() - pos.min()) > MAX_POSITION_SPREAD_DEG:
+                moving = True
+    if moving and any(_vertical(name, v) for name, v in data.items()):
+        return None
+    return {"samples": n, "days": round(days, 1), "moving": moving}
+
+
+def _vertical(name: str, v) -> bool:
+    """A depth or pressure variable -- on a moving platform, the mark of a glider or a
+    profiler rather than a surface record."""
+    described = " ".join(str(getattr(v, a, "") or "") for a in ("standard_name", "long_name"))
+    return bool(_DEPTH_TOKENS.search(name) or re.search(r"\bdepth\b|\bpressure\b", described, re.I)
+                or str(getattr(v, "units", "")).strip().lower() in ("dbar", "decibar"))
+
+
 def _columns_from_head(head: str, fmt) -> List[str]:
     """Best-effort column names from a file's first bytes, for triage only.
 
@@ -857,8 +1327,54 @@ def _columns_from_head(head: str, fmt) -> List[str]:
                 continue
             return [c.strip() for c in fields]
         if not names:
-            return s.split()
+            return _header_above_data(head) or s.split()
     return names
+
+
+def _header_above_data(head: str) -> List[str]:
+    """A whitespace table's column names: the line just above its first two data rows. A file
+    of station blocks (`Stn: KD0309; Lat: 81.671N ...`, `Number of levels: 2201`, `PR TEMP
+    SALNTY`, rows) opens with a file header, not with its columns."""
+    lines = [l.strip() for l in head.splitlines() if l.strip()]
+    for i in range(1, len(lines) - 1):
+        if _numeric_row(lines[i]) and _numeric_row(lines[i + 1]):
+            return [] if _numeric_row(lines[i - 1]) else lines[i - 1].split()
+    return []
+
+
+def _numeric_row(line: str) -> bool:
+    fields = line.replace(",", " ").split()
+    try:
+        return bool(fields) and all(float(f) is not None for f in fields)
+    except ValueError:
+        return False
+
+
+def _text_depth_increment(head: str, columns) -> Optional[float]:
+    """The median spacing of a text table's depth (or pressure) column in the sampled rows:
+    WOD routes CTD to CTD or OSD by it (< 2 m is high-resolution, manual p.19), so triage
+    says it rather than going by the file's name."""
+    import numpy as np
+
+    try:
+        from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE, match_variable
+    except ImportError:
+        return None
+    # Depth, else pressure (`PR`, `prDM`): decibars are metres to within the 2 m rule.
+    at = next((i for code in (DEPTH_SENTINEL_CODE, 25) for i, c in enumerate(columns or [])
+               if match_variable(str(c)) == code), None)
+    if at is None:
+        return None
+    values = []
+    for line in head.splitlines():
+        fields = line.replace(",", " ").replace(";", " ").split()
+        if len(fields) == len(columns) and _numeric_row(" ".join(fields)):
+            values.append(float(fields[at]))
+        elif values and len(values) >= 3 and not _numeric_row(line):
+            break                         # the next station's header: one cast is enough
+    steps = np.abs(np.diff(np.array(values)))
+    steps = steps[steps > 0]
+    return round(float(np.median(steps)), 3) if steps.size >= 2 else None
 
 
 def _sample_column_values(head: str, fmt, columns, column: str, limit: int = 12) -> List[str]:

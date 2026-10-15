@@ -44,36 +44,49 @@ def for_download(key: str, error: str) -> Dict[str, Any]:
 def for_file_failure(key: str, stage: str, error: str, staged: bool) -> Dict[str, Any]:
     """A file `process_accession` could not turn into output."""
     dkey = f'files."{key}"'
+    leave_out = (f"To leave it out, add [{dkey}] with include = false to decisions.toml and "
+                 f"confirm again.")
     if stage == "download_file":
         return problem("process", f"could not read {key}", error,
-                       "A transient error; rerun to retry it.", file=key, blocking=True)
+                       "A transient error; confirm again to retry it.", file=key)
     if stage == "unexpected":
         how = ("This is a bug in wod_etl, not in the data: the traceback is in run.log. "
-               f"Report it, or set action = \"skip\" under [{dkey}] in decisions.toml to "
-               f"leave the file out and finish the rest.")
+               "Report it. " + leave_out)
     elif "pivot_long" in error or "long format" in error.lower():
-        how = ("It names its variables in a cell. Add a [profiles.<name>] recipe with "
-               "kind = \"long\" for it in decisions.toml (rerun proposes one), or skip it.")
+        how = ("It names its variables in a cell: it needs a [profiles.<name>] recipe with "
+               "kind = \"long\" (`wod-etl run` proposes one for a file it recognises as long "
+               "format). " + leave_out)
     elif "missing required coordinate" in error:
-        how = ("It carries no position or date. Name the station list that locates it in a "
-               "[profiles.<name>] recipe (kind = \"per_file\"), or skip it.")
+        how = ("It carries no position or date of its own. Name the station list that locates "
+               "it in a [profiles.<name>] recipe (kind = \"per_file\"). " + leave_out)
     elif "pressure but no depth" in error:
         how = ("Depth must be derived from pressure, which needs the cast's latitude: stage "
-               "it with a kind = \"script\" recipe using staging.pressure_to_depth.")
+               "it with a kind = \"script\" recipe using staging.pressure_to_depth. "
+               + leave_out)
     elif stage in ("sniff_format", "read_any"):
-        how = ("It does not read as any table this package knows. If it holds data, "
-               "find out what wrote it (see .claude/skills/wod-etl/reading-unknown-files.md) "
-               f"and stage it with a script recipe; otherwise set action = \"skip\" under "
-               f"[{dkey}].")
+        how = ("It does not read as any table this package knows. If it holds data, find out "
+               "what wrote it (see .claude/skills/wod-etl/reading-unknown-files.md) and stage "
+               "it with a script recipe. " + leave_out)
     elif staged:
-        how = (f"The staged file was written by a recipe; fix the recipe in decisions.toml "
-               f"(units, columns), or set action = \"skip\" under [{dkey}].")
+        how = ("A recipe wrote this staged file: fix the recipe in decisions.toml (units, "
+               "columns), or list the cast in its skip_casts, and confirm again.")
     else:
-        how = (f"Set action = \"skip\" under [{dkey}] in decisions.toml to leave it out, or "
-               f"action = \"process\" with process_as = \"<dataset>\" if it was not "
-               f"recognised.")
+        how = ("If it was classified as the wrong dataset, set dataset = \"<dataset>\" in its "
+               "entry. " + leave_out)
     return problem("process", f"{key} failed at {stage}", error, how, file=key,
                    decisions_key=dkey)
+
+
+def for_wod_file_failure(name: str, sources, stage: str, error: str) -> Dict[str, Any]:
+    """A WOD file (one dataset, one year) that could not be written from its source files'
+    casts, each of which was written and validated on its own."""
+    shown = ", ".join(sources[:5]) + (f" and {len(sources) - 5} more" if len(sources) > 5
+                                      else "")
+    return problem("process", f"{name} could not be written", f"{stage}: {error}",
+                   f"Each of its source files was written on its own; together they were not, "
+                   f"which is a bug in wod_etl -- the detail is in run.log. Report it. To write "
+                   f"the rest, leave one of its source files out (include = false) and confirm "
+                   f"again: {shown}.")
 
 
 def for_finding(finding: Dict[str, Any]) -> Dict[str, Any]:
@@ -86,17 +99,19 @@ def for_finding(finding: Dict[str, Any]) -> Dict[str, Any]:
 def for_exception(stage: str, exc: BaseException) -> Dict[str, Any]:
     return problem(stage, f"stage '{stage}' raised {type(exc).__name__}", str(exc),
                    "This is a bug, not a data problem: the traceback is in run.log. Fix it "
-                   "(or report it) and rerun -- the run continues from this stage.")
+                   "(or report it) and run the same command again -- it continues from this "
+                   "stage.")
 
 
-def for_decisions_syntax(error: str) -> Dict[str, Any]:
-    return problem("decide", "decisions.toml cannot be read", error,
+def for_decisions_syntax(error: str, stage: str = "decide") -> Dict[str, Any]:
+    return problem(stage, "decisions.toml cannot be read", error,
                    "Fix the line named above -- a missing quote or bracket is the usual cause "
-                   "-- and rerun.")
+                   "-- and run the same command again.")
 
 
-def for_open_item(item: Dict[str, Any]) -> Dict[str, Any]:
-    return problem("decide", item["what"], "",
-                   f"In decisions.toml under [{item['decisions_key']}]: {item['how_to_fix']}",
-                   decisions_key=item["decisions_key"], blocking=item["blocking"],
+def for_open_item(item: Dict[str, Any], stage: str = "decide") -> Dict[str, Any]:
+    key = item.get("decisions_key")
+    return problem(stage, item["what"], "",
+                   (f"In decisions.toml under [{key}]: " if key else "") + item["how_to_fix"],
+                   decisions_key=key, blocking=item["blocking"],
                    kind="decision" if item["blocking"] else "pending")

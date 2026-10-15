@@ -15,71 +15,106 @@ and why*, and *how do I carry on after a crash*.
 
 ## Run it yourself: `wod-etl`
 
-For a person, with no coding agent: one command per accession, resumable, that says what to
-do when it needs you.
+For a person, with no coding agent: every accession is run in **two steps**, with a review
+between them.
 
 ```bash
-uv run wod-etl run <accession>          # landing-page URL, number, data URL, folder, .tar.gz
-uv run wod-etl run <accession> --from process --yes    # redo from a stage
-uv run wod-etl status <accession>       # where it stopped, what is open, where the files are
+uv run wod-etl run <input>         # 1. triage every file; write decisions.toml for review
+#    ... review data/runs/<acc>/decisions.toml: include or not, as which dataset, why ...
+uv run wod-etl confirm <acc>       # 2. write what the reviewed decisions include
+uv run wod-etl status <acc>        # where it stopped, what is open, where the files are
 ```
 
-`python -m wod_etl` is the same command. From Python: `pipeline.run_pipeline(source)`.
-An input with no accession number in it (a folder called `survey_2024`) needs
-`--accession-id`.
+`<input>` is a landing-page URL, an accession number, an NCEI data-directory URL, a local
+folder or a `.tar.gz`/`.zip`. `run` never processes anything, and `confirm` processes
+exactly what the file includes. `python -m wod_etl` is the same command; from Python,
+`pipeline.run_pipeline(source)` and `pipeline.confirm_pipeline(accession)`. An input with no
+accession number in it (a folder called `survey_2024`) needs `--accession-id`. Either
+command takes `--from <stage> --yes` to redo a stage of its own.
 
 ### Stages
 
-| # | Stage | Does | Pauses or fails when |
-| --- | --- | --- | --- |
-| 1 | resolve | turns the input into a listing: a landing page or number via `resolve_accession_url`, the latest version of a versioned accession, a tarball extracted | NCEI does not answer (rerun later), or the input is not an accession |
-| 2 | fetch | mirrors a remote accession into `data/raw/<acc>/`, re-fetching a file whose listed date changed; a local folder is used in place | a download fails (rerun -- finished files are kept) |
-| 3 | triage | `classify_accession` → `data/runs/<acc>/triage.json` | |
-| 4 | decide | proposes recipes and questions in `decisions.toml`, runs the cross-checks, validates the answers | **any question is open (exit 2)** |
-| 5 | stage | runs the confirmed recipes into `data/staging/<acc>/pipeline/{profiles,taxa}/` | a recipe cannot run |
-| 6 | process | `process_accession` on the files that need no staging and on the staged casts | a transient failure (exit 1, rerun retries it); a file that will never read becomes a question (exit 2) |
-| 7 | taxa | `process_taxa` on the staged hauls | a haul fails validation |
-| 8 | verify | `verify_output` over the written profiles | -- (a high finding gives exit 3) |
-| 9 | report | `report.md` + `report.json`, **always**, however the run ended | |
+| # | Stage | Command | Does | Stops when |
+| --- | --- | --- | --- | --- |
+| 1 | resolve | run | turns the input into a listing: an accession's ISO record in NCEI's metadata catalogue (then its landing page) names the archive directory; the latest version of a versioned accession; a tarball extracted | NCEI does not answer (run again later), or the input is not an accession |
+| 2 | fetch | run | mirrors a remote accession into `data/raw/<acc>/`, re-fetching a file whose listed date changed; a local folder is used in place | a download fails (run again -- finished files are kept) |
+| 3 | triage | run | `classify_accession` → `triage.json`: per file what it holds, include or not, the WOD dataset, why | |
+| 4 | decide | run | writes an entry for every file no entry decides yet, recipes for files that need reshaping, and says what must be filled in | never: reviewing is the next step |
+| 5 | check | confirm | validates the reviewed decisions and builds the plan | **a decision is open, or the files changed since `run` (exit 2)** |
+| 6 | stage | confirm | runs the reshaping recipes into `data/staging/<acc>/pipeline/profiles/` | a recipe cannot run |
+| 7 | process | confirm | `process_accession` on every included file, each as the dataset its entry names and validated on its own; then `assemble_profiles` writes them as WOD files, one per dataset and year, into `data/processed/<acc>/` | a transient failure (exit 1; confirm again retries it). A file that will never read is reported and the rest are written (exit 1) |
+| 8 | verify | confirm | `verify_output` over the WOD files written; the copy and depth-axis checks judge each source file's casts on their own | -- (a high finding gives exit 3) |
+| 9 | report | both | `report.md` + `report.json`, **always**, however the command ended | |
 
-### Resume: what a rerun redoes
+Exit codes: `0` done (run: decisions written; confirm: written and verified, or nothing to
+write) · `1` a stage failed, or a file could not be written · `2` decisions needed ·
+`3` written, but verification flagged the output · `130` interrupted.
+
+### Resume: what running a command again redoes
 
 Each stage records a **fingerprint** of its inputs in `state.json` -- the input string, the
-listing, the files it reads (size and nanosecond mtime), and the part of `decisions.toml` it
-reads. A rerun:
+listing, the files it reads (size and nanosecond mtime), the part of `decisions.toml` it
+reads, **and the code it runs** -- and of the files it wrote. Running the command again:
 
-- **skips** a stage that is done and whose fingerprint is unchanged;
+- **skips** a stage that is done, whose fingerprint is unchanged and whose output is as it
+  left it;
 - **reruns from scratch** a stage whose fingerprint changed, clearing only what it owns: an
-  edited unit restages and reprocesses the casts; a plankton-only edit reruns stage → taxa
-  and leaves the profiles alone;
+  edited unit restages and reprocesses the casts, a fixed writer rewrites the output, and an
+  edit to another file's entry leaves the profiles alone. Output deleted or edited by hand
+  is rebuilt the same way;
 - **resumes** a stage that failed with unchanged inputs: the process stage retries only the
   files that failed (its manifests are `<acc>_direct` and `<acc>_staged`, so per-file resume
   works across invocations);
 - after Ctrl-C (exit 130) resets the interrupted stage and continues it.
 
-A code change does not invalidate anything (the output would silently change under you);
-the run says the commit moved and suggests `--from process`. A `.lock` stops two runs of
-one accession at once; a lock left by a dead process is taken over.
+`confirm` writes only what was reviewed: when the files changed after `run`, or the triage
+code changed and now proposes something different (another action, include, dataset or
+drop for some file), it refuses and asks for `run` again -- which adds entries for new files
+and never touches the person's. A code change that triages the files the same goes ahead.
+A `.lock` stops two runs of one accession at once; a lock left by a dead process on the
+same machine is taken over.
 
 ### `decisions.toml`
 
-Written once, then **only appended to** -- nothing typed into it is ever rewritten. Every
-item has a stable id, so nothing is proposed twice. The proposals carry `TO DO` comments.
+Written by `run`, then **only appended to** -- nothing typed into it is ever rewritten. An
+entry per file, alike files sharing one under a `*` pattern; an entry for one file overrides
+a pattern that also matches it. A `*` stays within one folder.
 
-| Section | Holds | Blocks the run until |
+```toml
+[files."data/0-data/LeConte_*_CTD_*.nc"]       # 4 files: ...
+data = "CTD profiles: temperature, salinity"
+include = true
+dataset = "CTD"
+why = "CTD by its path ('CTD') and depth increment 1.00 m is high-resolution (< 2.0 m); ..."
+
+[files."data/0-data/LeConte_Sept2018_CTD_ship_data.nc"]
+data = "CTD profiles: temperature"
+include = true
+dataset = "CTD"
+drop = ["salinity"]
+why = "...; its salinity equals its temperature at every level -- a copy, not a measurement"
+
+[files."data/0-data/downstream_deep_mooring/RBRsolo_*.nc"]   # 17 files
+data = "moored instrument record: RBRsolo at one place, 13.6 days"
+include = false
+why = "a mooring's record belongs in WOD as MRB ...; wod-etl cannot build MRB profiles yet"
+```
+
+| Field / section | Holds | Blocks `confirm` until |
 | --- | --- | --- |
-| `[metadata]` | keys written into every staged header: `Platform`, `Cruise`, `Instrument`... | -- |
-| `[profiles.<name>]` | a recipe that stages casts (below) | `confirmed = true`, no `UNIT?` left, the station list locates every cast |
-| `[taxa.<name>]` | a recipe that stages plankton hauls (below) | never: unconfirmed recipes are reported as pending |
-| `[files."<path or pattern>"]` | `action = "skip"`, `"process"` (+ `process_as = "OSD"`), `"taxa"` | an `inspect` file or a file that failed for good has an action |
+| `[files."<path or pattern>"]` | `include` (true/false), `dataset` (Table 2 code, for an included file), `data` (what it holds), `why`; optional `drop = [...]` (variables not to write) and `metadata = { ... }` (header values for its casts). Written under a heading per outcome -- IN, OUT (WOD takes it but wod-etl cannot write it yet / WOD does not store it / left out by the review), DOCUMENTATION -- after a summary of how many files go where | every file has an entry; `include` is true or false; an included file has a WOD dataset |
+| `[metadata]` | header values for every cast, **overriding what a file states**, first in the file: `platform`, `institution`, `project`, `cruise`, `principal_investigator`, `probe_type`, `instrument` (the older `Platform`, `"Principal investigator"`... are read the same). Proposed from the accession's own ISO 19115 records -- a value they state once is set, one they state several ways is listed in a comment to choose from -- and the rest offered commented out, for the reviewer to fill. A WOD code (`platform = 8553`) is safest, and its name is written beside it; a name is looked up in WOD's code list and kept as text unless it names exactly one entry. A value that differs between files goes in their own entries' `metadata` | -- |
+| `[profiles.<name>]` | a recipe that reshapes included files into casts (below) | no `UNIT?` left, a station list that locates every cast |
 | `[[cross_check]]` | another source of positions/dates: `name`, `file`, `tolerance_km`, `compare`; for a PDF table also `page`, `row_pattern`, `columns` | -- |
 | `[track]` | `bounding_box` (proposed from NCEI's `_lonlat.txt`), `outlier_factor` | -- |
 | `[conflicts."<id>"]` | a disagreement: `values`, `values_hash`, `resolution`, `note` | `resolution` is `"keep"`, `"ack"`, a source's name, or `{ date = ..., latitude = ..., longitude = ... }` |
 
-A `[files]` key may be a pattern -- `data/0-data/par/*.txt` -- and look-alike files are
-proposed as one: thirty daily files are one question. A conflict whose values change after
-it was settled is open again (`values_hash`). Every resolution is written into the staged
-notes, so it reaches the NetCDF's `comment`.
+`[profiles]`, `[track]` and `[[cross_check]]` appear only when some file needs reshaping. The
+`dataset` of an included file is the contract: every file is written as its entry says
+(CTD still goes to OSD cast by cast when a cast's levels are coarse, manual p.19). A conflict
+whose values change after it was settled is open again (`values_hash`). Every resolution is
+written into the staged notes, so it reaches the NetCDF's `comment`. Plankton is left out
+for now ("not handled for now"); the taxa writer remains a library function.
 
 **Profile recipes** (`kind`):
 
@@ -87,13 +122,10 @@ notes, so it reaches the NetCDF's `comment`.
 | --- | --- |
 | `long` | `files`, `keys` (cast key + depth key), `key_aliases`, `cast_key`, `variable`, `value`, `columns` (variable → staged name **with its unit**), `station_list`; optional `depth_column`, `time_zone`, `on_conflict = "first"`, `station_map`, `skip_casts`, `dataset_type`, `metadata`, `notes` |
 | `per_file` | `files` (one cast each), `station_pattern` (regex on the file name → station), `station_list`, `header_row`, `columns` (renames); optional as above |
-| `script` | `script`: a Python file that writes staged casts into `$WOD_STAGING_OUT` (`$WOD_ACCESSION`, `$WOD_DATA_ROOT` are set). For what no recipe describes: pressure to depth, re-occupied stations, odd layouts. Its hash is fingerprinted. |
+| `script` | `script`: a Python file that writes staged casts into `$WOD_STAGING_OUT` (`$WOD_ACCESSION`, `$WOD_DATA_ROOT` and `$WOD_PROJECT_ROOT` are set). For what no recipe describes: re-occupied stations, odd layouts. Its hash is fingerprinted. What it prints, and what its `wod_etl` calls log, goes into the run's `run.log`. |
 
-**Taxa recipes**: `matrix` (`file`, `header_rows`, `label_columns`, `header_names`,
-`cast_header`, `taxon_column`, `stage_column`, `sample_biological` keyed by sample header,
-`blank`) or `long` (`file`, `cast_key`, `taxon_columns`, `fallback_taxon_column`,
-`stage_column`, `count_column`, `missing_values`); both take `station_list`, `unit`,
-`upper_depth`, `lower_depth`, `biological_header`, `notes`.
+A recipe's files must be included (`include = true`); a recipe whose files are all left out
+is ignored.
 
 ### When it fails
 
@@ -106,7 +138,9 @@ traceback and reported as a bug, not a data problem.
 ### The accession run log
 
 `data/runs/<acc>/run.log` (text) and `events.jsonl` (the same events as JSON) record every
-run against the accession -- `wod-etl`, **and any agent or script calling the library**:
+run against the accession -- `wod-etl run` and `confirm` (each file's triage verdict, every
+decision applied, every file and cast written or not and why), **and any agent or script
+calling the library**:
 `process_accession`, `process_taxa`, `classify_accession` and the staged writers open the log
 themselves when they can tell the accession (`accession=`, or from the path). Each run opens
 with a banner (invocation id, actor, arguments, git commit, configuration) and closes with
@@ -121,15 +155,29 @@ with accession_log("0303928", actor="agent"):
 ### Files
 
 ```
-data/runs/<acc>/        run.log  events.jsonl  state.json  decisions.toml  triage.json
-                        report.md  report.json  listing.json  work/ (raw copies per run)
+data/runs/<acc>/        decisions.toml   the decisions, for review (written by run)
+                        report.md        the run summary (+ report.json), every command
+                        run.log          the detailed log (+ events.jsonl, one JSON event
+                                         per line): every stage, file, cast and decision
+                        state.json  triage.json  listing.json
+                        work/            raw copies per run, and per_file/: each source
+                                         file's own result, assembled into the output
 data/raw/<acc>/         the mirror of a remote accession
-data/staging/<acc>/pipeline/{profiles,taxa}/      staged by recipes (cleared on rerun)
-data/processed/<acc>/pipeline/{profiles,taxa}/    the output
+data/staging/<acc>/pipeline/profiles/      staged by recipes (cleared on rerun)
+data/processed/<acc>/   the output: WOD-standard CF NetCDF, wod_<dataset>_<year>_<acc>.nc
 ```
 
-The pipeline never touches anything else: folders an agent staged by hand under
-`data/staging/<acc>/` are left alone.
+**The output is WOD's own layout.** WOD distributes one file per dataset and year --
+`wod_ctd_2008.nc` is every CTD cast of 2008 (www.ncei.noaa.gov/data/oceans/ncei/wod/2008/;
+the manual describes the split on pp.44 and 46 but not the names). An accession's casts are
+split the same way and the accession is added, so the file cannot pass for WOD's own:
+`wod_ctd_2008_0062621.nc`. A file holds casts from several source files: what they share is a
+file attribute, and what differs -- `source_file`, notes, a column's name or unit, a header --
+is a per-cast variable. Every cast also carries its `dataset`, as WOD's files do.
+
+The pipeline never touches anything else: in `data/processed/<acc>/` it writes and removes only
+names of that form (and, once, the `pipeline/` folder the output went to before it was WOD
+files), and folders an agent staged by hand under `data/staging/<acc>/` are left alone.
 
 ---
 
@@ -151,11 +199,13 @@ classified from its own path, header, columns and depth spacing —
 | `dataset_type` | **`None` (default) = classify per file.** Pass a code only to FORCE one for the whole run — right when the accession really is one instrument, wrong the moment it is not. An explicit type also overrides an exclusion, on the reasoning that an operator who says "this folder is XBT" has looked at it and the classifier has not. |
 | `dataset_overrides` | `{path_prefix: dataset_type}`, e.g. `{"3-XBT": "XBT", "5-argo": "PFL"}`. The answer to "the accession is mixed and I know what two of the folders are" — everything else is still classified. |
 | `process_unidentified_as` | What to do with a file that is profile-shaped but names no instrument. `None` (default) skips it and says so; set a code to process those under a stated assumption. |
-| `output_dir` / `raw_dir` | Override `data/processed/` and `data/raw/`. |
+| `output_dir` / `raw_dir` | Override `data/processed/` and `data/raw/`. The output is one file per WOD dataset and year, `wod_<dataset>_<year>_<acc>.nc`; input that is no accession (no folder named as NCEI writes one, seven digits zero-padded) is named for its folder instead (`wod_ctd_2015_my-cruise.nc`), never with WOD's own bare names. The WOD files hold the casts of the files this call answers for -- every file listed and included -- and no others. A file of the same name holding another run's sources (another folder, another `include` batch) is left as it is and reported: write each set to its own `output_dir`, or process them in one call. A source that is gone from the folder (renamed, deleted) is dropped from the files. |
+| `per_file_dir` | Where each source file's own result goes -- its NetCDF, validated on its own, and its casts -- before they are assembled into the WOD files: `<per_file_dir>/<run_id>/`, `<output_dir>/per_file/<run_id>/` by default. The result lists them in `per_file_outputs` and `per_file_casts`. |
+| `assemble` | Write the WOD files at the end (default `True`). `assemble_profiles(per_file_casts, output_dir, scope, owns=None)` does it on its own: the accession pipeline processes two sets of files, then assembles both runs' `per_file_casts` together. `owns(source)` says which sources' casts the call may replace; an existing file of the scope holding any other source is left as it is and reported. Without `owns` the caller owns every file of that scope in `output_dir` -- right for the pipeline's own folder, wrong for a shared one. |
 | `run_id` | Names the manifest. Reuse it to resume. Auto-generated from the URL + timestamp. |
 | `recursive` | Crawl subdirectories (default `True`). |
 | `filter_extension` | Only consider files with this extension. |
-| `limit` | Process at most N files — use this to prove the shape first. |
+| `limit` | Process at most N files — use this to prove the shape first. A limited run is not assembled: look at its `per_file_outputs`, and an earlier full run's WOD files are left alone. |
 | `resume` | Fold into an existing manifest (default `True`). |
 | `retry_failed` | Also re-attempt items already marked `failed`. |
 | `verify` | Read the written NetCDF back at the end and check every value against the manual's acceptable range for that variable at that depth. **On by default** -- the failure that matters most is the one that passes structural validation. Sets `output_verified`. |
@@ -191,7 +241,8 @@ shows up immediately on 3 files rather than after 400.
 {"status": "complete", "run_id": "0287423_20260817T101500Z",
  "total_items": 50, "counts": {"done": 42, "failed": 3, "skipped": 5},
  "failure_rate": 0.066, "complete": false,
- "outputs": ["data/processed/cast_01.nc", "..."],
+ "outputs": ["data/processed/2-CTD/wod_ctd_2015_0287423.nc", "..."],
+ "per_file_outputs": ["data/processed/2-CTD/per_file/ctd/cast_01.nc", "..."],
  "failures": [{"key": "cast_07.csv", "stage": "read_any", "error": "parse failed: ..."}],
  "dataset_types": {"CTD": 31, "OSD": 11},
  "skipped_reasons": {"not WOD profile data: current velocity": 4,

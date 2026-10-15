@@ -39,6 +39,13 @@ MAGIC = [
     (b"\xfd7zXZ\x00", "xz", "none", "xz stream -- decompress before reading"),
     (b"SQLite format 3\x00", "sqlite", "none", "SQLite database"),
     (b"\x00\x01\x00\x00Standard Jet DB", "access_db", "none", "MS Access database"),
+    # Pictures -- a station map, a photo of the gear. Documentation, never a table.
+    (b"\xff\xd8\xff", "image", "none", "JPEG image"),
+    (b"\x89PNG\r\n\x1a\n", "image", "none", "PNG image"),
+    (b"GIF87a", "image", "none", "GIF image"),
+    (b"GIF89a", "image", "none", "GIF image"),
+    (b"II*\x00", "image", "none", "TIFF image"),
+    (b"MM\x00*", "image", "none", "TIFF image"),
 ]
 
 SNIFF_BYTES = 65536
@@ -427,7 +434,7 @@ def _disambiguate_zip(path: Path) -> Dict[str, Any]:
 # not parse -- and a silent skip there is how a real cast file with an unrecognised layout
 # disappears from a run.
 DOCUMENT_FAMILIES = {"pdf", "gzip", "bzip2", "xz", "sqlite", "access_db", "archive_zip",
-                     "json", "xml", "zip_container"}
+                     "json", "xml", "zip_container", "image"}
 
 
 def _result(family: str, reader: str, confidence: str, readable: Optional[bool] = None,

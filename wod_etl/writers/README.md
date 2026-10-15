@@ -68,19 +68,55 @@ Casts may have different column sets — the union is written and absent values 
 
 Single-cast wrapper over the above. Use it when you have exactly one cast.
 
+### One file per WOD dataset and year -- `wod_files`
+
+```python
+from wod_etl.writers import group_by_file, wod_file_name, is_wod_file_name
+wod_file_name("CTD", 2008, "0062621")      # 'wod_ctd_2008_0062621.nc'
+```
+
+WOD distributes its NetCDF one dataset and one year per file -- `wod_ctd_2008.nc` is every CTD
+cast of 2008, from every accession (www.ncei.noaa.gov/data/oceans/ncei/wod/2008/). The manual
+describes the split (pp.44, 46: by year or by 10-degree square, always by dataset) but never
+the names; they are from NCEI's listing. An accession's output is split the same way and the
+accession is added, so a file cannot pass for WOD's own. The year is the cast's UTC date as
+written (`cast_year`); a cast with no date goes to `wod_<dataset>_undated_<acc>.nc`.
+
+`group_by_file(sources, accession)` turns `[{"key", "casts"}]` -- each source file's casts, as
+`write_ragged_profiles` takes them -- into one entry per file: a source's casts together and in
+their own order, sources by their first cast's time. `process_accession` writes each source
+file on its own first (so a file that fails is that file's failure) and then assembles these
+with `assemble_profiles`. Assembly replaces or removes only names `is_wod_file_name(name,
+accession)` matches, and of those only files whose every source is one the run answers for;
+input that is no accession is named for its folder (`folder_scope`; a folder name with no
+character a file name can carry becomes `scope-<digest>`), so its files never take WOD's own
+names.
+
+**Several sources in one file, nothing claimed for all of them that only one said.** What the
+casts share is a file attribute; what differs is written per cast: `source_file`, the notes,
+headers, and a variable's metadata -- `<var>_originator_column_name`, `<var>_originator_units`
+and the rest of Table 5a are per-cast variables when two sources state them differently (the
+variable's `per_cast_attributes` names them), as are an originator flag column's
+`<var>_qc_originator_flag_values`/`_flag_meanings` when two sources' flag schemes differ.
+
 ### What ends up in the file
 
 | Group | Contents |
 | --- | --- |
-| Global attributes | `title`, `Conventions`, `featureType=profile`, `WOD_version`, `wod_dataset_type`, `source_file` (the path read), `source_format` (how), `source`; `institution` only when the originator stated one (secondary header 4) |
-| Provenance | `comment` (the staged header's `# Note:` lines every cast shares; differing ones go to a `cast_notes` variable), `history`, `source_files_raw` (the `# Source:` lines), `metadata_not_placed` (header keys with no WOD field), `unit_conversions`, and `seawater_density_kg_m3` + `seawater_density_provenance` when a conversion used the assumed density |
+| Global attributes | `title`, `Conventions`, `featureType=profile`, `WOD_version`, `wod_dataset_type` (`mixed`, with a validator warning, when the casts are of several datasets), `source_file` (the path read), `source_format` (how), `source`; `institution` only when the originator stated one (secondary header 4). `source_file`, `source_format` and `source_files_raw` are per-cast variables when the casts came from different files |
+| Provenance | `comment` (the staged header's `# Note:` lines every cast shares; differing ones go to a `cast_notes` variable), `history`, `source_files_raw` (the `# Source:` lines), `metadata_not_placed` (header keys with no WOD field that every cast shares; a cast's own go to `cast_metadata_not_placed`), `unit_conversions` (each once), and `seawater_density_kg_m3` + `seawater_density_provenance` when a conversion used the assumed density |
 | Character data | `originator_cruise_id`, `principal_investigator` (manual p.30) -- global when shared, per cast otherwise |
 | Secondary headers | one `secondary_header_<id>_<name>` attribute per Table 4a entry, plus `<same>_code_table` where WOD publishes a code list; a coded value that is not a code goes to `<same>_originator_text` with `<same>_code_lookup` instead (below) |
-| Per cast (`casts`) | `lat`, `lon`, `time` (days since 1770-01-01), `date` (YYYYMMDD), `GMT_time` (hours, fill when not stated), `cast_id` (`cf_role=profile_id`), `z_row_size` (`sample_dimension=z_obs`), and any secondary header that differs between casts |
+| Per cast (`casts`) | `lat`, `lon`, `time` (days since 1770-01-01), `date` (YYYYMMDD), `GMT_time` (hours, fill when not stated), `cast_id` (`cf_role=profile_id`), `z_row_size` (`sample_dimension=z_obs`), `dataset` (the WOD dataset, as WOD's own files carry it), and any secondary header that differs between casts |
 | Per level (`z_obs`) | `z` (`positive=down`, `axis=Z`), `z_qc` when WOD QC ran, one variable per WOD code, and per variable `<var>_qc` and/or `<var>_qc_originator` |
 
-Each measured variable carries `units`, `long_name` (the WOD name), `wod_variable_code`,
-`coordinates = "time lat lon z"` and `ancillary_variables` pointing at its flag arrays.
+Each measured variable carries `units` -- the UDUNITS string of its Table 3a standard unit
+(`degree_C`, `1`, `umol kg-1`, `dbar`), so a CF reader parses it -- `wod_units` with Table
+3a's own wording (`Degrees Celsius`), a CF `standard_name` where CF has one for the quantity
+as WOD stores it (none for pH, whose scale WOD does not state), `long_name` (the WOD name),
+`wod_variable_code`, `coordinates = "time lat lon z"` and `ancillary_variables` pointing at
+its flag arrays. A missing value is written as the `_FillValue`, not as NaN under it. The
+cast's time keeps its seconds.
 
 ### Metadata on each variable
 
