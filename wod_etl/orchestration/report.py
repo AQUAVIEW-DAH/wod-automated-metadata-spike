@@ -5,6 +5,7 @@ It answers, for a person who was not watching: what the accession holds, what th
 include and leave out and why, what was written and how it verified, and what needs doing
 next. The run log has the blow-by-blow; this is the summary to read first.
 """
+import re
 from typing import Any, Dict, List, Optional
 
 from wod_etl.io_util import write_json_atomic, write_text_atomic
@@ -77,7 +78,12 @@ def write_report(ws, state: Dict[str, Any], exit_code: int, interrupted: bool,
                             "dataset_overrides": plan.get("dataset_overrides") or {},
                             "metadata": plan.get("metadata") or {},
                             "file_options": plan.get("file_options") or {},
-                            "station_overrides": plan.get("station_overrides") or {}},
+                            "station_overrides": plan.get("station_overrides") or {},
+                            "moorings": {name: {"deployed": r.get("deployed"),
+                                                "depths": r.get("depths") or {},
+                                                "placed": r.get("placed") or {}}
+                                         for name, r in (plan.get("profiles") or {}).items()
+                                         if r.get("kind") == "mooring"}},
               "stage": out("stage").get("recipes") if command == "confirm" else None,
               "process": out("process").get("runs") if command == "confirm" else None,
               "files": out("process").get("files") if command == "confirm" else None,
@@ -201,6 +207,22 @@ def _render_decisions(report: Dict[str, Any]) -> List[str]:
         for note in o.get("notes") or []:
             lines.append(f"- Station {station}: {note}")
     if d.get("metadata") or d.get("file_options") or d.get("station_overrides"):
+        lines.append("")
+    for name, m in (d.get("moorings") or {}).items():
+        deployed = m.get("deployed")
+        lines += [f"### Mooring {name}: where wod-etl places its instruments", "",
+                  ("Deployed " + " to ".join(deployed) + ", by the pressure its instruments "
+                   "record." if isinstance(deployed, list) else
+                   "Deployed: the whole record (no instrument records pressure)."), "",
+                  "| Instrument | Depth | How |", "| --- | --- | --- |"]
+        rows = sorted(m["depths"].items(), key=lambda kv: (kv[1] != "pressure", kv[1]
+                                                            if kv[1] != "pressure" else 0,
+                                                            kv[0]))
+        for file, depth in rows:
+            how = re.sub(r"^\d+(?:\.\d+)? m: ", "", m["placed"].get(file) or "")
+            lines.append(f"| `{_cell(file)}` | "
+                         + ("day by day" if depth == "pressure" else f"{depth:.1f} m")
+                         + f" | {_cell(how)} |")
         lines.append("")
     return lines
 

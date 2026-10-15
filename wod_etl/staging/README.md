@@ -375,6 +375,90 @@ Keep the pressure column as well — pressure is WOD variable 25 in its own righ
 
 ---
 
+## `read_instrument(path)`, `deployment(windows)`, `mooring_days(paths, instruments, window)` and `mooring_profiles(instruments, days, depths, latitude, min_day_fraction=0.8)`
+
+A mooring as WOD MRB profiles. In WOD a moored buoy's profile is its instruments'
+concurrent readings at their depths (manual p.17), kept as daily averages (p.14); an
+accession holds the mooring as one NetCDF file per instrument, a time series at one depth.
+
+```python
+from wod_etl.staging import (read_instrument, wet_window, deployment, mooring_days,
+                             mooring_profiles)
+
+instruments = [read_instrument(p) for p in paths]       # variables, pressure, depth, position
+found = deployment([wet_window(p, i) for p, i in zip(paths, instruments)])
+days = mooring_days(paths, instruments, found["window"])  # daily means while deployed
+built = mooring_profiles(instruments, days, {"RBRsolo_SN1.nc": 10.0,
+                                             "SBE37_SN2.nc": "pressure"}, latitude=56.84)
+built["profiles"]   # [{"day": "2018-09-04", "levels": [{"depth", "means": {code: value},
+                    #   "file", "instrument", "samples", "placed_by"}]}]
+built["left_out"]   # instrument-days whose variables covered too little of the day
+```
+
+- **Depth comes from the files.** An instrument that records pressure is placed by its
+  daily mean pressure (UNESCO 1983 at the mooring's latitude; pressure in kPa, bar...
+  converted, an absolute pressure less the atmosphere, a gauge `sea_pressure` preferred).
+  One that does not is placed by its file (`instrument_depth`, a depth variable -- in dbar,
+  a nominal pressure), its file name (`depth_from_name`: `T_45m.nc`), or the mooring's
+  description (below). Nothing else places it.
+- **Only the deployment is averaged.** Loggers record air before they go in and after they
+  come out. `wet_window` finds when an instrument that records pressure was under water
+  (above half its usual submerged pressure; `in_water` also gives that usual pressure);
+  `deployment` takes the mooring's from the first in to the last out (`how = "apart"` when
+  they do not overlap; `"none"` without pressure -- triage then takes the record without its
+  first and last day). `mooring_days` uses only samples within the window it is given.
+- **One mooring, one group.** `group_moorings(entries)` groups triage's entries by the
+  mooring id the files name, else by folder and position, splits a group whose records stop
+  overlapping in time (two deployments), and labels each so no two share a name.
+- **Part days are left out.** A mean of part of a day is biased by the tide and the sun: a
+  variable makes a daily mean only if it has values in at least `min_day_fraction` of the
+  day's hours (an instrument sampling less often than hourly counts its own steps), so a
+  change of sampling rate is not a gap, and one variable's gap does not cost another its day.
+- **The originator's flags.** A value whose flag means bad, fail or missing
+  (`flag_meanings`, through `ancillary_variables` or a `<name>_qc` beside it) is not
+  averaged; flags with no stated meanings are not applied, and the instrument's `notes` say
+  so.
+- Only Table 3a's MRB variables are kept (temperature, salinity, pressure, oxygen,
+  chlorophyll...), a CF standard name first; the instrument's own temperature, the air, a
+  potential temperature or a saturation are not, and nor is a second record of one variable
+  -- each is listed in `not_stored`. A calendar other than the standard one, and a file with
+  several depths along one dimension, are refused with the reason. Records are read in
+  chunks: a logger's tens of millions of samples take seconds.
+
+`wod-etl` runs this from the mooring recipe it works out from triage (`placed` notes, per
+file, where a depth in metres came from); the casts it stages are written as MRB.
+
+### `read_layout(path)`, `find_layout(candidates, members)` and `place_instruments(layout, members)`
+
+Where a mooring's loggers are, from the description that came with it
+(`staging/mooring_layout.py`): a table -- org or markdown pipes, or delimited -- listing
+the instruments by serial number (`serial_key`: `07819`, `SN07819` and `37SM56061-7819` are
+one) with a depth, or a position along the line from a reference point.
+
+```python
+layout = read_layout("data/0-data/deep/mooring_description.txt")
+placed = place_instruments(layout, [
+    {"name": "SBE37SM_SN10552.nc", "serial": "10552", "depth": 34.7, "by_pressure": True},
+    {"name": "RBRsolo_SN100028.nc", "serial": "100028", "depth": None}])
+placed["placed"]["RBRsolo_SN100028.nc"]
+# {"depth": 37.7, "how": "position", "short": "45 m up the line from point 1 (...)",
+#  "detail": "45 m up the line from reference point 1 (Bottom of 50m line) in ..."}
+```
+
+- A **stated depth** is used as it stands.
+- A **position** becomes a depth only where an instrument with a position from the same
+  reference point records pressure: its depth fixes the point, and each position is a
+  distance up or down the line from it -- which way, from the header ("height above
+  bottom"), what the point is ("bottom of 50m line"), or the instruments that know their
+  depth. A pressure instrument listed between two positions bounds the point, and moves it
+  to agree, by no more than a few metres (`_tolerance`). A blank reference cell is the one
+  the rest of its block names, else the one above.
+- A logger listed beside **one** pressure instrument, with no position of its own (one
+  block of a table that groups its rows), is at that instrument's depth: on its frame.
+- **Nothing past that is guessed.** No pressure instrument on its line, records that
+  disagree with the table, a placement out of order with its neighbours, a serial listed
+  twice: `unplaced`, with the reason -- and triage proposes that file left out.
+
 ## `group_rows(rows, columns, key_columns)`
 
 Splits a cruise-wide table into per-cast groups in file order. Group by `["Station"]`, or

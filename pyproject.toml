@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.15.0",
+    "fastapi>=0.143.2",
     "httpx>=0.28.1",
     "netcdf4>=1.7.4",
     # Accessions arrive as spreadsheets often enough that read_any needs an Excel engine;
@@ -13,6 +14,7 @@ dependencies = [
     # Cruise reports state station positions, dates and some measurements only in PDF
     # tables; wod_etl.staging.extract_pdf_rows reads them, with a page citation.
     "pypdf>=6.16.1",
+    "uvicorn>=0.54.0",
 ]
 
 # `uv run wod-etl run <accession>`: the whole workflow for one accession, no agent needed.
@@ -36,6 +38,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["wod_etl*"]
+
+# The browser page `wod-etl web` serves.
+[tool.setuptools.package-data]
+"wod_etl.orchestration" = ["web_ui/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -519,13 +519,19 @@ class TestBinaryFilesAreOpenedNotAskedAbout:
         write_mooring_nc(tmp_path / "18bsp8a_wcp_scal.cf.nc", instrument="RDI ADCP",
                          variables=(("T_20", "TEMPERATURE (C)", "C"),
                                     ("Hdg_1215", "INST Heading", "degrees")))
+        # A level of the mooring's MRB profiles, combined with its other instruments by a
+        # mooring recipe: staged, not left out.
         for name, f in self._triage(tmp_path).items():
-            assert f["action"] == "exclude", (name, f["reason"])
-            assert f["exclusion"] == "moored instrument time series"
-            assert f["belongs_in_wod"] is True and "MRB" in f["reason"]
-        series = self._triage(tmp_path)["18bs8a_s39_0051m.cf.nc"]["time_series"]
-        assert series["platform"] == "18bs8a" and series["instrument"] == "Seabird SBE-39"
-        assert series["days"] == 30.0
+            assert f["action"] == "stage", (name, f["reason"])
+            assert (f["dataset"], f["include"]) == ("MRB", True)
+            assert f["mooring"]["variables"] == ["TEMPERATURE (C)"]   # not the heading
+        f = self._triage(tmp_path)["18bs8a_s39_0051m.cf.nc"]
+        assert f["time_series"]["instrument"] == "Seabird SBE-39" and f["time_series"]["days"] == 30.0
+        m = f["mooring"]
+        assert (m["platform"], m["pressure"]) == ("18bs8a", False)
+        assert m["depth"] == pytest.approx(19.8, abs=0.1)              # its nominal 20 dbar
+        assert (m["latitude"], m["longitude"]) == pytest.approx((62.19, -174.69))
+        assert "one a day of daily means" in f["why"]
 
     def test_an_adcp_velocity_file_is_excluded_as_currents(self, tmp_path):
         from helpers import write_mooring_nc

@@ -1,14 +1,16 @@
-"""Run the staging recipes a person reviewed in decisions.toml.
+"""Run the staging recipes wod-etl works out for the files a person included.
 
-An agent stages an accession by composing the staging primitives in a script; a person
-running `wod-etl` describes the same steps in decisions.toml instead, and `wod-etl confirm`
-runs them.
-It is deliberately small -- three profile shapes and two taxa shapes, the ones accessions
-keep arriving in -- with a `script` kind as the way out for anything else:
+An agent stages an accession by composing the staging primitives in a script; `wod-etl`
+works the same steps out from the files (decisions.derive_recipes) for the shapes
+accessions keep arriving in, and `wod-etl confirm` runs them. The person only decides which
+files go in. It is deliberately small -- three profile shapes and two taxa shapes -- with a
+`script` kind, written into decisions.toml by an agent, as the way out for anything else:
 
     profiles  kind = "long"      long-format files -> pivot_long -> one cast per station,
                                  located by a station list
               kind = "per_file"  one file per cast, located by a station list
+              kind = "mooring"   one file per instrument of a mooring -> one MRB profile a
+                                 day: each instrument's daily mean at its depth
               kind = "script"    run scripts/<name>.py, which writes staged casts into
                                  $WOD_STAGING_OUT -- for pressure-to-depth, re-occupied
                                  stations, layouts no recipe describes
@@ -17,8 +19,8 @@ keep arriving in -- with a `script` kind as the way out for anything else:
               kind = "long"      one row per taxon per station -> one haul per station
 
 Every value a recipe adds that the source files do not state -- a position from the station
-list, a unit named in decisions.toml, a conflict settled by the person -- is written into the
-staged file's notes, and from there into the NetCDF's `comment`.
+list, a logger's depth from the mooring's description, a station check the list failed -- is
+written into the staged file's notes, and from there into the NetCDF's `comment`.
 """
 import logging
 import os
@@ -74,6 +76,8 @@ def check_profile_recipe(recipe: Dict[str, Any], data_root) -> Dict[str, Any]:
     many levels carry two values. Read by decisions.validate, so the person sees it in the
     same pause as everything else."""
     root = Path(data_root)
+    if recipe.get("kind") == "mooring":
+        return check_mooring_recipe(recipe, root)
     try:
         if recipe.get("kind") == "script" or recipe.get("station_list") in (None, "", "?"):
             return {}
@@ -96,6 +100,154 @@ def check_profile_recipe(recipe: Dict[str, Any], data_root) -> Dict[str, Any]:
                 "stations_without_cast": report["stations_without_cast"]}
     except Exception as e:                              # noqa: BLE001 - reported to the person
         return {"error": f"{type(e).__name__}: {e}"}
+
+
+def _unit_key(code: int, units: str) -> str:
+    """A unit as a comparable word: 'degC', 'degree_C' and 'Celsius' are one unit."""
+    u = re.sub(r"[\s_.°-]", "", str(units or "")).lower()
+    if code == 1:
+        return ("c" if u in ("c", "degc", "degreec", "degreesc", "celsius", "degreecelsius",
+                             "degreescelsius", "its90", "degcits90") else u)
+    if code in (2, 9):                                        # dimensionless
+        return "" if u in ("", "1", "psu", "pss", "pss78", "practicalsalinityunits",
+                           "unitless", "dimensionless", "0.001") else u
+    return u
+
+
+def check_mooring_recipe(recipe: Dict[str, Any], root: Path) -> Dict[str, Any]:
+    """A mooring recipe, read without its records: every instrument readable and placed (a
+    depth, or the pressure it records), one unit per variable, and the instruments at one
+    place."""
+    from wod_etl.staging import read_instrument
+
+    problems, positions, units = [], [], {}
+    depths = recipe.get("depths") or {}
+    for f in recipe.get("files") or []:
+        info = read_instrument(root / f)
+        name = Path(f).name
+        if info.get("error"):
+            problems.append(f"{name}: {info['error']}")
+            continue
+        if depths.get(name) == "pressure" and not info.get("pressure"):
+            problems.append(f"{name}: depth = \"pressure\", but it records no pressure it "
+                            f"can be placed by -- give its depth in m")
+        for v in info["variables"]:
+            key = _unit_key(v["code"], v["units"])
+            seen = units.setdefault(v["code"], (key, v["units"] or "no unit", name))
+            if seen[0] != key:
+                problems.append(f"{name} states {v['column']!r} in '{v['units'] or 'no unit'}' "
+                                f"where {seen[2]} states '{seen[1]}': one unit per variable on "
+                                f"a mooring -- convert one, or stage it with a script recipe")
+        lat, lon = info.get("latitude"), info.get("longitude")
+        if lat is not None and lon is not None:
+            if not (-90 <= lat <= 90 and -180 <= lon <= 360):
+                problems.append(f"{name}: its position reads as {lat}, {lon}, not a place on "
+                                f"Earth -- set position = [lat, lon]")
+            else:
+                positions.append((lat, lon))
+    if positions and max(max(abs(a[0] - b[0]), abs(a[1] - b[1]))
+                         for a in positions for b in positions) > 0.01:
+        problems.append("its instruments are 0.01 degree or more apart: one recipe is one "
+                        "mooring -- split it into one per mooring")
+    if not recipe.get("position") and not positions:
+        problems.append("no instrument states its position: set position = [lat, lon]")
+    return {"instruments": len(recipe.get("files") or []), "mooring_problems": problems}
+
+
+def _run_mooring(name: str, recipe: Dict[str, Any], root: Path, out: Path, accession: str,
+                 plan: Dict[str, Any]) -> Dict[str, Any]:
+    """One staged cast a day: every instrument's daily mean at its depth (manual pp.14, 17),
+    from the samples within the reviewed deployment."""
+    import numpy as np
+
+    from wod_etl.staging import mooring_days, mooring_profiles, read_instrument
+    from wod_etl.staging.moorings import MIN_DAY_FRACTION, epoch
+
+    problems = check_mooring_recipe(recipe, root)["mooring_problems"]
+    if problems:
+        raise ValueError("; ".join(problems))
+    files = list(recipe.get("files") or [])
+    paths = [root / f for f in files]
+    instruments = [read_instrument(p) for p in paths]
+    if recipe.get("position"):
+        lat, lon = (float(x) for x in recipe["position"])
+        where = "decisions.toml (position)"
+    else:
+        lat = float(np.median([i["latitude"] for i in instruments
+                               if i.get("latitude") is not None]))
+        lon = float(np.median([i["longitude"] for i in instruments
+                               if i.get("longitude") is not None]))
+        where = "the instruments' files"
+    deployed = recipe.get("deployed")
+    window = None if deployed == "record" else [epoch(x) for x in deployed]
+    days = mooring_days(paths, instruments, window)
+    fraction = float(recipe.get("min_day_fraction", MIN_DAY_FRACTION))
+    built = mooring_profiles(instruments, days, recipe.get("depths") or {}, lat, fraction,
+                             placed=recipe.get("placed"))
+    if not built["profiles"]:
+        raise ValueError(f"no day of the deployment has an instrument recording for "
+                         f"{fraction:.0%} of its hours: there is no daily mean to write")
+    # One column per variable, named as the first instrument recording it names it (units
+    # agree, by check_mooring_recipe); pressure is in decibars whatever the file's unit.
+    columns: Dict[int, str] = {}
+    for info in instruments:
+        for v in info["variables"]:
+            columns.setdefault(v["code"], v["column"])
+    codes = sorted(columns)
+    header = [recipe.get("depth_column", DEFAULT_DEPTH_COLUMN)] + [columns[c] for c in codes]
+    not_stored = sorted({x for i in instruments for x in i.get("not_stored") or []})
+    notes = list(recipe.get("notes") or []) + [
+        f"Staged by `wod-etl confirm`: mooring {name}, {len(files)} instrument(s).",
+        "A moored buoy's profile is its instruments' concurrent readings at their depths "
+        "(WOD manual p.17), kept as daily means (p.14): each level is one instrument's mean "
+        "over the UTC day, from a day it recorded for at least "
+        f"{fraction:.0%} of the hours.",
+        f"Position from {where}.",
+        (f"Deployed {built['window'][0]} to {built['window'][1]}, "
+         + ("from the pressure its instruments record" if recipe.get("deployment") != "record"
+            else "its record without its first and last day: none of its instruments records "
+                 "pressure to tell when it went in, and a logger may record air on deck")
+         + ": samples outside are not used." if built["window"] else
+         "Deployed: the whole record -- none of its instruments records pressure to tell "
+         "when it was in the water, and the review included it as it stands.")]
+    notes += [f"{n}: depth {d}." for n, d in sorted((recipe.get("placed") or {}).items())
+              if d and recipe["depths"].get(n) != "pressure"]
+    notes += [n for i in instruments for n in i.get("notes") or []]
+    if not_stored:
+        notes.append("Not written (not stored in MRB, Table 3a): " + "; ".join(not_stored)
+                     + ".")
+    metadata = dict(recipe.get("metadata") or {})
+    if not any(k.lower() == "cruise" for k in metadata):
+        metadata["cruise"] = name
+    mooring = str(next(v for k, v in metadata.items() if k.lower() == "cruise"))
+    written, skipped = [], []
+    for profile in built["profiles"]:
+        rows = [[f"{lv['depth']:.2f}"] + [_fmt(lv["means"].get(c)) for c in codes]
+                for lv in profile["levels"]]
+        levels = "; ".join(f"{lv['file']} at {lv['depth']:.1f} m ({lv['placed_by']}, "
+                           f"{lv['samples']} samples)" for lv in profile["levels"])
+        path = out / f"{profile['day']}.csv"
+        write_staged_cast(
+            path, header, rows, latitude=lat, longitude=lon, date=profile["day"],
+            metadata=_metadata(accession, plan.get("metadata") or {},
+                               {**recipe, "metadata": metadata}, mooring, mooring),
+            notes=notes + [f"Daily means of {len(profile['levels'])} instrument(s): {levels}."],
+            sources=[str(p) for p in paths])
+        written.append(str(path))
+    for gap in built["left_out"]:
+        skipped.append({"cast": f"{gap['file']} {gap['day']}",
+                        "reason": f"{gap['coverage']:.0%} of the day's hours recorded: not a "
+                                  f"daily mean"})
+    runlog.event(log, logging.INFO,
+                 f"mooring {name}: {len(written)} daily profile(s) from {len(files)} "
+                 f"instrument(s); {len(skipped)} instrument-day(s) left out",
+                 kind="recipe", recipe=f"profiles.{name}", written=len(written),
+                 left_out=len(skipped))
+    return {"recipe": name, "written": written, "skipped": skipped}
+
+
+def _fmt(value) -> str:
+    return "" if value is None else f"{value:.6g}"
 
 
 def _cast_from_file(path: str, recipe: Dict[str, Any]) -> str:
@@ -125,13 +277,15 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
     kind = recipe.get("kind")
     if kind == "script":
         return _run_script(name, recipe, root, out, accession)
+    if kind == "mooring":
+        return _run_mooring(name, recipe, root, out, accession, plan)
 
     stations, sinfo = _station_lookup(root, recipe)
     overrides = {normalise_station(k): v for k, v in (plan.get("station_overrides") or {}).items()}
     mapping = recipe.get("station_map") or {}
     skip = {str(c) for c in recipe.get("skip_casts") or []}
     base_notes = list(recipe.get("notes") or []) + [
-        f"Staged by `wod-etl confirm` from decisions.toml [profiles.{name}] (kind = {kind})."]
+        f"Staged by `wod-etl confirm`: recipe {name} (kind = {kind})."]
     sources = [f"{root / f}" for f in recipe.get("files") or []] + [
         str(root / recipe["station_list"])]
     written, skipped = [], []
@@ -144,8 +298,10 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
                     + cols[len(recipe["keys"]):])
         notes = base_notes + [
             f"Pivoted from {len(recipe['files'])} long-format file(s) on {recipe['keys']}: "
-            f"variable '{recipe['variable']}', value '{recipe['value']}'. Column names and "
-            f"units as stated in decisions.toml: {recipe.get('columns')}."]
+            f"variable '{recipe['variable']}', value '{recipe['value']}'. "
+            + (f"Column names and units: {recipe['columns']}." if recipe.get("columns") else
+               "Columns named as the files name the variables: a unit a name states is "
+               "read, and a name with none is read in WOD's standard unit.")]
         if info["conflicts"]:
             notes.append(f"{len(info['conflicts'])} level(s) had two values for one variable; "
                          f"the first was kept (on_conflict = \"first\").")
@@ -161,7 +317,10 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
                 continue
             entry = stations.get(normalise_station(mapping.get(cast, cast)))
             if entry is None:
-                raise ValueError(f"cast {cast!r} has no entry in {recipe['station_list']}")
+                skipped.append({"cast": cast, "reason": f"no entry in "
+                                                        f"{recipe['station_list']}: its "
+                                                        f"position and date are not known"})
+                continue
             entry, override_notes = _apply_override(entry, overrides)
             body = [[r[idx[k]] for k in depth_keys] + r[len(recipe["keys"]):] for r in levels]
             body.sort(key=lambda r: _num(r[0]))
@@ -183,7 +342,10 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
                 continue
             entry = stations.get(normalise_station(mapping.get(cast, cast)))
             if entry is None:
-                raise ValueError(f"{f}: cast {cast!r} has no entry in {recipe['station_list']}")
+                skipped.append({"cast": cast, "reason": f"{f}: no entry in "
+                                                        f"{recipe['station_list']}: its "
+                                                        f"position and date are not known"})
+                continue
             entry, override_notes = _apply_override(entry, overrides)
             cols, rows, _ = read_table(root / f, header_row=int(recipe.get("header_row", 0)),
                                        delimiter=None)

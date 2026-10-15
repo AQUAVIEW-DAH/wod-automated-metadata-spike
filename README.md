@@ -54,12 +54,19 @@ uv run wod-etl confirm 0303928                    # 2. write what the review inc
 uv run wod-etl status 0303928                     # where it stopped, and what is open
 ```
 
+Or in a browser: `uv run wod-etl web` serves http://127.0.0.1:8000 -- the accession box with
+Run and Confirm, the stages across the top, the files on the left, decisions.toml to edit in
+the middle and the WOD files written on the right.
+
 **`run`** resolves and downloads the accession, looks into every file and writes
 `data/runs/<accession>/decisions.toml`: for each file (alike files share one entry) **what
 data it holds, whether it goes into WOD, as which WOD dataset, and why** -- documentation,
-ADCP velocities, mooring records and sediment are left out with the reason. Nothing is
-processed. **Review the file** and change what you disagree with (`include`, `dataset`,
-`drop` a variable, add `[metadata]` such as the platform). **`confirm`** then writes every
+ADCP velocities and sediment are left out with the reason, and a mooring's instrument records
+are written as WOD MRB profiles, one a day of daily means, each at the depth wod-etl works
+out from the files (listed in the file). Nothing is processed. **Review the file**: the
+decision is include or not -- what the writing needs besides, wod-etl works out, and what it
+cannot is proposed left out with the reason. Change what you disagree with (`include`,
+`dataset`, `drop` a variable, add `[metadata]` such as the platform). **`confirm`** then writes every
 included file as WOD-standard, CF-compliant NetCDF -- Table 3a codes and units, depth from
 pressure where needed, provenance in each file -- and verifies it. Running a command again
 continues from where it stopped and redoes only what changed.
@@ -68,7 +75,7 @@ continues from where it stopped and redoes only what changed.
 | --- | --- |
 | 0 | `run`: decisions written for review · `confirm`: written and verified, or nothing to write |
 | 1 | a stage failed, or a file could not be written -- the message says what, why, and how to fix it |
-| 2 | `confirm`: decisions needed -- fill in what decisions.toml asks (or `run` again if the files changed), then confirm again |
+| 2 | `confirm`: decisions needed -- an entry is missing or malformed (or the files changed: `run` again), then confirm again |
 | 3 | `confirm`: written, but verification flagged the output (see report.md) |
 | 130 | interrupted -- run the same command again to continue |
 

@@ -311,11 +311,25 @@ data file under a long header is not mistaken for one), or one named as document
 attributes (as header text: `MOORING`, `INST_TYPE`, `platform` name the dataset) and its
 variables (as columns: long name and unit, since `TEMPERATURE (C)` says what `T_20` does
 not). A file whose every variable is one value per time step, at a position that does not
-move, over a day or more, is one instrument's record from a mooring: `exclude`, with
-`exclusion = "moored instrument time series"`, `belongs_in_wod = true` and a `time_series`
-summary (platform, instrument, samples, days). In WOD those are MRB, where a profile is
-the concurrent readings of all of a mooring's instruments at one time (manual p.17) -- a
-single record is one level of thousands of profiles, and wod-etl cannot assemble them yet.
+move, over a day or more, is one instrument's record from a mooring: `stage`, dataset
+`MRB`, with a `time_series` summary (platform, instrument, samples, days) and a `mooring`
+one (variables WOD stores in MRB, its serial number, whether it records pressure and its
+usual pressure under water, a depth the file states, position). In WOD a moored buoy's
+profile is the concurrent readings of all of its instruments at one time (manual p.17), kept
+as daily means (p.14), so **a mooring's instruments are triaged together**, after every file
+has been read: grouped into moorings, given the deployment their pressure records show (none:
+the record without its first and last day), and each placed at a depth -- by its pressure,
+the depth its file or file name states, or the mooring's description (a table of serial
+numbers with depths, or positions along the line that the pressure instruments fix:
+`staging/mooring_layout.py`). The `mooring` summary says where (`group`, `deployed`,
+`depth`, `placed_by`, `depth_note`). One that nothing places is proposed left out, its `why`
+saying so; `wod-etl` stages the rest into MRB profiles (orchestration README, *What wod-etl
+works out*). A record that cannot be a level -- nothing in it MRB stores, or several depths
+in one file -- is `exclude`d as a `moored instrument time series`, with the reason.
+
+**Long-format files are located together too:** their `long_format` gets the
+`station_list` beside them that names their casts (of several, the one naming the most); with
+none, they are proposed left out -- their casts would have no position.
 The same shape on a platform that moves, with no depth axis, is an underway record (a keel
 CTD, a thermosalinograph): `exclusion = "underway record along a track"` -- SUR in WOD,
 one cast per position, which wod-etl does not split out yet. A moving record with a depth

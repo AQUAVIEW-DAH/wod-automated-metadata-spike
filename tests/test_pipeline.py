@@ -56,17 +56,6 @@ def env(tmp_path, monkeypatch):
     return acc
 
 
-def _fill(ws: Workspace, **extra):
-    """What the reviewer does here: state the units the long-format recipe asks for."""
-    p = ws.decisions_path
-    s = p.read_text()
-    s = s.replace("Temperature (UNIT?)", "Temperature (deg C)").replace(
-        "Salinity (UNIT?)", "Salinity (PSU)")
-    for old, new in extra.items():
-        s = s.replace(old, new)
-    p.write_text(s)
-
-
 def _set(ws: Workspace, key: str, **fields):
     """Change fields of one [files] entry, as a reviewer edits it."""
     s = ws.decisions_path.read_text()
@@ -118,7 +107,8 @@ class TestRunWritesDecisionsForReview:
         assert files["data/ctd/cast_direct.csv"]["dataset"] == "CTD"
         assert files["data/ctd/cast_direct.csv"]["data"] == "CTD profiles: temperature, salinity"
         long_entry = files["data/0-data/X1_CTD_*.csv"]
-        assert long_entry["include"] is True and "[profiles.x1_ctd]" in long_entry["why"]
+        assert long_entry["include"] is True and "located by X1_StationInfo.csv" in \
+            long_entry["why"]
         assert files["data/0-data/X1_StationInfo.csv"]["include"] is False
         # documentation: its section heading says why, so the entry does not repeat it
         assert files["NCEI-Readme.txt"] == {"data": "NCEI readme", "include": False}
@@ -128,15 +118,17 @@ class TestRunWritesDecisionsForReview:
             "# ==== DOCUMENTATION:")
         assert "#   IN       3 files  as CTD (3)" in text
 
-    def test_nothing_is_processed_and_what_is_still_open_is_said(self, env):
+    def test_nothing_is_processed_and_nothing_but_include_is_asked(self, env):
         r = run_pipeline(str(env))
         ws = Workspace(ACC)
         assert _outputs(ws) == []
-        assert "UNIT?" in ws.decisions_path.read_text()
-        assert any("unit of" in p["what"] for p in r["problems"] if p["blocking"])
+        # How the long-format files become casts is wod-etl's to work out, not the reviewer's.
+        assert set(_decisions(ws)) == {"accession", "metadata", "files"}
+        assert not [p for p in r["problems"] if p["blocking"]]
         report = ws.report_md.read_text()
         assert "decisions written: review them, then confirm" in report
-        assert "## Before confirming" in report and "| `data/ctd/cast_direct.csv` |" in report
+        assert "## Before confirming" not in report
+        assert "| `data/ctd/cast_direct.csv` |" in report and "x1_ctd" in report
 
     def test_running_again_keeps_the_reviewers_edits_and_adds_new_files(self, env):
         run_pipeline(str(env))
@@ -151,15 +143,9 @@ class TestRunWritesDecisionsForReview:
 
 
 class TestConfirmWritesWhatIsIncluded:
-    def test_open_decisions_refuse_then_confirm_writes_everything_included(self, env):
+    def test_confirm_writes_everything_included_with_nothing_filled_in(self, env):
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        r = confirm_pipeline(ACC)
-        assert r["exit_code"] == EXIT_DECISIONS
-        assert any("unit of" in p["what"] for p in r["problems"] if p["blocking"])
-        assert _outputs(ws) == []
-
-        _fill(ws)
         lines, say = _lines()
         r = confirm_pipeline(ACC, progress=say)
         assert r["exit_code"] == EXIT_OK, r["problems"]
@@ -169,7 +155,7 @@ class TestConfirmWritesWhatIsIncluded:
                                 "x1_ctd/3.csv"]
         assert r["stages"]["verify"]["outputs"]["output_verified"] is True
         log = ws.log_path.read_text()
-        assert log.count("cli run ") == 1 and log.count("cli confirm ") == 2
+        assert log.count("cli run ") == 1 and log.count("cli confirm ") == 1
         report = ws.report_md.read_text()
         assert "finished: output written and verified" in report
         assert "## Verification" in report and "| temperature | 1 | degree_C |" in report
@@ -177,7 +163,6 @@ class TestConfirmWritesWhatIsIncluded:
     def test_a_file_left_out_is_not_written(self, env):
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
         _set(ws, "data/ctd/cast_direct.csv", include=False)
         assert confirm_pipeline(ACC)["exit_code"] == EXIT_OK
         assert _sources(ws) == ["x1_ctd/1.csv", "x1_ctd/2.csv", "x1_ctd/3.csv"]
@@ -188,7 +173,6 @@ class TestConfirmWritesWhatIsIncluded:
     def test_a_dataset_changed_by_the_reviewer_overrides_the_classification(self, env):
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
         _set(ws, "data/ctd/cast_direct.csv", dataset="OSD")
         r = confirm_pipeline(ACC)
         assert r["exit_code"] == EXIT_OK, r["problems"]
@@ -198,7 +182,6 @@ class TestConfirmWritesWhatIsIncluded:
 
     def test_confirming_again_with_nothing_changed_redoes_nothing(self, env):
         run_pipeline(str(env))
-        _fill(Workspace(ACC))
         confirm_pipeline(ACC)
         before = json.loads(Workspace(ACC).state_path.read_text())["stages"]
         lines, say = _lines()
@@ -210,7 +193,6 @@ class TestConfirmWritesWhatIsIncluded:
     def test_an_edit_to_another_files_entry_does_not_rewrite_the_output(self, env):
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
         confirm_pipeline(ACC)
         before = json.loads(ws.state_path.read_text())["stages"]["process"]["finished_at"]
         _set(ws, "NCEI-Readme.txt", why="read it: the layout of the bundle")
@@ -218,24 +200,23 @@ class TestConfirmWritesWhatIsIncluded:
         after = json.loads(ws.state_path.read_text())["stages"]
         assert after["process"]["finished_at"] == before and after["check"]["status"] == "done"
 
-    def test_changing_a_unit_restages_and_reprocesses(self, env):
+    def test_a_changed_station_list_restages_and_reprocesses(self, env):
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
         confirm_pipeline(ACC)
-        ws.decisions_path.write_text(ws.decisions_path.read_text().replace(
-            "Salinity (PSU)", "Salinity (psu)"))
+        before = (ws.staging_dir / "profiles" / "x1_ctd" / "1.csv").read_text()
+        (env / "data" / "0-data" / "X1_StationInfo.csv").write_text(
+            STATIONS.replace("142°18’E", "142°19’E"))
+        assert run_pipeline(str(env))["exit_code"] == EXIT_OK
         lines, say = _lines()
         assert confirm_pipeline(ACC, progress=say)["exit_code"] == EXIT_OK
         assert not any("(unchanged)" in l for l in lines
                        if re.search(r"\] (stage|process)\s", l)), lines
-        staged = (ws.staging_dir / "profiles" / "x1_ctd" / "1.csv").read_text()
-        assert "Salinity (psu)" in staged
+        assert (ws.staging_dir / "profiles" / "x1_ctd" / "1.csv").read_text() != before
 
     def test_output_deleted_by_hand_is_rebuilt_not_verified_as_empty(self, env):
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
         assert confirm_pipeline(ACC)["exit_code"] == EXIT_OK
         written = _outputs(ws)
         (ws.processed_dir / written[0]).unlink()
@@ -256,7 +237,6 @@ class TestConfirmOnlyWhatWasReviewed:
     def test_files_that_changed_since_the_run_must_be_reviewed_again(self, env):
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
         (env / "data" / "ctd" / "cast_two.csv").write_text(DIRECT)
         r = confirm_pipeline(ACC)
         assert r["exit_code"] == EXIT_DECISIONS
@@ -269,7 +249,6 @@ class TestConfirmOnlyWhatWasReviewed:
     def test_a_file_without_a_decision_is_not_processed(self, env):
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
         s = ws.decisions_path.read_text()
         block = s[s.index('[files."data/ctd/cast_direct.csv"]'):].split("\n\n")[0]
         ws.decisions_path.write_text(s.replace(block, ""))
@@ -280,7 +259,6 @@ class TestConfirmOnlyWhatWasReviewed:
     def test_include_must_be_true_or_false(self, env):
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
         _set(ws, "data/ctd/cast_direct.csv", include="yes")
         r = confirm_pipeline(ACC)
         assert r["exit_code"] == EXIT_DECISIONS
@@ -303,7 +281,6 @@ class TestFailuresSayWhatToDo:
             "Depth (m),Temperature (deg C)\n10,20\n")
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
         real = pa.process_one_file
 
         def failing(url, *a, **k):
@@ -324,8 +301,6 @@ class TestFailuresSayWhatToDo:
     def test_a_transient_failure_fails_the_stage_and_confirming_again_resumes(self, env,
                                                                                 monkeypatch):
         run_pipeline(str(env))
-        ws = Workspace(ACC)
-        _fill(ws)
         real = pa.process_one_file
         calls = []
 
@@ -347,7 +322,6 @@ class TestFailuresSayWhatToDo:
     def test_ctrl_c_stops_cleanly_and_confirming_again_continues(self, env, monkeypatch):
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
         real = pa.process_one_file
 
         def interrupt_on_second(url, *a, **k):
@@ -401,8 +375,7 @@ class TestCommandLine:
         assert main(["run", str(env)]) == EXIT_OK
         out = capsys.readouterr().out
         assert "Decisions written:" in out and f"uv run wod-etl confirm {ACC}" in out
-        assert "Fill these in before confirming" in out
-        _fill(Workspace(ACC))
+        assert "before confirming" not in out              # nothing to fill in
         assert main(["confirm", ACC]) == EXIT_OK
         out = capsys.readouterr().out
         assert "4 cast(s) in 1 file(s) written and verified" in out
@@ -413,12 +386,10 @@ class TestCommandLine:
 
     def test_a_refused_confirm_does_not_list_earlier_output_as_written(self, env, capsys):
         assert main(["run", str(env)]) == EXIT_OK
-        _fill(Workspace(ACC))
         assert main(["confirm", ACC]) == EXIT_OK
         assert "Output:" in capsys.readouterr().out
         ws = Workspace(ACC)
-        ws.decisions_path.write_text(ws.decisions_path.read_text().replace(
-            "Salinity (PSU)", "Salinity (UNIT?)"))
+        _set(ws, "data/ctd/cast_direct.csv", include="yes")
         assert main(["confirm", ACC]) == EXIT_DECISIONS
         assert "Output:" not in capsys.readouterr().out
 
@@ -446,7 +417,6 @@ class TestCommandLine:
 
     def test_from_redoes_a_finished_stage(self, env):
         run_pipeline(str(env))
-        _fill(Workspace(ACC))
         confirm_pipeline(ACC)
         lines, say = _lines()
         assert confirm_pipeline(ACC, from_stage="process", progress=say)["exit_code"] == EXIT_OK
@@ -456,7 +426,7 @@ class TestCommandLine:
 
 
 class TestOtherRecipeKinds:
-    def test_per_file_recipe(self, env):
+    def test_a_recipe_written_by_hand_is_not_read(self, env):
         d = env / "data" / "casts"
         d.mkdir()
         for st in (1, 2):
@@ -464,18 +434,17 @@ class TestOtherRecipeKinds:
                                            + "".join(f"{z},{20 - z / 10}\n" for z in range(15)))
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
-        # Nothing in the casts names an instrument or locates them: the reviewer includes
-        # them (triage's guess from the depth spacing) and says how they are located.
-        _set(ws, "data/casts/*", include=True, dataset="CTD")
+        # Nothing in the casts locates them, and a recipe saying how is a specific the
+        # decisions do not hold: an agent's staging script does (kind = "script").
+        _set(ws, "data/casts/*", include=False)
         with open(ws.decisions_path, "a") as fh:
             fh.write('\n[profiles.casts]\nkind = "per_file"\n'
                      'files = ["data/casts/stn1.csv", "data/casts/stn2.csv"]\n'
-                     "station_pattern = '(\\d+)$'\n"
                      'station_list = "data/0-data/X1_StationInfo.csv"\n')
         r = confirm_pipeline(ACC)
         assert r["exit_code"] == EXIT_OK, r["problems"]
-        assert {"casts/1.csv", "casts/2.csv"} <= set(_sources(ws))
+        assert any("[profiles.casts] is no longer read" in p["what"] for p in r["problems"])
+        assert not {"casts/1.csv", "casts/2.csv"} & set(_sources(ws))
 
     def test_script_recipe_is_the_escape_hatch(self, env, tmp_path):
         from wod_etl import config
@@ -493,7 +462,6 @@ class TestOtherRecipeKinds:
             "sys.stdout.buffer.write(b'caf\\xe9 in latin-1\\n')\n")
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        _fill(ws)
         with open(ws.decisions_path, "a") as fh:
             fh.write(f'\n[profiles.custom]\nkind = "script"\nscript = \'{script}\'\n')
         r = confirm_pipeline(ACC)
@@ -513,8 +481,8 @@ class TestOtherRecipeKinds:
         assert "cannot find the readme" in r["problems"][0]["why"]
 
 
-class TestWhatThePipelineCannotWriteYet:
-    def test_mooring_records_are_left_out_with_why_and_nothing_is_written(self, env, tmp_path):
+class TestAMooringBecomesMRB:
+    def test_a_moored_instrument_is_written_as_daily_mrb_profiles(self, env, tmp_path):
         from helpers import JPEG_HEAD, write_mooring_nc
 
         acc = tmp_path / "src" / "0999998"
@@ -524,14 +492,26 @@ class TestWhatThePipelineCannotWriteYet:
         write_mooring_nc(acc / "data" / "0-data" / "18bs8a_s39_0051m.cf.nc")
         assert run_pipeline(str(acc))["exit_code"] == EXIT_OK
         ws = Workspace("0999998")
-        entry = _decisions(ws)["files"]["data/0-data/18bs8a_s39_0051m.cf.nc"]
-        assert entry["include"] is False and "MRB" in entry["why"]
+        d = _decisions(ws)
+        assert "profiles" not in d                           # nothing to fill in
+        entry = d["files"]["data/0-data/18bs8a_s39_0051m.cf.nc"]
+        assert (entry["include"], entry["dataset"]) == (True, "MRB")
+        # It records no pressure: its record without the first and last day, as said.
+        assert "first and last day" in entry["why"]
+        assert "19.8 m  from its nominal pressure" in ws.decisions_path.read_text()
         r = confirm_pipeline("0999998")
         assert r["exit_code"] == EXIT_OK, r["problems"]
-        assert not r["problems"]
+        recipe = r["stages"]["check"]["outputs"]["plan"]["profiles"]["18bs8a"]
+        assert recipe["kind"] == "mooring" and recipe["metadata"] == {"cruise": "18bs8a"}
+        assert recipe["depths"]["18bs8a_s39_0051m.cf.nc"] == pytest.approx(19.8, abs=0.1)
+        [out] = r["stages"]["process"]["outputs"]["files"]
+        # 30 days of hourly samples: the first and the last day are left out, 29 remain
+        assert (out["name"], out["dataset"], out["casts"]) == ("wod_mrb_2017_0999998.nc",
+                                                               "MRB", 29)
+        assert r["stages"]["verify"]["outputs"]["output_verified"] is True
         report = ws.report_md.read_text()
-        assert "finished: nothing to write" in report and "Plankton" not in report
-        assert "moored instrument record: Seabird SBE-39 at one place" in report
+        assert "Recipe 18bs8a: 29 cast file(s) staged" in report
+        assert "### Mooring 18bs8a: where wod-etl places its instruments" in report
 
 
 class TestACodeChangeDoesNotSendTheReviewBack:
@@ -540,7 +520,6 @@ class TestACodeChangeDoesNotSendTheReviewBack:
         from wod_etl.orchestration import pipeline
 
         run_pipeline(str(env))
-        _fill(Workspace(ACC))
         real = pipeline._code_hash
         monkeypatch.setattr(pipeline, "_code_hash",
                             lambda parts: "changed" if parts == pipeline.TRIAGE_CODE
@@ -549,10 +528,34 @@ class TestACodeChangeDoesNotSendTheReviewBack:
         assert r["exit_code"] == EXIT_OK, r["problems"]
         assert "triages the files as reviewed" in Workspace(ACC).log_path.read_text()
 
+    def test_what_the_new_code_works_out_is_what_confirm_uses(self, env, tmp_path,
+                                                                 monkeypatch):
+        """A mooring triaged before its depths were worked out: the new code places it the
+        same for the review, and confirm stages it from the new triage, not the old one."""
+        from helpers import write_mooring_nc
+        from wod_etl.orchestration import pipeline
+
+        acc = tmp_path / "src" / "0999998"
+        (acc / "data").mkdir(parents=True)
+        write_mooring_nc(acc / "data" / "18bs8a_s39_0051m.cf.nc")
+        assert run_pipeline(str(acc))["exit_code"] == EXIT_OK
+        ws = Workspace("0999998")
+        old = json.loads(ws.triage_path.read_text())
+        for f in old["files"]:
+            for k in ("group", "placed_by", "depth_note", "depth_short", "deployed"):
+                (f.get("mooring") or {}).pop(k, None)
+        ws.triage_path.write_text(json.dumps(old))
+        real = pipeline._code_hash
+        monkeypatch.setattr(pipeline, "_code_hash",
+                            lambda parts: "changed" if parts == pipeline.TRIAGE_CODE
+                            else real(parts))
+        r = confirm_pipeline("0999998")
+        assert r["exit_code"] == EXIT_OK, r["problems"]
+        assert r["stages"]["process"]["outputs"]["files"][0]["casts"] == 29
+        assert json.loads(ws.triage_path.read_text())["files"][0]["mooring"]["placed_by"]
+
     def test_a_refused_confirm_reports_only_why_it_was_refused(self, env, monkeypatch):
         run_pipeline(str(env))
-        ws = Workspace(ACC)
-        _fill(ws)
         real = pa.process_one_file
         monkeypatch.setattr(pa, "process_one_file", lambda url, *a, **k: (
             {"ok": False, "stage": "mapping", "error": "boom"} if url.endswith("2.csv")
@@ -562,3 +565,28 @@ class TestACodeChangeDoesNotSendTheReviewBack:
         r = confirm_pipeline(ACC)
         assert r["exit_code"] == EXIT_DECISIONS
         assert [p["stage"] for p in r["problems"]] == ["check"]
+
+
+class TestLongFormatFilesAreLocatedByTheirStationList:
+    @staticmethod
+    def _triage(root):
+        from wod_etl.discovery import classify_accession
+
+        return {f["path"]: f for f in classify_accession(str(root))["files"]}
+
+    def test_without_a_station_list_they_are_proposed_out_saying_why(self, tmp_path):
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "X1_CTD_Temp.csv").write_text(_long("Temperature"))
+        f = self._triage(tmp_path)["data/X1_CTD_Temp.csv"]
+        assert f["include"] is False and "its casts cannot be located" in f["why"]
+
+    def test_of_two_station_lists_the_one_naming_their_casts(self, tmp_path):
+        d = tmp_path / "data"
+        d.mkdir()
+        (d / "X1_CTD_Temp.csv").write_text(_long("Temperature"))
+        (d / "X1_StationInfo.csv").write_text(STATIONS)
+        (d / "Y2_StationInfo.csv").write_text(STATIONS.replace("X1,1,", "Y2,91,").replace(
+            "X1,2,", "Y2,92,").replace("X1,3,", "Y2,93,"))
+        f = self._triage(tmp_path)["data/X1_CTD_Temp.csv"]
+        assert f["long_format"]["station_list"] == "data/X1_StationInfo.csv"
+        assert f["include"] is True and "located by X1_StationInfo.csv" in f["why"]

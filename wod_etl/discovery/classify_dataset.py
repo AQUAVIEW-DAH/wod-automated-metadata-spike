@@ -23,6 +23,7 @@ Two verdicts matter and they are different:
     instrument. `candidates` holds what it might be; do not guess silently.
 """
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -275,14 +276,15 @@ SIDECAR = {
 # (manual p.17), so a file like this is one level of thousands of profiles. Decided by the
 # file's shape, not its words: a SBE-37 on a mooring names a CTD maker.
 MOORED_SERIES = "moored instrument time series"
+# Such a file is staged into MRB profiles by a mooring recipe (wod_etl/staging/moorings.py).
+# This is the exclusion for one that cannot be: nothing in it is a variable MRB stores, or
+# it holds several depths, which a mooring recipe does not read yet.
 MOORED = {
     "route": "Belongs in WOD as MRB (moored buoy), where a profile is the concurrent "
-             "readings of a mooring's instruments at their depths at one time (manual p.17). "
-             "Building those means combining every instrument of a deployment by time, "
-             "which wod-etl does not do yet: these files are not written.",
+             "readings of a mooring's instruments at their depths at one time (manual p.17), "
+             "but this file cannot become one of its levels.",
     "belongs_in_wod": True,
-    "why": "a mooring's record belongs in WOD as MRB, where one profile is all of a "
-           "mooring's instruments at one time; wod-etl cannot build MRB profiles yet",
+    "why": "a mooring's record that cannot become an MRB level",
 }
 # The same shape on a platform that moves, with no depth axis: a keel CTD or a
 # thermosalinograph logging along a track. In WOD each position is its own surface cast
@@ -498,14 +500,42 @@ def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Di
                 "is_wod_profile_data": False, "exclusion": None, "evidence": [],
                 "unstorable_columns": [], "long_format": None})
     series = (nc or {}).get("time_series")
+    mooring = None
     if series and not verdict.get("exclusion"):
-        kind, cat = (UNDERWAY_SERIES, UNDERWAY) if series["moving"] else (MOORED_SERIES, MOORED)
         what = (f"{'along a track' if series['moving'] else 'one instrument at one place'}"
                 + (f" ({series['instrument']})" if series.get("instrument") else "")
                 + f": {series['samples']} samples over {series['days']} days")
-        verdict = {**verdict, "is_wod_profile_data": False, "exclusion": {
-            **cat, "reason": kind, "harvest": None, "matched_in": "shape",
-            "confidence": "high", "matched": what, "evidence": [what]}}
+        # One instrument at one place: a level of a mooring's MRB profiles, built with the
+        # mooring's other instruments by a mooring recipe -- unless the file cannot be one.
+        info = None if series["moving"] else _instrument(p)
+        if info is not None and not info.get("error"):
+            # The model, not the serial number: alike instruments share one decision.
+            from wod_etl.staging.moorings import in_water
+
+            water = in_water(p, info) if info.get("pressure") else {}
+            mooring = {"platform": series.get("platform"),
+                       "instrument": series.get("instrument") or info.get("model"),
+                       "serial": info.get("serial"),
+                       "days": series["days"], "samples": series["samples"],
+                       "variables": [v["column"] for v in info["variables"]],
+                       "pressure": bool(info.get("pressure")), "depth": info.get("depth"),
+                       "depth_source": info.get("depth_source"),
+                       "latitude": info.get("latitude"), "longitude": info.get("longitude"),
+                       # When it was under water, and its usual pressure there, by its
+                       # pressure; and what it recorded: the deployment, and the depths of
+                       # the instruments that record no pressure, are worked out from these.
+                       "wet": water.get("window"), "usual_pressure": water.get("pressure"),
+                       "record": info.get("record")}
+            verdict = {**verdict, "dataset_type": "MRB", "is_wod_profile_data": True,
+                       "confidence": "high",
+                       "evidence": [what] + list(verdict.get("evidence") or [])}
+        else:
+            kind, cat = ((UNDERWAY_SERIES, UNDERWAY) if series["moving"] else
+                         (MOORED_SERIES, {**MOORED, "why": f"a mooring's record, but "
+                                                          f"{info['error']}"}))
+            verdict = {**verdict, "is_wod_profile_data": False, "exclusion": {
+                **cat, "reason": kind, "harvest": None, "matched_in": "shape",
+                "confidence": "high", "matched": what, "evidence": [what]}}
     density = (_column_density(head, fmt, columns) if readable and not bundle and not nc
                else None)
     long_format = verdict.get("long_format")
@@ -538,6 +568,10 @@ def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Di
                                         "a track of surface casts, not a profile"))
     elif exclusion:
         action, reason = "exclude", f"not WOD profile data: {exclusion['reason']}"
+    elif mooring:
+        action, reason = "stage", (f"{MOORED_SERIES}: one level of the mooring's MRB "
+                                   f"profiles, one a day, built with its other instruments by "
+                                   f"a mooring recipe")
     elif long_format:
         action, reason = "stage", long_format["action"]
     elif verdict.get("dataset_type"):
@@ -567,6 +601,7 @@ def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Di
         "columns": columns or None,
         "sampled_rows": (density or {}).get("sampled_rows"),
         "time_series": series,
+        "mooring": mooring,
         "copies": (nc or {}).get("copies") or None,
         "evidence": verdict["evidence"][:3],
     }
@@ -639,6 +674,13 @@ def _summary(entry, verdict, exclusion, fmt, bundle, instrument: str = "") -> Di
                        + "".join(f"; {n}" for n in notes)
                        + (" -- a weak guess: check the dataset"
                           if verdict.get("confidence") == "low" else "")}
+    if action == "stage" and entry.get("mooring"):
+        m = entry["mooring"]
+        names = ", ".join(n.lower() for n in _variable_names(m["variables"], "MRB"))
+        return {**out, "dataset": "MRB",
+                "data": f"moored instrument record: {m.get('instrument') or 'one instrument'} "
+                        f"at one place, {m['days']} days: {names or 'nothing WOD stores'}",
+                "why": MOORING_WHY}
     if action == "stage":
         # The variables are not named here: they differ file by file ('Temp', 'Salinity')
         # while the files are one table split up, and the reshaping recipe lists them.
@@ -666,6 +708,179 @@ def _summary(entry, verdict, exclusion, fmt, bundle, instrument: str = "") -> Di
                                                       " and there is no depth axis"))
                      if entry["readable"] else "nothing here can read it")
                    + ": left out until someone says what it is"}
+
+
+MOORING_WHY = ("a mooring's instrument: with its others it makes WOD MRB profiles, one a day "
+               "of daily means (manual pp.14, 17)")
+
+
+def _place_moorings(base: Path, files: List[Dict[str, Any]]) -> None:
+    """A mooring's instruments, placed and proposed together, since what one can be depends
+    on the others: when the mooring was in the water is read from the pressure its
+    instruments record, and a logger that records none is placed by its file, its file name,
+    or the mooring's description -- whose positions along the line the pressure instruments
+    turn into depths (wod_etl/staging/mooring_layout.py).
+
+    Each instrument's `mooring` gets its `group`, the `deployed` window (or None) and how it
+    was found (`deployment`), and `depth`, `placed_by` and `depth_note`; an instrument that
+    cannot be a level -- no depth, or no deployment to go by -- is proposed left out, and its
+    `why` says what is missing."""
+    from wod_etl.staging.mooring_layout import depth_from_name, find_layout, place_instruments
+    from wod_etl.staging.moorings import deployment, group_moorings
+    from wod_etl.staging.parse import pressure_to_depth
+
+    members = [f for f in files if f["action"] == "stage" and f.get("mooring")]
+    # A description is a small file that is not data: never a cast or a table to stage.
+    texts = [f["path"] for f in files if not f.get("mooring")
+             and f["action"] not in ("process", "stage")
+             and (base / f["path"]).is_file()
+             and (base / f["path"]).stat().st_size <= 2_000_000]
+    for label, group in group_moorings(members):
+        found = deployment([m["mooring"].get("wet") for m in group])
+        records = [m["mooring"]["record"] for m in group if m["mooring"].get("record")]
+        if found["how"] == "none" and records:
+            # Nothing says when it went in: its record, without its first and last day --
+            # the days a logger may have spent on deck, recording air.
+            first = math.floor(min(r[0] for r in records) / 86400.0) + 1
+            last = math.floor(max(r[1] for r in records) / 86400.0)
+            if last > first:
+                found = {"window": [first * 86400.0, last * 86400.0 - 1.0], "how": "record"}
+        known: Dict[str, Dict[str, Any]] = {}
+        for m in group:
+            info, name = m["mooring"], m["path"].rsplit("/", 1)[-1]
+            lat = info.get("latitude") if info.get("latitude") is not None else 45.0
+            if info.get("usual_pressure"):
+                depth = round(pressure_to_depth(info["usual_pressure"], lat), 1)
+                known[m["path"]] = {"depth": depth, "placed_by": "pressure",
+                                    "depth_note": f"by its pressure (usually "
+                                                  f"{info['usual_pressure']:.1f} dbar, "
+                                                  f"{depth:.1f} m)",
+                                    "depth_short": "its pressure, day by day (usual depth)"}
+            elif info.get("depth") is not None:
+                known[m["path"]] = {"depth": float(info["depth"]), "placed_by": "file",
+                                    "depth_note": f"{info['depth']:g} m, from "
+                                                  f"{info.get('depth_source') or 'its file'}",
+                                    "depth_short": f"from {info.get('depth_source') or 'its file'}"}
+            elif depth_from_name(name) is not None:
+                known[m["path"]] = {"depth": depth_from_name(name), "placed_by": "name",
+                                    "depth_note": f"{depth_from_name(name):g} m, from its "
+                                                  f"file name",
+                                    "depth_short": "from its file name"}
+        unplaced: Dict[str, str] = {}
+        wanted = [m for m in group if m["path"] not in known]
+        if wanted:
+            folder = group[0]["path"].rsplit("/", 1)[0] if "/" in group[0]["path"] else ""
+            layout = None
+            # The description beside the files first, then in each folder above them.
+            while layout is None:
+                here = [t for t in texts if (t.rsplit("/", 1)[0] if "/" in t else "") == folder]
+                layout = find_layout([(t.rsplit("/", 1)[-1], base / t) for t in here],
+                                     [m["mooring"] for m in group])
+                if not folder:
+                    break
+                folder = folder.rsplit("/", 1)[0] if "/" in folder else ""
+            if layout is not None:
+                res = place_instruments(layout, [
+                    {"name": m["path"], "label": m["path"].rsplit("/", 1)[-1],
+                     "serial": m["mooring"].get("serial"),
+                     "depth": (known.get(m["path"]) or {}).get("depth"),
+                     "by_pressure": (known.get(m["path"]) or {}).get("placed_by") == "pressure"}
+                    for m in group])
+                for path, p in res["placed"].items():
+                    known[path] = {"depth": p["depth"], "placed_by": f"description:{p['how']}",
+                                   "depth_note": f"{p['depth']:.1f} m: {p['detail']}",
+                                   "depth_short": p["short"], "description": layout["file"]}
+                unplaced.update(res["unplaced"])
+        for m in group:
+            info = m["mooring"]
+            info.update({"group": label, "deployed": found["window"],
+                         "deployment": found["how"], "placed_by": None, "depth_note": None,
+                         "depth_short": None})
+            info.update(known.get(m["path"]) or {})
+            source = info.get("placed_by") or ""
+            if found["how"] == "none":
+                m.update(include=False, why=(
+                    "a mooring's instrument, but none of its mooring's instruments records "
+                    "pressure, and its record is too short to leave out the days it may have "
+                    "spent on deck: when it was in the water cannot be told"))
+            elif found["how"] == "apart":
+                m.update(include=False, why=(
+                    "a mooring's instrument, but its mooring's pressure records do not overlap "
+                    "in time: which deployment it belongs to cannot be told"))
+            elif info.get("depth") is None and source != "pressure":
+                m.update(include=False, why=(
+                    "a mooring's instrument, but its depth is not known: it records no "
+                    "pressure, and its file states none"
+                    + (f"; {unplaced[m['path']]}" if m["path"] in unplaced else
+                       " -- and no description in the accession lists its serial number")))
+            else:
+                m["why"] = MOORING_WHY + ({
+                    "pressure": "; placed by the pressure it records",
+                    "file": "; at the depth its file states",
+                    "name": "; at the depth its file name states",
+                }.get(source) or (f"; at the depth {info.get('description')} gives it -- "
+                                  f"stated, or its place on the line fixed by the pressure of "
+                                  f"an instrument on it (each listed above the entry)")) + (
+                    "; no instrument on its mooring records pressure, so the first and last "
+                    "day of the record -- when it may have been on deck -- are left out"
+                    if found["how"] == "record" else "")
+
+
+_KEY_IS_DEPTH = re.compile(r"^(depth|dep|z|pres|press|pressure|prdm|depsm)", re.IGNORECASE)
+
+
+def _locate_long_format(base: Path, files: List[Dict[str, Any]]) -> None:
+    """Long-format files, located together: their casts take their positions and dates from
+    the station list beside them (`long_format["station_list"]`) -- the one there is, or of
+    several the one naming the most of their casts. With none to go by, their casts have no
+    position, and they are proposed left out, saying so."""
+    from wod_etl.staging import normalise_station, read_station_list, read_table
+
+    parent = lambda path: path.rsplit("/", 1)[0] if "/" in path else ""
+    folders: Dict[str, List[Dict[str, Any]]] = {}
+    for f in files:
+        if f["action"] == "stage" and f.get("long_format") and not f.get("mooring"):
+            folders.setdefault(parent(f["path"]), []).append(f)
+    for folder, members in folders.items():
+        lists = [f["path"] for f in files if f["action"] == "sidecar"
+                 and parent(f["path"]) == folder]
+        chosen, why = (lists[0], None) if len(lists) == 1 else (None, None)
+        if not lists:
+            why = "no station list beside it gives their positions and dates"
+        elif len(lists) > 1:
+            casts = set()
+            for m in members:
+                keys = m["long_format"]["key_columns"]
+                key = next((k for k in keys if not _KEY_IS_DEPTH.match(k)), keys[0])
+                try:
+                    cols, rows = read_table(base / m["path"])[:2]
+                    i = cols.index(key)
+                except (OSError, ValueError, IndexError):
+                    continue
+                casts |= {normalise_station(r[i]) for r in rows
+                          if i < len(r) and str(r[i]).strip()}
+            scores = []
+            for sl in lists:
+                try:
+                    stations, info = read_station_list(base / sl)
+                except (OSError, ValueError):
+                    continue
+                if not info.get("error"):
+                    scores.append((len(casts & set(stations)), sl))
+            scores.sort(reverse=True)
+            if scores and scores[0][0] and (len(scores) == 1 or scores[0][0] > scores[1][0]):
+                chosen = scores[0][1]
+            else:
+                why = (f"{len(lists)} station lists beside it, and none names more of its "
+                       f"casts than another")
+        for m in members:
+            m["long_format"]["station_list"] = chosen
+            if chosen:
+                m["why"] = f"{m['why']}; located by {chosen.rsplit('/', 1)[-1]}"
+            else:
+                m.update(include=False, why=f"measurements named in a column rather than a "
+                                            f"header row, but its casts cannot be located: "
+                                            f"{why}")
 
 
 # A text file named as documentation is documentation, whatever its body sniffs as -- a
@@ -821,6 +1036,8 @@ def _classify_accession(root, max_files, peek_bytes) -> Dict[str, Any]:
         entry["verdict"] = _folder_verdict(folder, entry)
         entry["cross_file_shape"] = _cross_file_shape(entry)
 
+    _place_moorings(base, files)
+    _locate_long_format(base, files)
     shapes = {f: e["cross_file_shape"] for f, e in folders.items() if e["cross_file_shape"]}
     by_action = {a: [f["path"] for f in files if f["action"] == a] for a in FILE_ACTIONS}
     return {
@@ -1241,6 +1458,14 @@ def _nc_column(name: str, v) -> str:
     if units and "since" not in units and f"({units.lower()})" not in label.lower():
         label = f"{label} ({units})"
     return label
+
+
+def _instrument(path) -> Dict[str, Any]:
+    """What a mooring recipe would read from one instrument's file (its variables, depth,
+    pressure, position) -- or its error."""
+    from wod_etl.staging.moorings import read_instrument
+
+    return read_instrument(path)
 
 
 def _time_series(ds, variables, np) -> Optional[Dict[str, Any]]:

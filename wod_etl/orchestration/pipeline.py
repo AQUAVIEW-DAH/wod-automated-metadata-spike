@@ -335,7 +335,8 @@ def _epoch(iso: Optional[str]) -> Optional[float]:
 # The code a stage's output comes from is part of its fingerprint, committed or not: a fixed
 # classifier or writer must not leave the triage, or the profiles, it made before standing.
 TRIAGE_CODE = ("wod_etl/discovery", "wod_etl/mapping", "wod_etl/reference",
-               "knowledge/wod_code_tables")
+               "knowledge/wod_code_tables", "wod_etl/staging/moorings.py",
+               "wod_etl/staging/mooring_layout.py")
 OUTPUT_CODE = TRIAGE_CODE + ("wod_etl/qc_transforms", "wod_etl/writers", "wod_etl/staging",
                              "wod_etl/verify", "wod_etl/orchestration/process_accession.py",
                              "wod_etl/orchestration/recipes.py")
@@ -398,10 +399,13 @@ def _decision_hash(report: Dict[str, Any]) -> str:
 
 # --------------------------------------------------------------------- 4 decide, 5 check
 def _decision_sources(decisions: Dict[str, Any]) -> List[str]:
+    """The files the decisions name beyond the triaged ones: a script recipe's, and an older
+    file's cross-check sources."""
     keys = set()
     for r in (decisions.get("profiles") or {}).values():
-        keys |= set(r.get("files") or []) | {r.get("station_list")}
-    keys |= {c.get("file") for c in decisions.get("cross_check") or []}
+        if isinstance(r, dict):
+            keys |= set(r.get("files") or []) | {r.get("station_list")}
+    keys |= {c.get("file") for c in decisions.get("cross_check") or [] if isinstance(c, dict)}
     return sorted(k for k in keys if k and k != dec.PLACEHOLDER)
 
 
@@ -415,9 +419,10 @@ def _fp_decisions(run: Run) -> str:
 
 
 def _settle(run: Run, stage: str, propose: bool) -> Dict[str, Any]:
-    """Append what the decisions file lacks -- an entry for every file no entry decides,
-    when `propose`, and every new station conflict -- then validate it. Returns the outcome's
-    outputs and problems, or `error` when the file cannot be read."""
+    """Append an entry for every file no entry decides, when `propose`, then validate the
+    decisions and work out the plan: the recipes wod-etl derives from the files, checked as
+    they will run, and the station lists they locate casts by, checked along their track.
+    Returns the outcome's outputs and problems, or `error` when the file cannot be read."""
     from wod_etl.orchestration.recipes import check_profile_recipe
 
     ws, triage = run.ws, run.triage()
@@ -432,26 +437,19 @@ def _settle(run: Run, stage: str, propose: bool) -> Dict[str, Any]:
         decisions, err = run.decisions()
         if err:
             return {"error": err}
-    conflicts, warnings = dec.crosscheck(decisions, run.data_root)
-    added += dec.append(ws.decisions_path, dec.conflict_sections(conflicts, decisions),
-                        ws.accession, label)
-    decisions, err = run.decisions()
-    if err:
-        return {"error": err}
-    checks = {name: check_profile_recipe(r, run.data_root)
-              for name, r in (decisions.get("profiles") or {}).items()}
+    recipes = dec.build_plan(decisions, triage, [])["profiles"]
+    conflicts, warnings = dec.crosscheck(decisions, run.data_root, recipes, triage)
+    # Checked as the plan will run them: only the files still included.
+    checks = {name: check_profile_recipe(r, run.data_root) for name, r in recipes.items()}
     items, plan = dec.validate(decisions, triage, checks, conflicts)
     problems = [remedies.for_open_item(i, stage) for i in items]
-    problems += [remedies.problem(stage, w, "a cross-check source could not be read",
-                                  "Fix the [[cross_check]] entry, or remove it.",
+    problems += [remedies.problem(stage, w, "a source of station positions could not be read",
+                                  "Nothing to do: the check is skipped.",
                                   blocking=False, kind="warning") for w in warnings]
     for c in conflicts:
-        entry = (decisions.get("conflicts") or {}).get(c["id"]) or {}
-        if entry.get("resolution"):
-            runlog.event(log, logging.INFO, f"conflict {c['id']} settled as "
-                                            f"{entry['resolution']!r}: {c['what']}",
-                         kind="decision", id=c["id"], resolution=entry["resolution"],
-                         note=entry.get("note"))
+        runlog.event(log, logging.WARNING, f"station check {c['id']}: {c['what']} -- the "
+                                           f"station list is kept",
+                     kind="station_check", id=c["id"], values=c.get("values"))
     included = len(plan["direct"]) + sum(len(r.get("files") or [])
                                          for r in plan["profiles"].values())
     return {"outputs": {"plan": plan, "conflicts": conflicts, "recipe_checks": checks,
@@ -479,7 +477,7 @@ def stage_decide(run: Run, changed: bool) -> Dict[str, Any]:
                f"out ({out['entries_added']} entr{'y' if out['entries_added'] == 1 else 'ies'} "
                f"added)")
     if res["blocking"]:
-        summary += f"; {len(res['blocking'])} to fill in before confirming"
+        summary += f"; {len(res['blocking'])} to settle before confirming"
     return _outcome("done", summary, out, res["problems"])
 
 
@@ -492,7 +490,7 @@ def stage_check(run: Run, changed: bool) -> Dict[str, Any]:
                         problems=[remedies.for_decisions_syntax(res["error"], "check")])
     out, plan = res["outputs"], res["outputs"]["plan"]
     if res["blocking"]:
-        return _outcome("blocked", f"{len(res['blocking'])} decision(s) to fill in",
+        return _outcome("blocked", f"{len(res['blocking'])} decision(s) to settle",
                         out, res["problems"])
     for p, ds in plan["dataset_overrides"].items():
         options = (plan.get("file_options") or {}).get(p) or {}
@@ -532,8 +530,10 @@ def _not_ready(run: Run) -> Optional[Dict[str, Any]]:
                 and fp is not None and _triages_as_reviewed(run):
             # The code changed but sorts the files exactly as before: what was reviewed
             # still describes them, so a new version of wod-etl does not send the person
-            # back to review.
+            # back to review. What it works out besides -- a mooring logger's depth -- is the
+            # new code's, so its triage replaces the old.
             prior.update({"fingerprint": fp, "left": _left_behind(run, name)})
+            prior.setdefault("outputs", {})["triage_hash"] = _hash(run.triage())
             runlog.event(log, logging.INFO, "triage: the code changed, but it triages the "
                                             "files as reviewed", kind="triage_rechecked")
             current = True
@@ -558,7 +558,10 @@ def _triages_as_reviewed(run: Run) -> bool:
         report = classify_accession(run.data_root, accession=run.ws.accession)
     except Exception:                                   # noqa: BLE001 - then it is not
         return False
-    return bool(recorded) and not report.get("error") and _decision_hash(report) == recorded
+    same = bool(recorded) and not report.get("error") and _decision_hash(report) == recorded
+    if same:
+        write_json_atomic(run.ws.triage_path, report)
+    return same
 
 
 # --------------------------------------------------------------------- 6 stage
@@ -604,8 +607,8 @@ def stage_stage(run: Run, changed: bool) -> Dict[str, Any]:
             problems.append(remedies.problem(
                 "stage", f"recipe [profiles.{name}] could not be run",
                 f"{type(e).__name__}: {e}",
-                f"Fix [profiles.{name}] in decisions.toml (files, keys, station list, "
-                f"columns) and confirm again.", decisions_key=f"profiles.{name}"))
+                "Set include = false in decisions.toml on the file(s) it cannot stage, "
+                "and confirm again.", decisions_key=f"profiles.{name}"))
     if problems:
         shutil.rmtree(building, ignore_errors=True)
         return _outcome("failed", f"{len(problems)} recipe(s) failed", problems=problems)

@@ -58,10 +58,10 @@ reads, **and the code it runs** -- and of the files it wrote. Running the comman
 
 - **skips** a stage that is done, whose fingerprint is unchanged and whose output is as it
   left it;
-- **reruns from scratch** a stage whose fingerprint changed, clearing only what it owns: an
-  edited unit restages and reprocesses the casts, a fixed writer rewrites the output, and an
-  edit to another file's entry leaves the profiles alone. Output deleted or edited by hand
-  is rebuilt the same way;
+- **reruns from scratch** a stage whose fingerprint changed, clearing only what it owns: a
+  file left out restages and reprocesses the casts, a fixed writer rewrites the output, and
+  an edit to another file's entry leaves the profiles alone. Output deleted or edited by
+  hand is rebuilt the same way;
 - **resumes** a stage that failed with unchanged inputs: the process stage retries only the
   files that failed (its manifests are `<acc>_direct` and `<acc>_staged`, so per-file resume
   works across invocations);
@@ -76,56 +76,57 @@ same machine is taken over.
 
 ### `decisions.toml`
 
+**The person decides one thing per file: include it or not.** Everything else the writing
+needs -- how a file is reshaped into casts, where a mooring's loggers are, which station
+list locates a table's casts -- wod-etl works out from the files, says in the entry's `why`,
+and never asks for. What it cannot work out is proposed left out, and the `why` says what is
+missing; there is nothing to fill in instead.
+
 Written by `run`, then **only appended to** -- nothing typed into it is ever rewritten. An
 entry per file, alike files sharing one under a `*` pattern; an entry for one file overrides
 a pattern that also matches it. A `*` stays within one folder.
 
 ```toml
 [files."data/0-data/LeConte_*_CTD_*.nc"]       # 4 files: ...
+include = true
+dataset = "CTD"
 data = "CTD profiles: temperature, salinity"
-include = true
-dataset = "CTD"
-why = "CTD by its path ('CTD') and depth increment 1.00 m is high-resolution (< 2.0 m); ..."
+why = "CTD by its path ('CTD') and levels 1.00 m apart (< 2.0 m); ..."
 
-[files."data/0-data/LeConte_Sept2018_CTD_ship_data.nc"]
-data = "CTD profiles: temperature"
+# 17 files: RBRsolo_SN100020.nc, ...
+# Depths, as wod-etl places them:
+#   RBRsolo_SN100028.nc    37.7 m  45 m up the line from point 1 (82.7 m by SBE37SM_SN10552.nc)
+#   RBRsolo_SN100320.nc    86.4 m  listed with SBE37SM_SN10551.nc, no position of its own
+[files."data/0-data/downstream_deep_mooring/RBRsolo_*.nc"]
 include = true
-dataset = "CTD"
-drop = ["salinity"]
-why = "...; its salinity equals its temperature at every level -- a copy, not a measurement"
-
-[files."data/0-data/downstream_deep_mooring/RBRsolo_*.nc"]   # 17 files
-data = "moored instrument record: RBRsolo at one place, 13.6 days"
-include = false
-why = "a mooring's record belongs in WOD as MRB ...; wod-etl cannot build MRB profiles yet"
+dataset = "MRB"
+data = "moored instrument record: RBRsolo at one place, 13.6 days: temperature"
+why = "a mooring's instrument: ...; at the depth mooring_description.txt gives it -- ..."
 ```
 
 | Field / section | Holds | Blocks `confirm` until |
 | --- | --- | --- |
-| `[files."<path or pattern>"]` | `include` (true/false), `dataset` (Table 2 code, for an included file), `data` (what it holds), `why`; optional `drop = [...]` (variables not to write) and `metadata = { ... }` (header values for its casts). Written under a heading per outcome -- IN, OUT (WOD takes it but wod-etl cannot write it yet / WOD does not store it / left out by the review), DOCUMENTATION -- after a summary of how many files go where | every file has an entry; `include` is true or false; an included file has a WOD dataset |
-| `[metadata]` | header values for every cast, **overriding what a file states**, first in the file: `platform`, `institution`, `project`, `cruise`, `principal_investigator`, `probe_type`, `instrument` (the older `Platform`, `"Principal investigator"`... are read the same). Proposed from the accession's own ISO 19115 records -- a value they state once is set, one they state several ways is listed in a comment to choose from -- and the rest offered commented out, for the reviewer to fill. A WOD code (`platform = 8553`) is safest, and its name is written beside it; a name is looked up in WOD's code list and kept as text unless it names exactly one entry. A value that differs between files goes in their own entries' `metadata` | -- |
-| `[profiles.<name>]` | a recipe that reshapes included files into casts (below) | no `UNIT?` left, a station list that locates every cast |
-| `[[cross_check]]` | another source of positions/dates: `name`, `file`, `tolerance_km`, `compare`; for a PDF table also `page`, `row_pattern`, `columns` | -- |
-| `[track]` | `bounding_box` (proposed from NCEI's `_lonlat.txt`), `outlier_factor` | -- |
-| `[conflicts."<id>"]` | a disagreement: `values`, `values_hash`, `resolution`, `note` | `resolution` is `"keep"`, `"ack"`, a source's name, or `{ date = ..., latitude = ..., longitude = ... }` |
+| `[files."<path or pattern>"]` | `include` (true/false), `dataset` (Table 2 code), `data` (what it holds), `why`; optional `drop = [...]` (variables not to write) and `metadata = { ... }` (header values for its casts). Written under a heading per outcome -- IN, OUT (WOD takes it but wod-etl cannot write it, `why` says what is missing / WOD does not store it / left out by the review), DOCUMENTATION -- after a summary of how many files go where. A mooring's instruments carry their depths as comments above the entry | every file has an entry; `include` is true or false; `dataset`, `drop` and `metadata`, where given, are well formed |
+| `[metadata]` | header values for every cast, **overriding what a file states**, first in the file: `platform`, `institution`, `project`, `cruise`, `principal_investigator`, `probe_type`, `instrument` (the older `Platform`, `"Principal investigator"`... are read the same). Proposed from the accession's own ISO 19115 records -- a value they state once is set, one they state several ways is listed in a comment to choose from -- and the rest offered commented out. A WOD code (`platform = 8553`) is safest, and its name is written beside it; a name is looked up in WOD's code list and kept as text unless it names exactly one entry | -- |
+| `[profiles.<name>]` | only `kind = "script"`: a staging script an agent wrote for a layout nothing else reads (below). Any other recipe in an older file is no longer read, and said | the script exists |
 
-`[profiles]`, `[track]` and `[[cross_check]]` appear only when some file needs reshaping. The
-`dataset` of an included file is the contract: every file is written as its entry says
-(CTD still goes to OSD cast by cast when a cast's levels are coarse, manual p.19). A conflict
-whose values change after it was settled is open again (`values_hash`). Every resolution is
-written into the staged notes, so it reaches the NetCDF's `comment`. Plankton is left out
-for now ("not handled for now"); the taxa writer remains a library function.
+The `dataset` of an included file is the contract: every file is written as its entry says
+(CTD still goes to OSD cast by cast when a cast's levels are coarse, manual p.19); an
+included file with no `dataset` is classified from what it holds when it is processed. An
+included file that cannot be staged -- a logger with no depth -- is not written, and the
+report says so. Plankton is left out for now ("not handled for now"); the taxa writer
+remains a library function.
 
-**Profile recipes** (`kind`):
+**What wod-etl works out** (`decisions.derive_recipes`, from what triage found):
 
-| kind | Fields |
+| Shape | How it becomes casts |
 | --- | --- |
-| `long` | `files`, `keys` (cast key + depth key), `key_aliases`, `cast_key`, `variable`, `value`, `columns` (variable → staged name **with its unit**), `station_list`; optional `depth_column`, `time_zone`, `on_conflict = "first"`, `station_map`, `skip_casts`, `dataset_type`, `metadata`, `notes` |
-| `per_file` | `files` (one cast each), `station_pattern` (regex on the file name → station), `station_list`, `header_row`, `columns` (renames); optional as above |
-| `script` | `script`: a Python file that writes staged casts into `$WOD_STAGING_OUT` (`$WOD_ACCESSION`, `$WOD_DATA_ROOT` and `$WOD_PROJECT_ROOT` are set). For what no recipe describes: re-occupied stations, odd layouts. Its hash is fingerprinted. What it prints, and what its `wod_etl` calls log, goes into the run's `run.log`. |
+| Long-format tables (`StNo, parm, depth, value`) | One recipe per folder: pivoted into one cast per station, located by the **station list beside them** -- the one there is, or of several the one naming the most of their casts; none, and they are proposed left out. Columns keep the files' names: a unit a name states is read, a name with none is read in WOD's standard unit, as for every other file. A cast the list does not name is left out, two values at one level keep the first, and the list's track is checked (inside NCEI's `_lonlat.txt` box, no outlying hop, time running forward) -- each reported and written into the casts' notes, the station list kept |
+| A mooring's instruments (one NetCDF per instrument) | One recipe per mooring -- by the mooring id the files name, else their folder and position, split where records stop overlapping in time. One staged cast a day: each instrument's mean over the UTC day at its depth, within the deployment -- a moored buoy's profile is its instruments at one time (manual p.17), kept as daily means (p.14). **The deployment** is read from the pressure its instruments record; with none, it is the record without its first and last day. **Each instrument's depth**: its pressure, day by day; else the depth its file states, or its file name (`T_45m.nc`); else the mooring's description (`staging/mooring_layout.py`) -- a stated depth, or a position along the line that an instrument on the same line recording pressure fixes, checked against every other pressure record. An instrument none of these places is proposed left out. The depths, and how each was found, are comments in decisions.toml, a table in report.md, and notes in the casts. See [`staging/moorings.py`](../staging/moorings.py) |
 
-A recipe's files must be included (`include = true`); a recipe whose files are all left out
-is ignored.
+| `[profiles]` kind | Fields |
+| --- | --- |
+| `script` | `script`: a Python file that writes staged casts into `$WOD_STAGING_OUT` (`$WOD_ACCESSION`, `$WOD_DATA_ROOT` and `$WOD_PROJECT_ROOT` are set); optional `files` it consumes, `dataset_type`. For what no recipe describes: re-occupied stations, odd layouts. Its hash is fingerprinted. What it prints, and what its `wod_etl` calls log, goes into the run's `run.log`. |
 
 ### When it fails
 
@@ -178,6 +179,45 @@ is a per-cast variable. Every cast also carries its `dataset`, as WOD's files do
 The pipeline never touches anything else: in `data/processed/<acc>/` it writes and removes only
 names of that form (and, once, the `pipeline/` folder the output went to before it was WOD
 files), and folders an agent staged by hand under `data/staging/<acc>/` are left alone.
+
+### In a browser: `wod-etl web`
+
+```bash
+uv run wod-etl web                 # http://127.0.0.1:8000  (--host, --port)
+```
+
+One page over the same two commands ([`web.py`](web.py), the page in [`web_ui/`](web_ui/)):
+
+```
+[ accession: URL, number or folder ............ ] [Run] [Confirm] [Open…]
+ resolve ✓  fetch ✓  triage ✓  decide ✓    check  stage  process  verify    report
+ what happened, and the problems: what, why, how to fix
++------------------+--------------------------------------+--------------------+
+| Input files      | decisions.toml            [Reload]   | Output files       |
+|  IN: written     |                           [Save]     |  wod_ctd_2015_….nc |
+|  OUT: … and why  |  (click a file: its entry is shown)  |  CTD · 2015 · 11   |
+|  Documentation   |                                      |  casts · download  |
++------------------+--------------------------------------+--------------------+
+ Activity: the command's progress lines · report.md · run.log
+```
+
+- **Run** and **Confirm** run the `wod-etl run` / `confirm` command as a child process, in
+  the data folders the server was given (`config.child_environment()`), and its output is the
+  page's activity log; the page polls `GET /api/status/<acc>`. A child process keeps the
+  pipeline on a main thread -- HDF5 prints a page of diagnostics for every file created on
+  any other -- and a crash in a data library ends the command, not the page. A run started
+  here and one started in a terminal share `data/runs/<acc>/`.
+- **One command at a time**, to keep the page simple: a second command, or saving
+  decisions.toml while one runs, is refused (409) until the first finishes.
+- **Saving checks the TOML** and names the line of a mistake; it will not overwrite a file
+  that changed on disk since it was opened. Run and Confirm save unsaved edits first.
+- **Local only.** There is no login and it reads and writes the data folders: it binds to
+  127.0.0.1, accepts only accession ids that cannot leave their folders, and downloads only
+  WOD files of the accession.
+
+The API, for scripts: `POST /api/run {"source"}`, `POST /api/confirm/<acc>`, `GET
+/api/status|files|decisions|outputs|report|log/<acc>`, `PUT /api/decisions/<acc> {"text",
+"mtime"}`, `GET /api/outputs/<acc>/<file>`, `GET /api/accessions`.
 
 ---
 

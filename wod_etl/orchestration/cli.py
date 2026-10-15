@@ -36,7 +36,10 @@ exit codes:
   130  interrupted -- run the same command again to continue
 
 Each command logs to data/runs/<accession>/run.log (and events.jsonl) and summarises the run
-in report.md. Running a command again continues from where it stopped."""
+in report.md. Running a command again continues from where it stopped.
+
+  wod-etl web                 the same two steps in a browser: the stages, the files,
+                              decisions.toml to edit, and the WOD files written"""
 
 
 MAX_PRINTED = 12
@@ -109,7 +112,7 @@ def cmd_run(args) -> int:
               "any you\ndisagree with.")
         blocking = [p for p in result["problems"] if p.get("blocking")]
         if blocking:
-            print("\nFill these in before confirming:")
+            print("\nSettle these before confirming:")
         _print_problems(result["problems"])
         print(f"\nThen:  uv run wod-etl confirm {acc}")
     elif code == 130:
@@ -220,7 +223,20 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("accession", help="accession number, or the input you ran it with")
     s.add_argument("--accession-id", help="the name given with --accession-id")
     s.set_defaults(func=cmd_status)
+    w = sub.add_parser("web", help="run and confirm accessions in a browser")
+    w.add_argument("--host", default="127.0.0.1",
+                   help="address to serve on (default 127.0.0.1: this machine only -- there "
+                        "is no login)")
+    w.add_argument("--port", type=int, default=8000, help="port (default 8000)")
+    w.set_defaults(func=cmd_web)
     return p
+
+
+def cmd_web(args) -> int:
+    from wod_etl.orchestration.web import serve
+
+    serve(args.host, args.port)
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:

@@ -28,15 +28,22 @@ def _find_root() -> Path:
 
 ROOT = _find_root()
 
-DATA_DIR = ROOT / "data"
-RAW_DIR = DATA_DIR / "raw"
-STAGING_DIR = DATA_DIR / "staging"
-PROCESSED_DIR = DATA_DIR / "processed"
-MANIFEST_DIR = STAGING_DIR / "manifests"
+def _folder(env: str, default: Path) -> Path:
+    """A data folder, from the environment when set: `wod-etl web` runs each command as a
+    child process and hands it the folders it was itself given."""
+    value = os.environ.get(env, "").strip()
+    return Path(value) if value else default
+
+
+DATA_DIR = _folder("WOD_DATA_DIR", ROOT / "data")
+RAW_DIR = _folder("WOD_RAW_DIR", DATA_DIR / "raw")
+STAGING_DIR = _folder("WOD_STAGING_DIR", DATA_DIR / "staging")
+PROCESSED_DIR = _folder("WOD_PROCESSED_DIR", DATA_DIR / "processed")
+MANIFEST_DIR = _folder("WOD_MANIFEST_DIR", STAGING_DIR / "manifests")
 # One folder per accession: its run log, pipeline state, decisions file and report, and
-# work/, the copies of the inputs the process stage reads. It is not configurable apart
-# from DATA_DIR: its lock and state describe the outputs under staging/ and processed/.
-RUNS_DIR = DATA_DIR / "runs"
+# work/, the copies of the inputs the process stage reads. Its lock and state describe the
+# outputs under staging/ and processed/, so move it only with them.
+RUNS_DIR = _folder("WOD_RUNS_DIR", DATA_DIR / "runs")
 
 KNOWLEDGE_DIR = ROOT / "knowledge"
 CODE_TABLES_DIR = KNOWLEDGE_DIR / "wod_code_tables"
@@ -89,7 +96,8 @@ WOD_VERSION = "WOD23"
 #
 # The lists are cached here with the date they were retrieved, and refetched after
 # CODE_LIST_MAX_AGE_DAYS -- they change between WOD releases.
-CODE_LIST_CACHE_DIR = DATA_DIR / "reference_cache" / "wod_code_lists"
+CODE_LIST_CACHE_DIR = _folder("WOD_CODE_LIST_CACHE_DIR",
+                              DATA_DIR / "reference_cache" / "wod_code_lists")
 CODE_LOOKUP = os.environ.get("WOD_CODE_LOOKUP", "1").strip().lower() in ("1", "true", "yes", "on")
 CODE_LIST_FETCH = os.environ.get("WOD_CODE_LIST_FETCH", "1").strip().lower() in (
     "1", "true", "yes", "on")
@@ -159,6 +167,18 @@ NON_DATA_EXTENSIONS = {
     ".xml", ".pdf", ".html", ".htm", ".md", ".doc", ".docx", ".json",
     ".png", ".jpg", ".jpeg", ".gif", ".zip", ".gz", ".tar", ".sh",
 }
+
+
+def child_environment() -> dict:
+    """Environment variables that give a child `wod-etl` process this process's folders and
+    settings as they are now -- overrides made after import (a test's) included."""
+    flag = lambda value: "1" if value else "0"
+    return {"WOD_DATA_DIR": str(DATA_DIR), "WOD_RAW_DIR": str(RAW_DIR),
+            "WOD_STAGING_DIR": str(STAGING_DIR), "WOD_PROCESSED_DIR": str(PROCESSED_DIR),
+            "WOD_MANIFEST_DIR": str(MANIFEST_DIR), "WOD_RUNS_DIR": str(RUNS_DIR),
+            "WOD_CODE_LIST_CACHE_DIR": str(CODE_LIST_CACHE_DIR),
+            "WOD_CODE_LIST_FETCH": flag(CODE_LIST_FETCH), "WOD_CODE_LOOKUP": flag(CODE_LOOKUP),
+            "WOD_RUN_QC": flag(RUN_WOD_QC)}
 
 
 def describe() -> dict:

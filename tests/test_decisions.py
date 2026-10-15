@@ -131,9 +131,10 @@ class TestEveryFileGetsAnEntry:
         assert dec.file_decision(decisions, "d/b.csv")["include"] is False
         assert dec.decision_key(decisions, "d/b.csv") == "d/b.csv"
 
-    def test_a_long_format_group_gets_a_recipe_with_unit_placeholders(self):
+    def test_a_long_format_group_is_reshaped_by_a_recipe_nobody_fills_in(self):
         lf = lambda keys, var: {"variable_column": "parm", "value_column": "value",
-                                "key_columns": keys, "variables_sampled": [var]}
+                                "key_columns": keys, "variables_sampled": [var],
+                                "station_list": "d/X1_Stations.csv"}
         t = _triage(_file("d/X1_CTD_Temp.csv", action="stage",
                           long_format=lf(["StNo", "dep"], "Temperature")),
                     _file("d/X1_CTD_Sal.csv", action="stage",
@@ -141,15 +142,33 @@ class TestEveryFileGetsAnEntry:
                     _file("d/X1_Stations.csv", action="sidecar", data="station list",
                           why="locates casts", columns=["Station", "Lat", "Lon"]))
         parsed = tomllib.loads("\n".join(dec.propose(t, {})))
-        recipe = parsed["profiles"]["x1_ctd"]
-        assert recipe["columns"]["Temperature"] == "Temperature (UNIT?)"
-        assert recipe["station_list"] == "d/X1_Stations.csv" and "confirmed" not in recipe
-        assert recipe["cast_key"] == "StNo"
+        # The person decides include or not, and nothing else: no recipe, no unit, no
+        # station check to fill in.
+        assert set(parsed) == {"files", "metadata"}
+        plan = dec.build_plan(parsed, t, [])
+        recipe = plan["profiles"]["x1_ctd"]
+        assert (recipe["kind"], recipe["station_list"]) == ("long", "d/X1_Stations.csv")
+        assert recipe["cast_key"] == "StNo" and recipe.get("columns") is None
         assert recipe["key_aliases"] in ({"depth": ["dep"]}, {"dep": ["depth"]})
-        assert "[profiles.x1_ctd]" in parsed["files"]["d/X1_CTD_*.csv"]["why"]
-        assert "track" in parsed and "metadata" in parsed
-        # The station list is what is checked, so it is no source to check it against.
-        assert "Candidates found: d/X1_Stations.csv" not in "\n".join(dec.propose(t, {}))
+        assert set(plan["consumed"]) == {"d/X1_CTD_Temp.csv", "d/X1_CTD_Sal.csv",
+                                         "d/X1_Stations.csv"}
+
+    def test_long_format_files_nothing_locates_are_not_written_and_nothing_is_asked(self):
+        t = _triage(_file("d/X1_CTD_Temp.csv", action="stage", include=False,
+                          why="... its casts cannot be located",
+                          long_format={"variable_column": "parm", "value_column": "value",
+                                       "key_columns": ["StNo", "depth"],
+                                       "variables_sampled": ["Temperature"],
+                                       "station_list": None}))
+        entry = _entries(t)["d/X1_CTD_Temp.csv"]
+        assert entry["include"] is False and "cannot be located" in entry["why"]
+        # Included anyway: not written, and said -- there is nothing to fill in instead.
+        items, plan = dec.validate({"files": {"d/X1_CTD_Temp.csv": {"include": True}}}, t, {},
+                                   [])
+        assert not plan["profiles"] and not plan["direct"]
+        assert [w["key"] for w in plan["not_written"]] == ["d/X1_CTD_Temp.csv"]
+        assert not [i for i in items if i["blocking"]]
+        assert any("cannot be written" in i["what"] for i in items)
 
     def test_without_a_recipe_there_are_no_station_checks_but_metadata_is_offered(self):
         parsed = tomllib.loads("\n".join(dec.propose(_triage(_file("a.csv")), {})))
@@ -167,10 +186,11 @@ class TestValidation:
         items, _ = dec.validate({"files": {}}, _triage(_file("x.csv")), {}, [])
         assert any("have no entry" in i["what"] for i in items if i["blocking"])
 
-    def test_an_included_file_needs_a_wod_dataset(self):
+    def test_an_included_file_with_no_dataset_is_classified_when_processed(self):
         t = _triage(_file("x.csv", action="inspect", include=False))
-        items, _ = dec.validate({"files": {"x.csv": {"include": True}}}, t, {}, [])
-        assert any("which WOD dataset" in i["what"] for i in items if i["blocking"])
+        items, plan = dec.validate({"files": {"x.csv": {"include": True}}}, t, {}, [])
+        assert not [i for i in items if i["blocking"]] and plan["direct"] == ["x.csv"]
+        assert any("classified from what it holds" in i["what"] for i in items)
         items, _ = dec.validate({"files": {"x.csv": {"include": True, "dataset": "BOTTLE"}}},
                                 t, {}, [])
         assert any("not a WOD dataset" in i["what"] for i in items if i["blocking"])
@@ -197,21 +217,24 @@ class TestValidation:
         assert plan["left_out"] == [{"key": "b.nc", "data": None, "why": "no velocity code"}]
         assert [e["key"] for e in plan["entries"]] == ["a.csv", "b.nc"]
 
-    def test_a_recipe_for_files_left_out_is_not_checked(self):
+    def test_a_recipe_written_into_the_file_is_no_longer_read(self):
         t = _triage(_file("d/l.csv", action="stage"))
         decisions = {"files": {"d/l.csv": {"include": False}},
                      "profiles": {"l": {"kind": "long", "files": ["d/l.csv"],
                                         "columns": {"T": "T (UNIT?)"}}}}
         items, plan = dec.validate(decisions, t, {}, [])
         assert not [i for i in items if i["blocking"]] and not plan["profiles"]
+        assert any("[profiles.l] is no longer read" in i["what"] for i in items)
 
-    def test_a_settled_conflict_reopens_when_its_values_change(self):
+    def test_a_station_conflict_is_reported_and_the_station_list_kept(self):
         conflict = {"id": "date:6", "station": "6", "field": "date", "what": "dates differ",
-                    "how_to_fix": "...", "values": {"list": "2015-11-12", "report": "2015-11-11"},
-                    "values_hash": "new"}
-        decided = {"conflicts": {"date:6": {"resolution": "keep", "values_hash": "old"}}}
-        items, _ = dec.validate(decided, _triage(), {}, [conflict])
-        assert any("values changed" in i["what"] for i in items)
+                    "values": {"list": "2015-11-12", "report": "2015-11-11"},
+                    "values_hash": "h"}
+        items, plan = dec.validate({}, _triage(), {}, [conflict])
+        assert not [i for i in items if i["blocking"]]
+        assert any("the station list is kept" in i["what"] for i in items)
+        assert plan["station_overrides"]["6"] == {
+            "notes": ["dates differ -- the station list was kept"]}
 
     @pytest.mark.parametrize("resolution,expected", [
         ("report", {"date": "2015-11-11"}),
@@ -334,7 +357,7 @@ class TestTheFileReadsByOutcome:
                     _doc("NCEI-Readme.txt"))
         text = self._write(tmp_path, t)
         assert "#   IN       2 files  as CTD (2)" in text
-        assert "#   OUT      1 file   WOD takes them, but wod-etl cannot write them yet" in text
+        assert "#   OUT      1 file   WOD takes them, but wod-etl cannot write them" in text
         order = ["[metadata]", "# ==== IN:", "# ==== OUT: WOD takes these",
                  "# ==== OUT: not something WOD stores", "# ==== DOCUMENTATION:"]
         assert [text.index(h) for h in order] == sorted(text.index(h) for h in order)
@@ -400,3 +423,77 @@ why = "CTD by its path ('CTD') and depth increment 1.00 m is high-resolution (< 
         p.write_text("broken = [\n")
         res = dec.reformat(p, _triage(_file("data/a.csv")))
         assert not res["written"] and p.read_text() == "broken = [\n"
+
+
+class TestAMooringIsWorkedOutNotAsked:
+    """A mooring's recipe is wod-etl's: its instruments' depths and its deployment come from
+    the files (triage places them), and the person only says which instruments go in."""
+
+    @staticmethod
+    def _instrument(path, *, group="deep", placed_by="pressure", depth=None, include=True,
+                    why="a mooring's instrument"):
+        return _file(path, action="stage", dataset="MRB", data="moored instrument record",
+                     why=why, include=include, mooring={
+                         "platform": None, "instrument": "RBRsolo", "days": 13.6,
+                         "variables": ["Temperature (degree_C)"], "group": group,
+                         "pressure": placed_by == "pressure", "placed_by": placed_by,
+                         "depth": depth, "depth_note": f"{depth} m, somehow",
+                         "depth_short": "somehow" if placed_by else None,
+                         "deployed": [1535941021.0, 1537114213.0], "deployment": "pressure"})
+
+    def test_the_file_asks_only_include_and_the_plan_has_one_recipe_per_mooring(self):
+        t = _triage(self._instrument("data/0-data/deep/rbr_1.nc", placed_by="description:position",
+                                     depth=10.0),
+                    self._instrument("data/0-data/deep/rbr_2.nc", placed_by="file", depth=12.5),
+                    self._instrument("data/0-data/deep/sbe_1.nc", depth=34.7),
+                    self._instrument("data/0-data/m2.nc", group="18bs8a", placed_by="file",
+                                     depth=20.0),
+                    _file("data/0-data/deep/adcp.nc", action="exclude", data="velocity",
+                          why="no WOD code"))
+        text = "\n".join(dec.propose(t, {}))
+        d = tomllib.loads(text)
+        assert set(d) == {"files", "metadata"} and "[profiles" not in text
+        assert "Depths, as wod-etl places them:" in text and "rbr_1.nc    10.0 m  somehow" in text
+        plan = dec.build_plan(d, t, [])
+        assert set(plan["profiles"]) == {"deep", "18bs8a"}
+        deep = plan["profiles"]["deep"]
+        assert (deep["kind"], deep["dataset_type"]) == ("mooring", "MRB")
+        assert deep["files"] == ["data/0-data/deep/rbr_1.nc", "data/0-data/deep/rbr_2.nc",
+                                 "data/0-data/deep/sbe_1.nc"]
+        assert deep["depths"] == {"rbr_1.nc": 10.0, "rbr_2.nc": 12.5, "sbe_1.nc": "pressure"}
+        assert deep["deployed"] == ["2018-09-03T02:17:01Z", "2018-09-16T16:10:13Z"]
+        assert deep["metadata"] == {"cruise": "deep"}
+        assert plan["profiles"]["18bs8a"]["metadata"] == {"cruise": "18bs8a"}
+
+    def test_an_instrument_with_no_depth_is_proposed_out_and_never_asked_for(self):
+        t = _triage(self._instrument("deep/rbr_1.nc", placed_by=None, include=False,
+                                     why="a mooring's instrument, but its depth is not known"),
+                    self._instrument("deep/sbe_1.nc", depth=50.0))
+        d = tomllib.loads("\n".join(dec.propose(t, {})))
+        assert d["files"]["deep/rbr_1.nc"]["include"] is False
+        items, plan = dec.validate(d, t, {}, [])
+        assert not [i for i in items if i["blocking"]]
+        assert plan["profiles"]["deep"]["files"] == ["deep/sbe_1.nc"]
+        # Included anyway: it cannot be placed, so it is not written -- and that is said.
+        d["files"]["deep/rbr_1.nc"]["include"] = True
+        items, plan = dec.validate(d, t, {}, [])
+        assert not [i for i in items if i["blocking"]]
+        assert [w["key"] for w in plan["not_written"]] == ["deep/rbr_1.nc"]
+        assert plan["consumed"] == ["deep/rbr_1.nc", "deep/sbe_1.nc"] and not plan["direct"]
+
+    def test_instruments_that_cannot_be_staged_together_say_which_to_leave_out(self):
+        t = _triage(self._instrument("deep/a.nc", depth=5.0),
+                    self._instrument("deep/b.nc", depth=9.0))
+        d = tomllib.loads("\n".join(dec.propose(t, {})))
+        problem = "b.nc states 'Temperature (K)' in 'K' where a.nc states 'degree_C'"
+        items, _ = dec.validate(d, t, {"deep": {"mooring_problems": [problem]}}, [])
+        blocking = [i for i in items if i["blocking"]]
+        assert len(blocking) == 1 and problem in blocking[0]["what"]
+        assert "include = false" in blocking[0]["how_to_fix"]
+
+    def test_two_moorings_of_one_name_are_two_recipes(self):
+        t = _triage(self._instrument("c/p.nc", group="c", depth=5.0),
+                    self._instrument("c/q.nc", group="c_2", depth=5.0))
+        plan = dec.build_plan(tomllib.loads("\n".join(dec.propose(t, {}))), t, [])
+        assert {tuple(r["files"]) for r in plan["profiles"].values()} == {("c/p.nc",),
+                                                                         ("c/q.nc",)}

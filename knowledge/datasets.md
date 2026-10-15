@@ -49,7 +49,14 @@ positive level spacing per cast so the routing is decided per cast rather than p
 | **DRB** drifting buoy | no — thermistor chain hangs below | yes |
 
 A "profile" from MRB is a set of concurrent readings from instruments at different depths,
-not an instrument descending (p.17).
+not an instrument descending (p.17). WOD keeps moored records as **daily averages**: records
+submitted at 15-minute intervals were "re-converted as daily averages" in 2021 (p.14, note 6).
+`wod-etl` builds them that way -- one profile a day, each instrument's daily mean at its depth
+([`staging/moorings.py`](../wod_etl/staging/moorings.py)) -- and needs each instrument's depth:
+from the pressure it records, a depth its file or file name states, or the mooring's
+description, whose positions along the line the pressure instruments turn into depths
+([`staging/mooring_layout.py`](../wod_etl/staging/mooring_layout.py)). An instrument none of
+these places is left out, not guessed.
 
 ### Discrete samples are OSD even when collected at the surface
 
