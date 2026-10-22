@@ -1,8 +1,6 @@
 """Run ledger: what was processed, what failed, and what is left to do.
 
-An unattended run over hundreds of files needs to survive a crash and be able to report
-what it actually did. The manifest is a single JSON file per run, written atomically after
-every update so a kill at any moment leaves a readable ledger.
+One JSON file per run, written atomically after every update so a crash leaves it readable.
 
 Statuses
     pending  -- discovered, not yet attempted
@@ -138,8 +136,7 @@ def summarize(manifest: Dict[str, Any]) -> Dict[str, Any]:
         {"key": it["key"], "stage": it.get("stage"), "error": it.get("error")}
         for it in items if it["status"] == FAILED
     ]
-    # Only a file that is done has an output: one that failed on a later attempt has none,
-    # whatever an earlier attempt wrote.
+    # Only done items count: a later failed attempt voids an earlier output.
     outputs = [it["output_path"] for it in items
                if it.get("output_path") and it["status"] == DONE]
 
@@ -157,7 +154,7 @@ def summarize(manifest: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def list_runs() -> List[Dict[str, Any]]:
-    """All known runs, newest first -- how an agent finds a run to resume."""
+    """All known runs, newest first."""
     out = []
     for p in MANIFEST_DIR.glob("*.json"):
         try:
@@ -169,20 +166,3 @@ def list_runs() -> List[Dict[str, Any]]:
                     "updated_at": m.get("updated_at"), "counts": s["counts"],
                     "complete": s["complete"]})
     return sorted(out, key=lambda r: r.get("updated_at") or "", reverse=True)
-
-
-if __name__ == "__main__":
-    run_id = new_run_id("https://example.org/archive/0287423/", stamp="demo")
-    m = create_manifest(run_id, "https://example.org/archive/0287423/", [
-        {"key": "a.csv", "url": "https://example.org/a.csv"},
-        {"key": "b.csv", "url": "https://example.org/b.csv"},
-        {"key": "c.xml", "url": "https://example.org/c.xml"},
-    ])
-    mark(m, "a.csv", RUNNING)
-    mark(m, "a.csv", DONE, output_path="data/processed/a.nc", casts=1)
-    mark(m, "b.csv", RUNNING)
-    mark(m, "b.csv", FAILED, stage="load_tabular", error="parse failed: no columns")
-    mark(m, "c.xml", SKIPPED, reason="metadata file, not measurements")
-    print(json.dumps(summarize(m), indent=2))
-    print("\npending after resume:", [i["key"] for i in pending_items(load_manifest(run_id))])
-    print("retryable failures  :", [i["key"] for i in pending_items(load_manifest(run_id), retry_failed=True)])

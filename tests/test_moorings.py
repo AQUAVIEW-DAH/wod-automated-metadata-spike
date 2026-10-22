@@ -17,9 +17,8 @@ T0 = dt.datetime(2018, 9, 3, 6, 0, tzinfo=dt.timezone.utc).timestamp()   # 06:00
 def write_instrument(path, *, hours=78.0, step=600, temperature=None, pressure=None,
                      absolute=False, salinity=False, depth_attr=None, lat=56.84, lon=-132.36,
                      extra=None, serial="100020"):
-    """One instrument's record as RBR's and Sea-Bird's exports write it: time in seconds since
-    1970, scalar lat/lon, one variable per measurement. `temperature` and `pressure` are
-    functions of the time in hours since T0."""
+    """Write an RBR/Sea-Bird-style instrument record; `temperature` and `pressure` are
+    functions of hours since T0."""
     t = T0 + np.arange(0, hours * 3600 + 1, step)
     h = (t - T0) / 3600
     with netCDF4.Dataset(path, "w") as ds:
@@ -122,8 +121,7 @@ class TestDailyMeans:
         assert day["levels"][1]["means"] == pytest.approx({1: 6.0, 25: 35.0, 2: 30.0})
 
     def test_air_before_deployment_and_after_recovery_is_not_averaged(self, tmp_path):
-        # Both switched on 6 h before going in and recovered 6 h before the end: in air the
-        # pressure is 0 and the temperature 20; in the water 40 dbar and 5.
+        # In air for the first and last 6 h (0 dbar, 20 C); in the water 40 dbar and 5 C.
         wet = lambda h: (h >= 6) & (h <= 72)
         a = write_instrument(tmp_path / "sbe.nc", pressure=lambda h: np.where(wet(h), 40.0, 0.0),
                              temperature=lambda h: np.where(wet(h), 5.0, 20.0))
@@ -150,7 +148,7 @@ class TestDailyMeans:
 
 
 class TestWhatTheReviewFound:
-    """Each case below once gave a wrong mooring profile without a word."""
+    """Cases that must not silently give a wrong mooring profile."""
 
     def test_a_logger_stopping_early_does_not_cut_the_others_days(self, tmp_path):
         a = write_instrument(tmp_path / "a.nc", hours=240, pressure=lambda h: 40.0 + 0 * h)
@@ -246,8 +244,8 @@ class TestWhatTheReviewFound:
         assert wet_window(q, read_instrument(q)) is not None
 
 
-# A mooring description as LeConte's came: positions along the line from a reference point,
-# a blank reference meaning the block's, and a frame listed without positions.
+# Positions are along the line from a reference point; a blank reference means the block's.
+# The second block is a frame listed without positions.
 LAYOUT = """# Downstream deep mooring
 
    |-----------------+--------------------|

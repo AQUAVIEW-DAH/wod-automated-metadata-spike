@@ -1,9 +1,7 @@
-"""One GET with retries, for every page this package reads over HTTP.
+"""HTTP GET with retries.
 
-NCEI answers 503 and times out often enough that a single attempt is a coin toss: a whole
-session's triage once stalled on a landing page that was simply busy. Transient statuses and
-network errors are retried with backoff; a 404 or any other client error is not, because
-retrying it only delays the real answer.
+Transient statuses and network errors are retried with backoff; client errors such as 404
+are not.
 """
 import logging
 import time
@@ -15,7 +13,7 @@ from wod_etl.config import HTTP_BACKOFF_SECONDS, HTTP_RETRIES, HTTP_TIMEOUT, USE
 
 log = logging.getLogger(__name__)
 
-# Statuses that mean "try again shortly", not "this URL is wrong".
+# Transient statuses worth retrying.
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 
@@ -25,8 +23,7 @@ def get_with_retries(url: str, *, retries: Optional[int] = None,
                      client: Optional[httpx.Client] = None) -> httpx.Response:
     """GET `url`, retrying transient failures. Returns the response or raises the last error.
 
-    The response is returned with `raise_for_status()` already applied, so a caller sees a
-    success or an exception -- with `attempts` recorded on the response's `extensions`.
+    The response has passed `raise_for_status()`; `extensions["attempts"]` holds the count.
     """
     attempts = max(1, HTTP_RETRIES if retries is None else retries)
     backoff = HTTP_BACKOFF_SECONDS if backoff_seconds is None else backoff_seconds

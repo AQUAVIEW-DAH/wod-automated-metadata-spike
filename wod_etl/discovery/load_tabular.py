@@ -1,9 +1,4 @@
-"""Load a complete data file into a DataFrame -- the bridge between Phase 2 and Phase 3.
-
-profile_raw_data only sees the first few kilobytes, so it can describe a file's structure
-but cannot produce its data. This skill takes that description and reads the whole file,
-which is what convert_units_and_types and apply_qc_auditing expect.
-"""
+"""Load a complete data file into a DataFrame, using the structure profile_raw_data inferred."""
 import io
 import re
 import warnings
@@ -12,12 +7,8 @@ from typing import Dict, Any, Optional, Tuple, List
 
 import pandas as pd
 
-# Values that historically stand in for "missing" in oceanographic ASCII files.
-# Only sentinels no real measurement can collide with. '-9', '-99', '9999' and '99999' were
-# here and are NOT safe: pandas expands them to their float forms, so an air temperature of
-# -9.0, a longitude of -99.0 or a sounding of 9999 m silently became NaN. A sentinel left in
-# the data shows up as an absurd value range in `audit_dataset`; a real value turned to NaN
-# shows up as nothing at all, which is the worse failure.
+# Missing-value sentinels. Only codes no real measurement can collide with: '-9', '-99' or
+# '9999' would silently turn real values into NaN.
 DEFAULT_NA_VALUES = [
     "", " ", "-", "--", "NA", "N/A", "NaN", "nan", "null", "NULL",
     "-999", "-9999", "-99999", "-999.9", "-9999.9", "-99.999", "-1e34", "1e35",
@@ -27,13 +18,9 @@ _COMMENT_PREFIXES = ("#", "%", "*", "//", ";", "!")
 
 
 def _strip_interior_comments(lines):
-    """Drop whole-line comments that sit below the header, keeping the header itself.
+    """Drop whole-line comments below the header, which would otherwise parse as rows.
 
-    `read_csv` is deliberately called with comment=None, because '#' occurs inside real
-    data (station '#5'). But a comment line left in the body parses as a row, giving a
-    phantom level whose depth is the comment text. Only '#' and '//' are treated as markers:
-    '*' and '%' begin real sentinel values such as '**NS' and cannot be assumed to be
-    comments.
+    Only '#' and '//' count as markers: '*' and '%' begin sentinels such as '**NS'.
     """
     if not lines:
         return lines, 0
@@ -53,8 +40,7 @@ def load_tabular(
 ) -> Tuple[Optional[pd.DataFrame], Dict[str, Any]]:
     """Read a full tabular file using the structure Phase 1 inferred.
 
-    Returns (DataFrame, info). On failure the DataFrame is None and info carries `error`,
-    so an unattended run can record the failure and move to the next file.
+    Returns (DataFrame, info). On failure the DataFrame is None and info carries `error`.
     """
     info: Dict[str, Any] = {"source": str(file_path), "warnings": []}
     path = Path(file_path)
@@ -84,8 +70,7 @@ def load_tabular(
         info["warnings"].append(f"dropped {commented} interior comment line(s) from the table body")
 
     try:
-        # on_bad_lines="warn" drops malformed rows to stderr, where an unattended run never
-        # sees them. Capture them instead: a dropped row is lost data and must be reported.
+        # Capture malformed-row warnings so dropped rows are reported, not lost on stderr.
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             df = pd.read_csv(
@@ -113,9 +98,30 @@ def load_tabular(
         info["malformed_rows_dropped"] = len(bad_lines)
 
     df.columns = [str(c).strip() for c in df.columns]
+    if profile_result.get("unit_row") is not None and len(df):
+        # The profile folded the units row into the names; it is not data.
+        units = [str(u).strip() for u in profile_result["unit_row"]]
 
-    # Drop rows that are entirely missing, and any trailing unnamed column left by a
-    # line ending in the delimiter.
+        def is_units(row) -> bool:
+            # Most cells, not all: a 'µ' can decode differently here than in the profile.
+            cells = [str(v).strip() if pd.notna(v) else "" for v in row][:len(units)]
+            same = sum(a == b for a, b in zip(cells, units) if b)
+            return same >= max(1, 0.8 * sum(bool(u) for u in units))
+
+        first = next((n for n, (_, r) in enumerate(df.head(3).iterrows()) if is_units(r)), None)
+        if first is not None:
+            df = df.drop(index=df.index[first]).reset_index(drop=True)
+        for c in df.columns:
+            try:
+                df[c] = pd.to_numeric(df[c])
+            except (ValueError, TypeError):
+                pass
+        info["warnings"].append("a units row under the header was folded into the column names")
+    names = profile_result.get("table_columns")
+    if names and len(names) == len(df.columns):
+        df.columns = list(names)
+
+    # Drop all-empty rows and the empty column left by a trailing delimiter.
     before = len(df)
     df = df.dropna(how="all")
     dropped = before - len(df)
@@ -165,11 +171,9 @@ def _encoding_from_profile(profile: Dict[str, Any]) -> str:
 
 
 def _header_lines_for(text: str, profile: Dict[str, Any]) -> int:
-    """How many leading lines to skip before the column header row.
-
-    Prefers counting the actual leading comment block in the full file, because the Phase 1
-    count came from a truncated preview.
-    """
+    """Count the leading lines to skip before the column header row, using the full file."""
+    if profile.get("table_header_line") is not None:
+        return int(profile["table_header_line"])
     lines = text.splitlines()
     count = 0
     for line in lines:
@@ -183,27 +187,5 @@ def _header_lines_for(text: str, profile: Dict[str, Any]) -> int:
         break
     if count:
         return count
-    # No leading comment block in the FULL file means nothing to skip. The Phase 1 number is
-    # only a fallback for a truncated preview, and it must never be applied here: it would
-    # skip real header rows on a file whose only comments sit below the table.
+    # No leading comment block: skip nothing, whatever the preview's count says.
     return 0
-
-
-if __name__ == "__main__":
-    import json
-    import tempfile
-
-    sample = """# CRUISE: STOCS85A
-# DATE: 1985-06-12
-LAT: 61.930 LON: -172.270
-Depth (m), Temp (C), Salinity (PSU)
-0.0, 9.13, 34.94
-10.0, 8.96, 34.91
-25.0, -999, 34.92
-"""
-    p = Path(tempfile.mkdtemp()) / "cast.txt"
-    p.write_text(sample)
-    df, info = load_tabular(str(p), {"detected_delimiter": "','", "header_comment_lines": 3})
-    print(df.to_string(index=False))
-    print()
-    print(json.dumps(info, indent=2))

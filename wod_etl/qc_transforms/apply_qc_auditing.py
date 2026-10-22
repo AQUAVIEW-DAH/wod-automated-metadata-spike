@@ -1,19 +1,8 @@
-"""WOD quality control auditing.
+"""WOD observed-level QC checks (manual pp.52-56), writing Table 12 flag values.
 
-Implements the checks described in the WOD 2023 User's Manual pp.52-56 and writes the
-official flag values from Table 12. Two separate flag scales are produced:
-
-  <depth>_qc_flag  -- Table 12 (2)(a) Depth Flags
-                      0 accepted, 1 duplicate/inversion, 2 density inversion
-  <var>_qc_flag    -- Table 12 (2)(b) Observed Level Flags
-                      0 accepted, 1 range, 2 inversion, 3 gradient, 4 zero-sensitivity,
-                      5 gradient+inversion, 6 range+inversion, 7 range+gradient,
-                      8 range+questionable, 9 range+gradient+inversion
-
-The same integer means different things on the two scales; that is per the manual, not a
-bug. Nothing is deleted -- flagged levels are excluded later at interpolation time.
+Adds `<depth>_qc_flag` (Table 12 (2)(a) depth flags) and `<var>_qc_flag` (Table 12 (2)(b)
+observed level flags); the same integer differs in meaning between them. Nothing is deleted.
 """
-import json
 from typing import Dict, Any, List, Tuple, Optional
 
 import numpy as np
@@ -25,9 +14,7 @@ from wod_etl.reference import range_levels as _range_levels
 from wod_etl.reference import depth_flags, observed_level_flags
 from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE
 
-# Flag values are defined by Table 12 and loaded from knowledge/wod_code_tables/, not
-# transcribed here. The names below are asserted against the loaded meanings at import, so
-# a table edit that moves a flag fails loudly instead of silently mislabelling data.
+# Table 12 flag values, checked against the loaded table at import.
 FLAG_ACCEPTED = 0
 FLAG_RANGE = 1
 FLAG_INVERSION = 2
@@ -38,16 +25,10 @@ FLAG_RANGE_INVERSION = 6
 FLAG_RANGE_GRADIENT = 7
 FLAG_RANGE_GRADIENT_INVERSION = 9
 
-# Manual p.37: surface-only data are "treated differently than profile data" -- each
-# observation is an independent surface sample, so the vertical checks (depth duplication
-# and inversion, excessive gradient, excessive inversion) describe a relationship that does
-# not exist. Applied anyway, a track sitting at a constant 0 m flags every level as a
-# duplicate depth and every variable as an inversion.
+# Manual p.37: surface-only data are not profiles, so vertical checks do not apply.
 NON_PROFILE_DATASETS = {"SUR"}
 
-# Manual p.49: "Air pressure, Julian year-day, latitude, and longitude, included as
-# variables and parameters for the sole purpose of identifying the surface-only, APB and
-# UOR data, were not quality controlled beyond basic data range checks."
+# Manual p.49: air pressure, year-day, latitude and longitude get range checks only.
 RANGE_CHECK_ONLY_CODES = {29, 30, 31, 32}
 
 DEPTH_FLAG_ACCEPTED = 0
@@ -104,10 +85,7 @@ def range_at_depth(wod_code: int, depth_m: float) -> Optional[Tuple[float, float
 
 
 def ranges_at_depths(wod_code: int, depths) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    """range_at_depth for a whole array of depths: the same rule, vectorised.
-
-    Resolving bounds once per distinct depth was quadratic -- depths computed from pressure
-    are nearly all distinct, and verifying 140 casts took a minute."""
+    """Vectorised `range_at_depth` for an array of depths."""
     levels = sorted(_range_levels().get(wod_code) or [], key=lambda lv: lv[0])
     if not levels:
         return None
@@ -140,9 +118,8 @@ def apply_qc_auditing(
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Run the WOD observed-level QC checks and append flag columns.
 
-    high_resolution enables the manual's 3.0 m minimum depth difference when computing
-    gradients. When None it is inferred from the dataset code (CTD and XBT are
-    high-resolution instruments).
+    `high_resolution` applies the manual's 3.0 m minimum depth difference for gradients;
+    when None it is inferred from the dataset code (CTD, XBT).
     """
     df_qc = df.copy()
     n = len(df_qc)
@@ -219,9 +196,8 @@ def apply_qc_auditing(
 
             if has_grad and depth_col:
                 lim = gradient_limits(code, z if z is not None else 0.0)
-                # A level is checked against BOTH neighbours, so it can fail an excessive
-                # decrease on one side and an excessive increase on the other. This is what
-                # makes flag 5 (combined gradient and inversion) reachable.
+                # Both neighbours are checked, so a level can fail gradient and inversion
+                # together (flag 5).
                 for j in (i - 1, i + 1):
                     if j < 0 or j >= n:
                         continue
@@ -235,9 +211,7 @@ def apply_qc_auditing(
                     elif g > 0 and g > lim["MIV"]:
                         failed_inv = True
 
-            # Levels sitting at a bad depth cannot be trusted vertically. The manual
-            # excludes them from interpolation; we surface that as an inversion failure so
-            # they are not silently accepted.
+            # Levels at a bad depth are flagged as inversions rather than accepted.
             if use_vertical and bad_depth[i]:
                 failed_inv = True
 
@@ -282,8 +256,7 @@ def _combine(rng: bool, grad: bool, inv: bool, zero: bool) -> int:
 def _gradient(vals, depths, i: int, j: int, min_dz: float) -> Optional[float]:
     """Gradient between levels i and j, oriented as (deeper - shallower) / dz.
 
-    Returns None when either value or depth is missing. For high-resolution instruments a
-    minimum depth difference is enforced so a tiny dz cannot inflate the result (p.54).
+    Returns None when a value or depth is missing. dz is at least `min_dz` (p.54).
     """
     if not (np.isfinite(vals[i]) and np.isfinite(vals[j])):
         return None
@@ -315,9 +288,7 @@ def _depth_error_flags(depths: np.ndarray) -> np.ndarray:
         if depths[i] <= depths[i - 1]:
             flags[i] = DEPTH_FLAG_INVERSION
 
-    # Rule (b): once three successive readings are shallower than an earlier one, every
-    # following level is suspect -- this is the signature of two profiles concatenated
-    # with no separating header.
+    # Rule (b): typically two profiles concatenated without a header.
     for i in range(n - 3):
         if not np.isfinite(depths[i]):
             continue
@@ -347,23 +318,5 @@ def _counts(arr: np.ndarray) -> Dict[str, int]:
 
 
 def wod_col_is_depth(wod_code: int) -> bool:
-    """Kept for callers written against the earlier API."""
+    """Whether `wod_code` is the depth sentinel; kept for backward compatibility."""
     return wod_code == DEPTH_SENTINEL_CODE
-
-
-if __name__ == "__main__":
-    test_df = pd.DataFrame({
-        "Depth":  [0.0, 10.0, 20.0, 15.0, 40.0, 50.0],
-        "Temp_C": [20.0, 19.5, -10.0, 19.0, 50.0, 18.0],
-    })
-    contract = {
-        "wod_dataset_code": "OSD",
-        "column_mapping": [
-            {"raw_column": "Depth", "wod_code": 0, "wod_name": "Depth"},
-            {"raw_column": "Temp_C", "wod_code": 1, "wod_name": "Temperature"},
-        ],
-    }
-    out, summary = apply_qc_auditing(test_df, contract)
-    print(out.to_string(index=False))
-    print()
-    print(json.dumps(summary, indent=2))

@@ -8,7 +8,7 @@ import tomllib
 
 import pytest
 
-from wod_etl.orchestration.cli import main
+from wod_etl.cli import main
 from wod_etl.orchestration.pipeline import (EXIT_DECISIONS, EXIT_FAILED, EXIT_INTERRUPTED,
                                             EXIT_OK, Workspace, confirm_pipeline,
                                             run_pipeline)
@@ -35,8 +35,8 @@ def _long(var):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """Every pipeline folder under tmp_path, and a small accession: one cast processed as it
-    stands, two long-format variables for three stations, and their station list."""
+    """Pipeline folders under tmp_path and a small accession: one direct cast, and two
+    long-format variables for three stations with their station list."""
     from wod_etl import config
 
     for name in ("RAW_DIR", "STAGING_DIR", "PROCESSED_DIR"):
@@ -110,7 +110,7 @@ class TestRunWritesDecisionsForReview:
         assert long_entry["include"] is True and "located by X1_StationInfo.csv" in \
             long_entry["why"]
         assert files["data/0-data/X1_StationInfo.csv"]["include"] is False
-        # documentation: its section heading says why, so the entry does not repeat it
+        # documentation: the section heading gives the why
         assert files["NCEI-Readme.txt"] == {"data": "NCEI readme", "include": False}
         assert all(e.get("why") for k, e in files.items() if k != "NCEI-Readme.txt")
         text = ws.decisions_path.read_text()
@@ -122,7 +122,7 @@ class TestRunWritesDecisionsForReview:
         r = run_pipeline(str(env))
         ws = Workspace(ACC)
         assert _outputs(ws) == []
-        # How the long-format files become casts is wod-etl's to work out, not the reviewer's.
+        # The reshape recipe is worked out, not asked of the reviewer.
         assert set(_decisions(ws)) == {"accession", "metadata", "files"}
         assert not [p for p in r["problems"] if p["blocking"]]
         report = ws.report_md.read_text()
@@ -394,7 +394,7 @@ class TestCommandLine:
         assert "Output:" not in capsys.readouterr().out
 
     def test_a_confirm_that_stopped_before_writing_lists_no_output(self, monkeypatch, capsys):
-        from wod_etl.orchestration import cli
+        from wod_etl import cli
 
         done = {"status": "done", "outputs": {"files": [
             {"name": "wod_ctd_2015_x.nc", "casts": 1, "dataset": "CTD", "sources": []}]}}
@@ -406,7 +406,7 @@ class TestCommandLine:
         assert "Output:" not in capsys.readouterr().out
 
     def test_nothing_to_write_is_not_called_verified(self, monkeypatch, capsys):
-        from wod_etl.orchestration import cli
+        from wod_etl import cli
 
         monkeypatch.setattr(cli, "confirm_pipeline", lambda *a, **k: {
             "accession": ACC, "exit_code": EXIT_OK, "problems": [], "paths": {},
@@ -434,8 +434,7 @@ class TestOtherRecipeKinds:
                                            + "".join(f"{z},{20 - z / 10}\n" for z in range(15)))
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        # Nothing in the casts locates them, and a recipe saying how is a specific the
-        # decisions do not hold: an agent's staging script does (kind = "script").
+        # Unlocatable casts need a script recipe; a per_file recipe is no longer read.
         _set(ws, "data/casts/*", include=False)
         with open(ws.decisions_path, "a") as fh:
             fh.write('\n[profiles.casts]\nkind = "per_file"\n'
@@ -467,8 +466,7 @@ class TestOtherRecipeKinds:
         r = confirm_pipeline(ACC)
         assert r["exit_code"] == EXIT_OK, r["problems"]
         assert "custom/a.csv" in _sources(ws)
-        # What the script printed, in any encoding, and what its wod_etl calls logged, are
-        # in this run's log; the script did not open a run folder of its own.
+        # The script's output and wod_etl logging land in this run's log, not a run of its own.
         log = ws.log_path.read_text()
         assert f"root is {config.ROOT}" in log and "caf� in latin-1" in log
         assert re.search(r"stderr: INFO wod_etl\.staging\.write_cast: staged \S+a\.csv", log)
@@ -496,7 +494,7 @@ class TestAMooringBecomesMRB:
         assert "profiles" not in d                           # nothing to fill in
         entry = d["files"]["data/0-data/18bs8a_s39_0051m.cf.nc"]
         assert (entry["include"], entry["dataset"]) == (True, "MRB")
-        # It records no pressure: its record without the first and last day, as said.
+        # No pressure, so the first and last days are left out.
         assert "first and last day" in entry["why"]
         assert "19.8 m  from its nominal pressure" in ws.decisions_path.read_text()
         r = confirm_pipeline("0999998")
@@ -530,8 +528,7 @@ class TestACodeChangeDoesNotSendTheReviewBack:
 
     def test_what_the_new_code_works_out_is_what_confirm_uses(self, env, tmp_path,
                                                                  monkeypatch):
-        """A mooring triaged before its depths were worked out: the new code places it the
-        same for the review, and confirm stages it from the new triage, not the old one."""
+        """Confirm stages from the new triage when the old one lacks mooring placement."""
         from helpers import write_mooring_nc
         from wod_etl.orchestration import pipeline
 

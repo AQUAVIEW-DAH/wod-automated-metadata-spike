@@ -8,8 +8,7 @@ from wod_etl import runlog
 
 log = logging.getLogger(__name__)
 
-# Keys Phase 1's header parser recognises as coordinates. Written bare, without the
-# comment marker, because that is the `Key: value` form it scans for.
+# Coordinate keys Phase 1's header parser scans for, written without the comment marker.
 _COORD_KEYS = ("LAT:", "LON:", "DATE:", "TIME:")
 
 
@@ -29,32 +28,21 @@ def write_staged_cast(
 ) -> Dict[str, Any]:
     """Write a header block plus a CSV table to `output_path`.
 
-    The header block is what gives a cast its position and time when the data file has
-    none of its own. `metadata` becomes `# Key: value` lines, which
-    `generate_field_mapping` mines for Table 4a secondary headers -- Accession, Platform,
-    Station, Cast, Bottom Depth and Instrument are all recognised. `notes` are free text.
-
-    **Record every derivation here.** A depth computed from pressure, a position taken
-    from a readme PDF, a depth of 0 applied by convention, an identification inferred
-    across two files: each belongs in `notes`, because the staged file is the only place a
-    later reader can see that the value was not in the source.
+    `metadata` becomes `# Key: value` lines, mined for Table 4a secondary headers
+    (Accession, Platform, Station, Cast, Bottom Depth, Instrument). `notes` record
+    derivations not in the source (e.g. depth from pressure) and reach the NetCDF as
+    `comment`; `sources` become `# Source:` lines and `source_files_raw`.
 
         write_staged_cast(
-            out / "C145-001.csv",
+            out / "cast_001.csv",
             columns=["Depth (m)", "T090C", "Sal00"], rows=levels,
             latitude=62.16, longitude=-170.500167, date="2023-06-20", time="14:55",
-            metadata={"Accession": "0287423", "Platform": "Oshoro maru",
-                      "Station": "a01", "Bottom Depth": 47},
+            metadata={"Station": "a01", "Bottom Depth": 47},
             notes=["Depth computed from PrDM by UNESCO 1983 at the cast latitude"])
 
-    Column names must carry their units -- `Temp (deg C)`, `DO (mg/L)`, `Depth (m)` --
-    because unit detection reads the full raw column name and nothing else.
-
-    `sources` names the raw files the cast was built from, one `# Source:` line each; they
-    reach the NetCDF as `source_files_raw`, and `notes` reach it as `comment`. `time_zone`
-    states the zone of `date` and `time` when it is not UTC (`"UTC+10"`, `"local"`): a
-    numeric offset with a time of day is converted to UTC by the writer, anything else is
-    recorded and left alone.
+    Column names must carry their units (`Temp (deg C)`): unit detection reads only the
+    name. `time_zone` states the zone of `date`/`time` when not UTC (`"UTC+10"`, `"local"`);
+    a numeric offset with a time of day is converted to UTC by the writer.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,8 +66,7 @@ def write_staged_cast(
             w.writerow(list(row))
             n += 1
 
-    # Logged to the accession's run log when the path names one: a staged cast is a
-    # judgement, and its notes are the record of it.
+    # Logged to the accession's run log when the path names one.
     with runlog.accession_log_for(output_path, banner=False):
         runlog.event(log, logging.INFO,
                      f"staged {output_path}: {n} level(s) at {latitude}, {longitude} on {date}"
@@ -99,12 +86,11 @@ def write_staged_table(
     source: str,
     notes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Write a harvested table -- a station list read out of a PDF, a trawl log -- as CSV.
+    """Write a harvested table (e.g. a station list from a PDF) as CSV with its citation.
 
-    Not a cast: it has no position of its own and `process_accession` skips it as a sidecar
-    or by its contents. It exists so a value taken from a report can be read back, cited and
-    cross-checked (`read_station_list`, `reconcile_stations`) like any other file. `source`
-    is the citation -- `extract_pdf_rows` returns one in `info["source"]`.
+    Not a cast: `process_accession` skips it. It can be read back and cross-checked with
+    `read_station_list` and `reconcile_stations`. `source` is the citation, e.g.
+    `info["source"]` from `extract_pdf_rows`.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,26 +1,7 @@
-"""Run the staging recipes wod-etl works out for the files a person included.
+"""Staging recipes that `wod-etl confirm` runs for the included files.
 
-An agent stages an accession by composing the staging primitives in a script; `wod-etl`
-works the same steps out from the files (decisions.derive_recipes) for the shapes
-accessions keep arriving in, and `wod-etl confirm` runs them. The person only decides which
-files go in. It is deliberately small -- three profile shapes and two taxa shapes -- with a
-`script` kind, written into decisions.toml by an agent, as the way out for anything else:
-
-    profiles  kind = "long"      long-format files -> pivot_long -> one cast per station,
-                                 located by a station list
-              kind = "per_file"  one file per cast, located by a station list
-              kind = "mooring"   one file per instrument of a mooring -> one MRB profile a
-                                 day: each instrument's daily mean at its depth
-              kind = "script"    run scripts/<name>.py, which writes staged casts into
-                                 $WOD_STAGING_OUT -- for pressure-to-depth, re-occupied
-                                 stations, layouts no recipe describes
-    taxa      kind = "matrix"    taxa down, samples across -> melt_matrix -> one haul per
-                                 sample
-              kind = "long"      one row per taxon per station -> one haul per station
-
-Every value a recipe adds that the source files do not state -- a position from the station
-list, a logger's depth from the mooring's description, a station check the list failed -- is
-written into the staged file's notes, and from there into the NetCDF's `comment`.
+Each recipe reshapes source files into staged casts or hauls. Every value a recipe adds (e.g. a
+position from a station list) is recorded in the staged file's notes and the NetCDF `comment`.
 """
 import logging
 import os
@@ -28,11 +9,11 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 from wod_etl import config, runlog
-from wod_etl.staging import (group_rows, join_station_list, melt_matrix, normalise_station,
-                             pivot_long, read_station_list, read_table, write_staged_cast,
+from wod_etl.staging import (group_rows, join_station_list, normalise_station, pivot_long,
+                             read_station_list, read_table, write_staged_cast,
                              write_staged_haul)
 
 log = logging.getLogger(__name__)
@@ -46,6 +27,7 @@ def _safe(text: Any) -> str:
 
 def _station_lookup(root: Path, recipe: Dict[str, Any]):
     stations, info = read_station_list(root / recipe["station_list"],
+                                       station=recipe.get("station_column"),
                                        time_zone=recipe.get("time_zone"))
     if info.get("error"):
         raise ValueError(f"station list {recipe['station_list']}: {info['error']}")
@@ -53,7 +35,7 @@ def _station_lookup(root: Path, recipe: Dict[str, Any]):
 
 
 def _apply_override(entry: Dict[str, Any], overrides: Dict[str, Dict[str, Any]]):
-    """A station-list entry with any settled conflict applied, and the notes saying so."""
+    """A station-list entry with its override applied, plus notes describing the change."""
     o = overrides.get(normalise_station(entry["station"])) or {}
     if not o:
         return entry, []
@@ -72,9 +54,7 @@ def _pivot(root: Path, recipe: Dict[str, Any]):
 
 
 def check_profile_recipe(recipe: Dict[str, Any], data_root) -> Dict[str, Any]:
-    """Run a recipe without writing: which casts the station list does not locate, and how
-    many levels carry two values. Read by decisions.validate, so the person sees it in the
-    same pause as everything else."""
+    """Dry-run a profile recipe: casts the station list cannot locate, and pivot conflicts."""
     root = Path(data_root)
     if recipe.get("kind") == "mooring":
         return check_mooring_recipe(recipe, root)
@@ -88,6 +68,10 @@ def check_profile_recipe(recipe: Dict[str, Any], data_root) -> Dict[str, Any]:
             cols, rows, info = _pivot(root, recipe)
             casts = [k[0] for k in group_rows(rows, cols, [recipe["cast_key"]]) if k]
             conflicts = len(info["conflicts"])
+        elif recipe.get("kind") == "by_station":
+            casts = list(dict.fromkeys(k for f in recipe.get("files") or []
+                                       for k, _ in _station_groups(root / f, recipe)))
+            conflicts = 0
         else:
             casts = [_cast_from_file(f, recipe) for f in recipe.get("files") or []]
             conflicts = 0
@@ -115,9 +99,8 @@ def _unit_key(code: int, units: str) -> str:
 
 
 def check_mooring_recipe(recipe: Dict[str, Any], root: Path) -> Dict[str, Any]:
-    """A mooring recipe, read without its records: every instrument readable and placed (a
-    depth, or the pressure it records), one unit per variable, and the instruments at one
-    place."""
+    """Check a mooring recipe without its records: instruments readable and placed, one unit
+    per variable, and all at one position."""
     from wod_etl.staging import read_instrument
 
     problems, positions, units = [], [], {}
@@ -156,8 +139,7 @@ def check_mooring_recipe(recipe: Dict[str, Any], root: Path) -> Dict[str, Any]:
 
 def _run_mooring(name: str, recipe: Dict[str, Any], root: Path, out: Path, accession: str,
                  plan: Dict[str, Any]) -> Dict[str, Any]:
-    """One staged cast a day: every instrument's daily mean at its depth (manual pp.14, 17),
-    from the samples within the reviewed deployment."""
+    """Stage one cast per day: each instrument's daily mean at its depth (manual pp.14, 17)."""
     import numpy as np
 
     from wod_etl.staging import mooring_days, mooring_profiles, read_instrument
@@ -187,8 +169,8 @@ def _run_mooring(name: str, recipe: Dict[str, Any], root: Path, out: Path, acces
     if not built["profiles"]:
         raise ValueError(f"no day of the deployment has an instrument recording for "
                          f"{fraction:.0%} of its hours: there is no daily mean to write")
-    # One column per variable, named as the first instrument recording it names it (units
-    # agree, by check_mooring_recipe); pressure is in decibars whatever the file's unit.
+    # One column per variable, named by the first instrument recording it; units agree
+    # (check_mooring_recipe) and pressure is in decibars.
     columns: Dict[int, str] = {}
     for info in instruments:
         for v in info["variables"]:
@@ -262,16 +244,14 @@ def _cast_from_file(path: str, recipe: Dict[str, Any]) -> str:
 
 def _metadata(accession: str, plan_meta: Dict[str, Any], recipe: Dict[str, Any],
               station: str, cast: str) -> Dict[str, Any]:
-    """Header keys for one staged cast or haul. `Cast` is scoped by the recipe: a CTD cast
-    and a bottle cast at one station on one day are two casts, and must not share an id."""
+    """Header keys for one staged cast or haul; `Cast` is recipe-scoped so ids do not clash."""
     return {"Accession": accession, **plan_meta, "Cast": cast,
             **(recipe.get("metadata") or {}), "Station": station}
 
 
 def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
                        accession: str, plan: Dict[str, Any]) -> Dict[str, Any]:
-    """Stage one profile recipe into `out_dir/<name>/`. Returns written, skipped,
-    and the notes recorded."""
+    """Stage one profile recipe into `out_dir/<name>/`; returns files written and casts skipped."""
     root, out = Path(data_root), Path(out_dir) / name
     out.mkdir(parents=True, exist_ok=True)
     kind = recipe.get("kind")
@@ -279,6 +259,8 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
         return _run_script(name, recipe, root, out, accession)
     if kind == "mooring":
         return _run_mooring(name, recipe, root, out, accession, plan)
+    if kind == "combine":
+        return _run_combine(name, recipe, root, out, accession, plan)
 
     stations, sinfo = _station_lookup(root, recipe)
     overrides = {normalise_station(k): v for k, v in (plan.get("station_overrides") or {}).items()}
@@ -347,8 +329,7 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
                                                         f"position and date are not known"})
                 continue
             entry, override_notes = _apply_override(entry, overrides)
-            cols, rows, _ = read_table(root / f, header_row=int(recipe.get("header_row", 0)),
-                                       delimiter=None)
+            cols, rows = _table(root / f)
             cols = [renames.get(c, c) for c in cols]
             path = out / f"{_safe(cast)}.csv"
             write_staged_cast(
@@ -360,10 +341,92 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
                       + override_notes,
                 sources=[str(root / f), str(root / recipe["station_list"])])
             written.append(str(path))
+    elif kind == "by_station":
+        for f in recipe.get("files") or []:
+            for cast, df in _station_groups(root / f, recipe):
+                entry = stations.get(normalise_station(mapping.get(cast, cast)))
+                if cast in skip or entry is None:
+                    skipped.append({"cast": cast, "reason": "skip_casts in decisions.toml"
+                                    if cast in skip else f"{f}: no entry in "
+                                    f"{recipe['station_list']}: its position and date are "
+                                    f"not known"})
+                    continue
+                entry, override_notes = _apply_override(entry, overrides)
+                cols, rows = _rows(df.drop(columns=[recipe["cast_column"]]))
+                path = out / f"{_safe(Path(f).stem)}_{_safe(cast)}.csv"
+                write_staged_cast(
+                    path, cols, rows, latitude=entry["latitude"], longitude=entry["longitude"],
+                    date=entry["date"] or "", time=entry.get("time"),
+                    time_zone=entry.get("time_zone"),
+                    metadata=_metadata(accession, plan.get("metadata") or {}, recipe,
+                                       entry["station"], f"{name}_{_safe(cast)}"),
+                    notes=base_notes + [f"Position and date from {entry['source']}."]
+                          + override_notes,
+                    sources=[str(root / f), str(root / recipe["station_list"])])
+                written.append(str(path))
     else:
         raise ValueError(f"unknown profile recipe kind {kind!r}")
     return {"recipe": name, "written": written, "skipped": skipped,
             "dropped_station_list_rows": sinfo.get("dropped")}
+
+
+def _run_combine(name: str, recipe: Dict[str, Any], root: Path, out: Path, accession: str,
+                 plan: Dict[str, Any]) -> Dict[str, Any]:
+    from wod_etl.staging.combine import combine_files
+
+    files = recipe.get("files") or []
+    casts, info = combine_files([root / f for f in files])
+    written = []
+    for c in casts:
+        cols, rows = _rows(c["df"])
+        names = {str(root / f): f for f in files}
+        held = "; ".join(f"{names[p]}: {', '.join(cs)}" for p, cs in c["columns_from"].items())
+        notes = [f"Staged by `wod-etl confirm`: recipe {name} (kind = combine).",
+                 f"Station {c['station']} on {c['date']}, combined from {len(c['sources'])} "
+                 f"file(s) reporting the same cast, levels merged by depth -- {held}."]
+        path = out / f"{_safe(c['station'])}_{c['date']}.csv"
+        write_staged_cast(
+            path, cols, rows, latitude=c["latitude"], longitude=c["longitude"], date=c["date"],
+            time=c.get("time"),
+            metadata=_metadata(accession, plan.get("metadata") or {}, recipe, c["station"],
+                               f"{name}_{_safe(c['station'])}_{c['date']}"),
+            notes=notes, sources=c["sources"])
+        written.append(str(path))
+    return {"recipe": name, "written": written, "skipped": [],
+            "in_one_file_only": info["in_one_file_only"]}
+
+
+def _table(path: Path):
+    """(columns, rows) of a cast file, read with `read_any`."""
+    from wod_etl.discovery import read_any, sniff_format
+
+    casts, info = read_any(str(path), sniff_format(str(path)))
+    if not casts:
+        raise ValueError(f"{path.name}: {info.get('error') or 'no table read'}")
+    import pandas as pd
+
+    return _rows(pd.concat([c["df"] for c in casts], ignore_index=True))
+
+
+def _rows(df):
+    return [str(c) for c in df.columns], df.astype(object).where(df.notna(), "").values.tolist()
+
+
+def _station_groups(path: Path, recipe: Dict[str, Any]):
+    """[(station, rows of that station)] of one table of many casts, in file order."""
+    from wod_etl.discovery import read_any, sniff_format
+
+    casts, info = read_any(str(path), sniff_format(str(path)))
+    col = recipe["cast_column"]
+    out = []
+    for c in casts:
+        if col not in c["df"].columns:
+            continue
+        df = c["df"]
+        key = df[col].astype(str).str.strip()
+        for station in dict.fromkeys(k for k in key if k):
+            out.append((station, df[key == station]))
+    return out
 
 
 def _run_script(name: str, recipe: Dict[str, Any], root: Path, out: Path,
@@ -374,11 +437,10 @@ def _run_script(name: str, recipe: Dict[str, Any], root: Path, out: Path,
         raise FileNotFoundError(f"script {recipe['script']} does not exist")
     env = {**os.environ, "WOD_STAGING_OUT": str(out), "WOD_ACCESSION": accession,
            "WOD_DATA_ROOT": str(root),
-           # Resolved here: a relative WOD_PROJECT_ROOT would resolve again from the
-           # child's cwd, which is ROOT, and find a workspace inside this one.
+           # Absolute, so the child (cwd ROOT) does not resolve it a second time.
            "WOD_PROJECT_ROOT": str(config.ROOT),
            runlog.TO_STDERR_ENV: "1"}
-    # A script may print anything, in any encoding; that must not fail a script that worked.
+    # Script output may be in any encoding; never fail on it.
     proc = subprocess.run([sys.executable, str(script)], cwd=str(config.ROOT), env=env,
                           capture_output=True, encoding="utf-8", errors="replace")
     _log_output(recipe["script"], proc)
@@ -398,8 +460,7 @@ MAX_LOGGED_LINES = 200
 
 
 def _log_output(script: str, proc: subprocess.CompletedProcess) -> None:
-    """What the script printed, and the log lines its wod_etl calls sent to stderr, into
-    this run's log -- whether it worked or not."""
+    """Copy a script's stdout and stderr into this run's log."""
     base = logging.INFO if proc.returncode == 0 else logging.WARNING
     runlog.event(log, base, f"script {script} exited {proc.returncode}", kind="script",
                  script=script, exit_code=proc.returncode)
@@ -415,8 +476,7 @@ def _log_output(script: str, proc: subprocess.CompletedProcess) -> None:
 
 
 def _cast_file(cast: str, width: int) -> str:
-    """'1' -> '01' when casts run to two digits, so files sort in cast order. The recipe's
-    folder already says which recipe they came from."""
+    """'1' -> '01' when casts run to two digits, so files sort in cast order."""
     return cast.zfill(width) if cast.isdigit() and width else _safe(cast)
 
 
@@ -428,83 +488,177 @@ def _num(text) -> float:
 
 
 # --------------------------------------------------------------------- taxa
+def _taxa_hauls(recipe: Dict[str, Any], root: Path) -> Dict[str, Any]:
+    """Group a plankton table's rows into hauls, one per station and date.
+
+    Returns `{"hauls", "skipped", "negative", "records"}`.
+    """
+    from wod_etl.staging.taxa_layout import is_missing
+
+    path = recipe["files"][0]
+    from wod_etl.staging.station_list import _header_row_below_title
+
+    cols, rows, _ = read_table(root / path, delimiter=None,
+                               header_row=_header_row_below_title(root / path, ","))
+    at = {c: i for i, c in enumerate(cols)}
+    roles = recipe["columns"]
+
+    def cell(row, role):
+        c = roles.get(role)
+        v = row[at[c]].strip() if c in at and at[c] < len(row) else ""
+        return "" if is_missing(v) else v
+
+    stations, located_by = {}, None
+    if recipe.get("station_list"):
+        stations, _ = _station_lookup(root, recipe)
+        located_by = recipe["station_list"]
+    hauls: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    negatives: Dict[str, int] = {}
+    for row in rows:
+        station, date = cell(row, "station"), cell(row, "date")
+        # Normalised like the station list: '014' and '14' are one haul.
+        key = (normalise_station(station) if station else "", date)
+        haul = hauls.setdefault(key, {"station": station, "date": date, "row": row,
+                                      "records": []})
+        upper = "0" if roles.get("upper_zero") else cell(row, "upper")
+        base = {"Taxon": cell(row, "taxon"), "Upper depth (m)": upper,
+                "Lower depth (m)": cell(row, "lower")}
+        if roles.get("stage"):
+            base["Life stage"] = cell(row, "stage")
+        if roles.get("sex"):
+            base["Sex"] = cell(row, "sex")
+        for m in recipe["measurements"]:
+            i = at[m["column"]]
+            value = row[i].strip() if i < len(row) else ""
+            if is_missing(value):
+                continue
+            # A negative value is a missing-value code (e.g. -999); Table 7a's sign rule would
+            # misread it as a value in the smaller unit.
+            if _negative(value):
+                negatives[m["column"]] = negatives.get(m["column"], 0) + 1
+                continue
+            if m["negate"]:
+                value = f"-{value}"
+            if m.get("biomass"):
+                haul["records"].append({**base, "Taxon": m["taxon"], "Biomass": value,
+                                        "Unit": m["per_unit"]})
+                continue
+            haul["records"].append({**base, m["column"]: value, "Unit": m["per_unit"]})
+
+    located, skipped = [], []
+    for haul in hauls.values():
+        station, date = haul["station"], haul["date"]
+        label = station or date or "(no station)"
+        if not haul["records"]:
+            skipped.append({"cast": label, "reason": "no measurement in any of its rows"})
+            continue
+        if located_by:
+            entry = stations.get(normalise_station(station))
+            if entry is None:
+                skipped.append({"cast": label, "unlocated": True,
+                                "reason": f"no entry in {located_by}: its position and date "
+                                          f"are not known"})
+                continue
+            where = {"latitude": entry["latitude"], "longitude": entry["longitude"],
+                     "date": date or entry.get("date") or "", "time": entry.get("time"),
+                     "time_zone": entry.get("time_zone"), "station": entry["station"],
+                     "source": entry["source"]}
+        else:
+            from wod_etl.staging.parse import parse_coordinate
+
+            lat = parse_coordinate(cell(haul["row"], "latitude"))
+            lon = parse_coordinate(cell(haul["row"], "longitude"))
+            if lat is None or lon is None or not date:
+                skipped.append({"cast": label, "unlocated": True,
+                                "reason": "its row states no position or date"})
+                continue
+            where = {"latitude": lat, "longitude": lon, "date": date,
+                     "time": cell(haul["row"], "time") or None, "time_zone": None,
+                     "station": station, "source": f"its own columns in {path}"}
+        located.append({**haul, "where": where})
+    return {"hauls": located, "skipped": skipped, "negative": negatives,
+            "records": sum(len(h["records"]) for h in located)}
+
+
+def _negative(value: str) -> bool:
+    try:
+        return float(value) < 0
+    except ValueError:
+        return False
+
+
+def check_taxa_recipe(recipe: Dict[str, Any], data_root) -> Dict[str, Any]:
+    """Dry run of a taxa recipe, for the review: hauls, records, hauls it cannot locate."""
+    try:
+        built = _taxa_hauls(recipe, Path(data_root))
+    except Exception as e:                              # noqa: BLE001 - reported to the person
+        return {"error": f"{type(e).__name__}: {e}"}
+    from wod_etl.reference import missing_biological_fields
+
+    return {"hauls": len(built["hauls"]), "records": built["records"],
+            "casts_without_station": [s["cast"] for s in built["skipped"]
+                                      if s.get("unlocated")],
+            "hauls_without_measurement": [s["cast"] for s in built["skipped"]
+                                          if not s.get("unlocated")],
+            "negative_values": built["negative"] or None,
+            "missing_biological_fields": missing_biological_fields(
+                set(recipe.get("biological_header") or {}))}
+
+
 def run_taxa_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir, accession: str,
                     plan: Dict[str, Any]) -> Dict[str, Any]:
-    """Stage one taxa recipe: one haul file per sample into `out_dir/<name>/`. (The pipeline
-    leaves plankton out for now; this stays for an agent's staging script.)"""
+    """Stage one taxa recipe: one haul file per station and date into `out_dir/<name>/`."""
     root, out = Path(data_root), Path(out_dir) / name
     out.mkdir(parents=True, exist_ok=True)
-    stations, _ = _station_lookup(root, recipe)
+    built = _taxa_hauls(recipe, root)
     overrides = {normalise_station(k): v for k, v in (plan.get("station_overrides") or {}).items()}
-    missing = {str(v).lower() for v in recipe.get("missing_values") or ["na", ""]}
-    unit = recipe.get("unit")
-    base_notes = list(recipe.get("notes") or []) + [
-        f"Staged from decisions.toml [taxa.{name}] (kind = "
-        f"{recipe.get('kind')}).",
-        f"Counts are '{unit}' as stated in decisions.toml." if unit else
-        "No unit stated for the counts."]
-    hauls: Dict[Tuple[str, ...], List[Dict[str, Any]]] = {}
-
-    if recipe.get("kind") == "matrix":
-        cols, rows, _ = read_table(root / recipe["file"])
-        cells_cols, cells, minfo = melt_matrix(
-            [cols] + rows, header_rows=int(recipe["header_rows"]),
-            label_columns=list(recipe["label_columns"]),
-            header_names=list(recipe["header_names"]),
-            fill_down=list(recipe.get("fill_down") or []),
-            blank=recipe.get("blank", "absent"))
-        at = {c: i for i, c in enumerate(cells_cols)}
-        for r in cells:
-            sample = tuple(r[at[h]] for h in recipe["header_names"])
-            hauls.setdefault(sample, []).append({
-                "Taxon": r[at[recipe["taxon_column"]]],
-                "Life stage": (r[at[recipe["stage_column"]]] if recipe.get("stage_column")
-                               else ""),
-                "Count": r[at["value"]], "Unit": unit})
-        base_notes.append(f"Melted from a count matrix: {minfo['cells_written']} cell(s) "
-                          f"written, {minfo['blank_cells']} blank cell(s) read as "
-                          f"'{recipe.get('blank', 'absent')}'.")
-        station_header = recipe.get("cast_header", recipe["header_names"][0])
-        station_pos = list(recipe["header_names"]).index(station_header)
-    elif recipe.get("kind") == "long":
-        cols, rows, _ = read_table(root / recipe["file"])
-        at = {c: i for i, c in enumerate(cols)}
-        clean = lambda v: "" if str(v).strip().lower() in missing else str(v).strip()
-        for r in rows:
-            cell = lambda c: clean(r[at[c]]) if c in at and at[c] < len(r) else ""
-            name_parts = [cell(c) for c in recipe.get("taxon_columns") or []]
-            taxon = " ".join(p for p in name_parts if p) or cell(
-                recipe.get("fallback_taxon_column", ""))
-            hauls.setdefault((cell(recipe["cast_key"]),), []).append({
-                "Taxon": taxon, "Life stage": cell(recipe.get("stage_column", "")),
-                "Count": cell(recipe["count_column"]), "Unit": unit})
-        station_pos = 0
-    else:
-        raise ValueError(f"unknown taxa recipe kind {recipe.get('kind')!r}")
-
-    written, missing_bio = [], {}
-    for sample, records in hauls.items():
-        station = sample[station_pos]
-        entry = stations.get(normalise_station(station))
-        if entry is None:
-            raise ValueError(f"haul station {station!r} has no entry in "
-                             f"{recipe['station_list']}")
-        entry, override_notes = _apply_override(entry, overrides)
-        others = [v for i, v in enumerate(sample) if i != station_pos]
-        bio = dict(recipe.get("biological_header") or {})
-        for v in others:
-            bio.update((recipe.get("sample_biological") or {}).get(v) or {})
-        path = out / (f"{_safe(station)}" + "".join(f"_{_safe(v)}" for v in others) + ".csv")
+    source = recipe["files"][0]
+    notes = list(recipe.get("notes") or []) + [
+        f"Staged by `wod-etl confirm`: taxa recipe {name}, from {source}.",
+        "One Taxa-Record per taxon, depth range and measurement (Table 7a)."]
+    for m in recipe["measurements"]:
+        if m["negate"]:
+            notes.append(f"{m['column']!r} is in {m['unit']}: written negative (Table 7a sign "
+                         f"rule).")
+    if recipe["columns"].get("upper_zero"):
+        notes.append(f"A vertical net tow: each record's depth range is 0 m to the stated "
+                     f"{recipe['columns']['lower']!r}.")
+    for m in recipe["measurements"]:
+        if m.get("biomass"):
+            notes.append(f"{m['column']!r} is whole-sample biomass: WOD variable number "
+                         f"{m['biomass']} ({m['taxon']}).")
+    if any(m["per_unit"] == "sample" for m in recipe["measurements"]):
+        notes.append("UNIT is 'sample': no volume filtered or tow distance is stated.")
+    for column, n in built["negative"].items():
+        notes.append(f"{n} negative value(s) in {column!r} not written: a measurement cannot "
+                     f"be negative, so each is read as a missing-value code (e.g. -999).")
+    written, missing_bio, stems = [], {}, set()
+    for haul in built["hauls"]:
+        where = haul["where"]
+        entry, override_notes = _apply_override(where, overrides) if where.get("station") \
+            else (where, [])
+        stem = base = _safe("_".join(p for p in (where.get("station"), where.get("date")) if p))
+        n = 2
+        while stem in stems:                # two hauls must not write one file
+            stem, n = f"{base}_{n}", n + 1
+        stems.add(stem)
+        path = out / f"{stem}.csv"
         res = write_staged_haul(
-            path, records, latitude=entry["latitude"], longitude=entry["longitude"],
+            path, haul["records"], latitude=entry["latitude"], longitude=entry["longitude"],
             date=entry["date"] or "", time=entry.get("time"), time_zone=entry.get("time_zone"),
-            upper_depth=recipe.get("upper_depth"), lower_depth=recipe.get("lower_depth"),
-            biological_header=bio,
+            biological_header=dict(recipe.get("biological_header") or {}),
             metadata=_metadata(accession, plan.get("metadata") or {}, recipe,
-                               entry["station"], f"{name}_{path.stem}"),
-            notes=base_notes + [f"Position and date from {entry['source']}."] + override_notes,
-            sources=[str(root / recipe["file"]), str(root / recipe["station_list"])])
+                               where.get("station") or "", f"{name}_{stem}"),
+            notes=notes + [f"Position and date from {where['source']}."] + override_notes,
+            sources=[str(root / source)] + ([str(root / recipe["station_list"])]
+                                            if recipe.get("station_list") else []))
         written.append(str(path))
         for m in res.get("missing_biological_fields") or []:
             missing_bio[m] = missing_bio.get(m, 0) + 1
-    return {"recipe": name, "written": written, "missing_biological_fields": missing_bio}
+    runlog.event(log, logging.INFO,
+                 f"taxa {name}: {len(written)} haul(s), {built['records']} Taxa-Record(s); "
+                 f"{len(built['skipped'])} haul(s) left out",
+                 kind="recipe", recipe=f"taxa.{name}", written=len(written),
+                 left_out=len(built["skipped"]))
+    return {"recipe": name, "kind": "taxa", "written": written, "skipped": built["skipped"],
+            "missing_biological_fields": missing_bio}

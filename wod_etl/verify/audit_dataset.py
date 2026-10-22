@@ -1,12 +1,9 @@
 """Audit what a processed dataset actually mapped, dropped and flagged.
 
-`process_accession` reports pass/fail. That is not enough to trust a run: a column in the
-wrong unit, a dropped variable and a spurious QC flag all produce a clean summary. This
-recomputes the mapping contract for every staged file and reads back every written NetCDF,
-so the three things the manifest never contains can be reported.
+Recomputes the mapping contract for each staged file and reads back every written NetCDF.
 
     from wod_etl.verify import audit_dataset
-    report = audit_dataset("data/staging/0287423/2-CTD", "CTD", "data/processed/2-CTD")
+    report = audit_dataset("data/staging/<accession>/2-CTD", "CTD", "data/processed/2-CTD")
 
 Print `report["text"]` for a readable summary, or use the structured fields.
 """
@@ -23,7 +20,7 @@ from wod_etl.mapping import generate_field_mapping, query_wod_spec
 
 
 def _depth_increment(df) -> Optional[float]:
-    """Median positive level spacing, which is what decides CTD vs OSD routing."""
+    """Median positive level spacing, used for CTD vs OSD routing."""
     import pandas as pd
     col = next((c for c in df.columns
                 if str(c).strip().lower().startswith(("depth", "depsm", "depfm", "z "))), None)
@@ -92,8 +89,7 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
         with nc.Dataset(path) as ds:
             casts += len(ds.dimensions["casts"])
             obs += len(ds.dimensions["z_obs"])
-            # Which files the casts came from: a WOD file holds casts of many sources, so the
-            # number of NetCDF files says nothing about which staged files were written.
+            # A WOD file holds casts of many sources, so record which sources were written.
             if "source_file" in ds.variables:
                 sources.update(str(x) for x in ds.variables["source_file"][:])
             elif "source_file" in ds.ncattrs():
@@ -107,9 +103,7 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
                 if name in ("cast_id", "z_row_size"):
                     continue
                 if var.dtype == str or np.asarray(var[:]).dtype.kind in "USO":
-                    # Per-cast text metadata -- the secondary_header_* variables the writer
-                    # emits whenever a header differs between casts. Coercing them to float
-                    # used to abort the whole audit on the normal multi-cast file.
+                    # Per-cast text metadata (e.g. secondary_header_*), not numbers.
                     text_vars[name].update(
                         str(v) for v in np.asarray(var[:]).ravel() if str(v))
                     continue
@@ -124,8 +118,7 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
                 r["max"] = max(r["max"], float(finite.max()))
                 r["n"] += int(finite.size)
 
-    # By the file's resolved path: a name alone would let another folder's cast.csv answer
-    # for this one's.
+    # Match by resolved path, so a same-named file in another folder does not count.
     written = {os.path.realpath(x) for x in sources if "://" not in x}
     staged_without_casts = [Path(p).name for p in staged if os.path.realpath(p) not in written]
 

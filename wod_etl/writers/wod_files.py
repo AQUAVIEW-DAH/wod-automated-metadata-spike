@@ -1,13 +1,8 @@
 """WOD's file layout: one dataset and one year per file, named the way WOD names its own.
 
-WOD distributes its ragged-array NetCDF as `wod_<dataset>_<year>.nc` -- `wod_ctd_2008.nc` is
-every CTD cast of 2008, from every accession, under www.ncei.noaa.gov/data/oceans/ncei/wod/
-<year>/. The manual describes the sorting (by year, or by 10-degree square, and always split
-by dataset -- pp.44, 46) but never states the names; they are from NCEI's listing.
-
-An accession's output is split the same way and adds the accession, `wod_ctd_2008_0062621.nc`:
-accession 0062621's CTD casts of 2008. The bare WOD name would claim to be WOD's file for that
-year, which holds the whole world's casts.
+WOD distributes `wod_<dataset>_<year>.nc` (sorting per manual pp.44, 46; names from NCEI's
+listing). An accession's output adds the accession, `wod_ctd_2008_0062621.nc`, so it never
+claims to be WOD's own file for that year.
 """
 import hashlib
 import math
@@ -32,18 +27,37 @@ def wod_file_name(dataset_code: Optional[str], year: Optional[int],
 
 def is_wod_file_name(name: str, accession: Optional[str] = None) -> bool:
     """Whether `name` is a file `wod_file_name` writes for this accession: the only names a
-    rerun's assembly may replace or remove (`assemble_profiles` also checks the file holds
-    only sources the run answers for)."""
+    rerun may replace or remove."""
     tail = _accession_token(accession)
     pattern = (rf"wod_[a-z0-9]+_(?:\d{{4}}|{UNDATED})"
                + (rf"_{re.escape(tail)}" if tail else "") + r"\.nc")
     return re.fullmatch(pattern, name) is not None
 
 
+# Taxa-Records go in their own file per year: WOD's ragged NetCDF (Appendix 12) has no layout
+# for them. Accession tokens never contain '_', so the suffix cannot clash with a profile name.
+TAXA_SUFFIX = "_taxa.nc"
+
+
+def taxa_file_name(year: Optional[int], accession: Optional[str] = None) -> str:
+    """`wod_osd_2015_0303928_taxa.nc`."""
+    return wod_file_name("OSD", year, accession)[:-len(".nc")] + TAXA_SUFFIX
+
+
+def is_taxa_file_name(name: str, accession: Optional[str] = None) -> bool:
+    """Whether `name` is a file `taxa_file_name` writes for this accession."""
+    return (name.startswith("wod_osd_") and name.endswith(TAXA_SUFFIX)
+            and is_wod_file_name(name[:-len(TAXA_SUFFIX)] + ".nc", accession))
+
+
+def is_output_file_name(name: str, accession: Optional[str] = None) -> bool:
+    """Any file the pipeline writes for this accession."""
+    return is_wod_file_name(name, accession) or is_taxa_file_name(name, accession)
+
+
 def folder_scope(path_or_url: str) -> str:
     """The scope for input that is not an accession: its folder's name (`my_cruise` for
-    data/staging/my_cruise, and for a file in it), so its files cannot take WOD's own names.
-    A local path is resolved first, so a symlink or `..` names the folder it reaches."""
+    data/staging/my_cruise or a file in it). Local paths are resolved first."""
     text = str(path_or_url or "")
     if "://" not in text and text:
         p = os.path.realpath(text)
@@ -55,9 +69,8 @@ def folder_scope(path_or_url: str) -> str:
 
 
 def _accession_token(accession: Optional[str]) -> str:
-    """The scope as it goes in a name. One that keeps no character a name can carry -- a
-    folder named 航次 -- is replaced by a digest of itself, never left empty: an empty scope
-    is WOD's own bare name."""
+    """The scope as it goes in a file name. A scope with no usable characters becomes a
+    digest, since an empty one would give WOD's own bare name."""
     token = re.sub(r"[^A-Za-z0-9.-]+", "-", str(accession or "")).strip("-")
     if accession and not token:
         token = "scope-" + hashlib.sha1(str(accession).encode("utf-8")).hexdigest()[:8]
@@ -71,9 +84,7 @@ def group_by_file(sources: List[Dict[str, Any]],
     `sources` is `[{"key": str, "casts": [cast, ...]}, ...]`, each cast as
     `write_ragged_profiles` takes it. Returns one entry per dataset and year, in name order:
     `{"name", "dataset", "year", "casts", "sources": [{"key", "casts"}]}`. Within a file a
-    source's casts stay together and in their own order, and the sources follow one another
-    by their first cast's time -- so a reader can find a source's casts, and a file reads
-    forward in time as far as the sources allow.
+    source's casts stay together in order, and sources are ordered by first cast time.
     """
     groups: Dict[tuple, Dict[str, List[Any]]] = {}
     for src in sources:

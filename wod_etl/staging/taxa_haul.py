@@ -1,31 +1,21 @@
-"""Stage one haul of biological data -- plankton counts, biomass -- as WOD Taxa-Records.
+"""Stage one haul of biological data (plankton counts, biomass) as WOD Taxa-Records.
 
-WOD does not store plankton as a profile: a net haul samples a depth RANGE, and each
-observation is a taxon with qualifiers rather than a value at a level. A haul is the
-counterpart of a cast. It has a position and a date like a cast, a
-Biological Header (Table 6a) describing how the sample was COLLECTED -- gear, tow type, mesh,
-volume filtered -- and any number of Taxa-Records (Table 7a), each a taxon or biomass value
-over a depth RANGE:
+A haul has a position and date, a Biological Header (Table 6a) describing how the sample was
+collected, and Taxa-Records (Table 7a), each a taxon or biomass value over a depth range:
 
     # Record type: WOD taxa-records
-    # Accession: 0303928
-    # Platform: Shunyo-Maru
     # Station: 1
     # Bio Gear code: NORPAC Net
     # Bio Mesh size: 100
-    # Bio Type of tow: vertical tow
-    # Source: data/raw/0303928/data/0-data/U2015-015_NORPAC.csv
-    # Note: blank cells in the source matrix read as 'not found in this sample'
+    # Source: data/raw/<accession>/data/0-data/hauls.csv
     LAT: 21.000000
     LON: 142.300000
     DATE: 2015-11-09
     Taxon,Life stage,Upper depth (m),Lower depth (m),Count,Unit
     Acartia negligens,adult,0,150,100,number per sample
 
-`write_staged_haul` writes that; `read_staged_haul` reads it back, and
-`wod_etl.orchestration.process_taxa` maps, writes and validates a folder of them. Every field
-name is checked against the manual's tables, and anything that is not a Table 6a or 7a field
-is reported rather than dropped.
+`write_staged_haul` writes this and `read_staged_haul` reads it back. Fields that are not in
+Table 6a or 7a are reported, not dropped.
 """
 import csv
 import logging
@@ -117,14 +107,12 @@ def write_staged_haul(
 ) -> Dict[str, Any]:
     """Write one haul. `records` is `(columns, rows)` or a list of dicts.
 
-    `upper_depth`/`lower_depth` fill the depth range for every record that does not carry
-    its own -- a NORPAC haul's 0-150 m applies to every taxon in it. `biological_header` is
-    keyed by Table 6a name or id (`{"Gear code": "NORPAC Net", "Mesh size": 100}`); a key
-    that is not a Table 6a field is NOT written as one -- it becomes a note and is listed in
-    `unknown_biological_fields`.
+    `upper_depth`/`lower_depth` fill the depth range of records without their own.
+    `biological_header` is keyed by Table 6a name or id (`{"Gear code": "NORPAC Net",
+    "Mesh size": 100}`); other keys become notes, listed in `unknown_biological_fields`.
 
-    Returns the path, the record count, and `missing_biological_fields`: the Table 6a fields
-    a reader needs to interpret counts that this haul does not state. Report them.
+    Returns the path, record count and `missing_biological_fields` (Table 6a fields needed
+    to interpret the counts that this haul does not state).
     """
     if isinstance(records, tuple):
         columns, rows = list(records[0]), [list(r) for r in records[1]]

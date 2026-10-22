@@ -1,19 +1,18 @@
 # Working data — provenance and outputs of a run, not source.
 # No placeholders needed: config.py creates raw/, staging/, processed/ and
 # staging/manifests/ at import, so a fresh clone builds them itself.
-data/
-
-# Extracted manual text cache — rebuild with:
-#   uv run python -m wod_etl.knowledge.index_manual
-knowledge/wod_readme_db/page_text.json
+/data/
 
 .venv/
 *.egg-info/
+/build/
+/dist/
 __pycache__/
 *.pyc
 .pytest_cache/
 
-# One-off staging and probe scripts. Local working files, not source: each is written
-# for one accession and nothing references it. The reusable extractor lives in
-# wod_etl/reference/extract_code_table_links.py.
-scripts/
+# Per-accession staging scripts (kind = "script" in decisions.toml).
+/scripts/
+
+# Test accession lists and notes, not source.
+/misc/

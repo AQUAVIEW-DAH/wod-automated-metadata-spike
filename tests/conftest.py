@@ -1,8 +1,4 @@
-"""Keep the test suite out of the working data directories.
-
-Without this, every run leaves manifests in data/staging/manifests/ and downloaded copies
-in data/raw/, which makes a real run's ledger hard to read.
-"""
+"""Autouse fixtures that keep tests out of the real data, cache and runs directories."""
 import pytest
 
 from wod_etl.orchestration import run_manifest
@@ -19,12 +15,7 @@ def isolated_manifest_dir(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def offline_code_lists(tmp_path, monkeypatch):
-    """No test reaches NCEI for a code list, and none reads or writes the real cache.
-
-    Lookups stay ON, so the code paths run; with an empty cache and fetching off, every
-    text value comes back `unavailable`. A test that wants a list writes one into
-    `config.CODE_LIST_CACHE_DIR` (see tests/helpers.py: `cache_code_list`).
-    """
+    """Use an empty per-test code-list cache with fetching off; see `helpers.cache_code_list`."""
     from wod_etl import config
     from wod_etl.reference import code_lists
 
@@ -40,7 +31,7 @@ def offline_code_lists(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_retry_backoff(monkeypatch):
-    """Retries still happen in tests; the waits between them do not."""
+    """Keep retries but skip the waits between them."""
     from wod_etl import http_util
 
     monkeypatch.setattr(http_util, "HTTP_BACKOFF_SECONDS", 0.0)
@@ -48,8 +39,7 @@ def no_retry_backoff(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolated_runs_dir(tmp_path, monkeypatch):
-    """Accession logs, pipeline state and decisions go to a per-test folder, and no log
-    handler outlives the test that attached it."""
+    """Write run output to a per-test folder and remove log handlers added by the test."""
     import logging
 
     from wod_etl import config

@@ -1,9 +1,7 @@
-"""Check a Taxa-Record file (plankton, biomass): structure, depth ranges, and what a reader
-would miss. The counterpart of `validate_intermediate_netcdf` for `write_taxa_netcdf` output.
+"""Check a Taxa-Record file from `write_taxa_netcdf`: structure and depth ranges.
 
-Errors make the file not output. Warnings are what a report must say: taxa that did not
-resolve to a WOD variable number, and Biological Header fields without which a count per
-sample cannot be turned into a concentration.
+Errors fail the file. Warnings report unresolved taxa and missing Biological Header fields
+needed to turn counts per sample into concentrations.
 """
 from typing import Any, Dict
 

@@ -103,7 +103,7 @@ class TestProfileRawData:
 
 
 class TestLoadTabular:
-    """The bridge that used to be a manual step between Phase 2 and Phase 3."""
+    """Load a whole tabular file using the profile from its peek."""
 
     def test_reads_full_file_with_unit_suffixed_columns(self, tmp_path):
         p = tmp_path / "cast.txt"
@@ -131,8 +131,7 @@ class TestLoadTabular:
         assert df is None and "error" in info
 
     def test_a_malformed_row_is_reported_not_just_dropped(self, tmp_path):
-        """pandas drops a row whose field count is wrong and warns to stderr, which an
-        unattended run never sees. The loss has to reach the caller."""
+        """pandas only warns on stderr; the dropped row must reach the caller."""
         p = tmp_path / "c.csv"
         p.write_text("Depth,Temp\n0.0,9.1\nLEGEND,a,b,c,d\n10.0,8.9\n")
         df, info = load_tabular(str(p), delimiter=",")
@@ -171,9 +170,7 @@ class TestSplitCasts:
 
 
 class TestCommentsBelowTheHeader:
-    """`header_comment_lines` counted comments ANYWHERE in the 8 KB preview and was then
-    used as a skip count, so one mid-file annotation skipped the real column-header row
-    and promoted the first data row to be the header."""
+    """Only leading comment lines are skipped; later ones must not shift the header."""
 
     def _load(self, tmp_path, name, text):
         p = tmp_path / name
@@ -216,8 +213,7 @@ class TestCommentsBelowTheHeader:
 
 
 class TestRealValuesAreNotSentinels:
-    """'-9', '-99', '9999' and '99999' were in DEFAULT_NA_VALUES. pandas expands them to
-    their float forms, so a real measurement equal to one silently became NaN."""
+    """Values such as -9 or 9999 can be real, so they are not default missing markers."""
 
     @pytest.mark.parametrize("column,value", [
         ("Air temperature (deg C)", "-9"),
@@ -240,9 +236,7 @@ class TestRealValuesAreNotSentinels:
 
 
 class TestPeekDecoding:
-    """A peek cuts at a fixed byte count. Landing mid-character was read as evidence the
-    file was latin-1, and load_tabular then decoded the WHOLE file that way -- turning
-    'µmol/l' into 'Âµmol/l' in a column name and defeating unit detection."""
+    """A peek cut mid-character must not make a UTF-8 file look latin-1."""
 
     FULL = "Nitrate (µmol/l),Depth (m)\n1.5,0\n".encode("utf-8")
 
@@ -268,8 +262,7 @@ class TestPeekDecoding:
 
 class TestMissingPathIsAnError:
     def test_a_nonexistent_path_does_not_become_a_phantom_cast(self):
-        """_read returned the path string as its own content, so split_casts produced a
-        one-row cast whose only datum was the path."""
+        """A missing path is an error, not text to parse."""
         res = split_casts("/no/such/file.csv", {"detected_delimiter": "','"})
         assert res["casts"] == []
         assert "not found" in res["error"]
@@ -300,7 +293,7 @@ class TestSubdirTraversalGuard:
 
 
 class TestReaderWarningsReachTheCaller:
-    """load_tabular's warnings used to stop at read_any, which is what the run calls."""
+    """load_tabular's warnings surface through read_any, which the run calls."""
 
     def test_a_dropped_row_is_visible_through_read_any(self, tmp_path):
         from wod_etl.discovery import read_any, sniff_format
@@ -312,8 +305,7 @@ class TestReaderWarningsReachTheCaller:
 
 
 class TestALocalCopyIsOnlyReusedWhileCurrent:
-    """A staged file regenerated under the same run id was never read again: the cached copy
-    in raw/<run_id>/ was returned as long as it existed."""
+    """A cached copy in raw/<run_id>/ is reused only while the source is unchanged."""
 
     def test_an_unchanged_source_is_cached(self, tmp_path):
         from wod_etl.discovery import download_file
@@ -340,16 +332,13 @@ class TestALocalCopyIsOnlyReusedWhileCurrent:
         assert (tmp_path / "raw" / "cast.csv").read_text().endswith("10,19\n")
 
 
-# LeConte's CTD units, offset and all, and the time of the first cast in its August 2016 file.
+# Time units and first-cast time from a LeConte Glacier CTD file.
 LECONTE_UNITS = "seconds since 1970-01-01 00:00:00 0:00"
 T0 = 1470773808.0                                           # 2016-08-09 20:16:48 UTC
 
 
 class TestNetCDFCastsAreDatedAndPlacedByTheirOwnVariables:
-    """A NetCDF cast's header listed the file's attributes above the cast's own variables,
-    and the parser keeps the first `Date:` it meets. Every cast in a 155-cast file was dated
-    by `date_created` -- when the FILE was made -- while its own `time` stayed a raw count of
-    seconds, and a bounding-box corner stood in for each cast's position."""
+    """Each cast's date and position come from its own variables, not file attributes."""
 
     @staticmethod
     def _write(path, times, units=LECONTE_UNITS, fill=None, **attrs):
@@ -362,7 +351,7 @@ class TestNetCDFCastsAreDatedAndPlacedByTheirOwnVariables:
             ds.createDimension("profile", n)
             ds.createDimension("z", 3)
             t = ds.createVariable("time", "f8", ("profile",), fill_value=fill)
-            t.units, t.calendar = units, "calendar"      # LeConte's: it names no calendar
+            t.units, t.calendar = units, "calendar"      # placeholder, as in the source file
             t[:] = times
             for name, unit, start, step in (("lat", "degrees_north", 56.82, 0.01),
                                             ("lon", "degrees_east", -132.36, -0.01)):
@@ -429,7 +418,7 @@ class TestNetCDFCastsAreDatedAndPlacedByTheirOwnVariables:
         assert self._coords(casts[0])[0] == (2016, 8, 9, 20, 16)
 
     def test_a_mistyped_epoch_leaves_the_cast_undated_and_says_so(self, tmp_path):
-        """LeConte's keel CTD wrote 1070 for 1970, which puts a 2018 cast in 1118."""
+        """An epoch typo (1070 for 1970) would put a 2018 cast in 1118."""
         units = "seconds since 1070-01-01 00:00:00 0:00"
         path = self._write(tmp_path / "keel.nc", [1536014356.5], units=units,
                            time_coverage_start="2018-09-03")
@@ -476,8 +465,7 @@ class TestNetCDFCastsAreDatedAndPlacedByTheirOwnVariables:
 
 
 class TestStationBlockFiles:
-    """Expedition CTD files: a file header, then per station a `Stn:` line, a level count, a
-    line of column names and rows -- one block straight after another."""
+    """A file header, then per station a `Stn:` line, level count, column names and rows."""
 
     @staticmethod
     def _text(levels=(12, 12), stated=(12, 14)):
@@ -519,8 +507,7 @@ class TestStationBlockFiles:
 
 class TestNetCDFStringDimensions:
     def test_a_string_length_dimension_is_not_the_profile_dimension(self, tmp_path):
-        """NCEI's profile template spells each profile's id along `profile_id_length`,
-        which matches the hint 'profile' and is longer than the one profile there is."""
+        """`profile_id_length` contains 'profile' but counts id characters, not profiles."""
         import netCDF4
         import numpy as np
 

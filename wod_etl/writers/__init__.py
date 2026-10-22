@@ -1,6 +1,6 @@
-"""Phase 4: File Generation & Handoff skills.
+"""Phase 4: file generation -- WOD ragged-array NetCDF, profiles and Taxa-Records.
 
-Validation moved to `wod_etl.verify`, alongside the dataset audit it belongs with.
+Validation is in `wod_etl.verify`.
 """
 
 from .generate_netcdf_ragged import (
@@ -9,7 +9,8 @@ from .generate_netcdf_ragged import (
     cf_safe_name,
 )
 from .generate_netcdf_taxa import write_taxa_netcdf
-from .wod_files import group_by_file, is_wod_file_name, wod_file_name
+from .wod_files import (group_by_file, is_output_file_name, is_taxa_file_name,
+                        is_wod_file_name, taxa_file_name, wod_file_name)
 
 __all__ = [
     "generate_netcdf_ragged",
@@ -18,5 +19,8 @@ __all__ = [
     "write_taxa_netcdf",
     "wod_file_name",
     "is_wod_file_name",
+    "taxa_file_name",
+    "is_taxa_file_name",
+    "is_output_file_name",
     "group_by_file",
 ]

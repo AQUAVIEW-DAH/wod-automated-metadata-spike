@@ -1,14 +1,7 @@
 """Reshape tables whose layout is not one row per level and one column per variable.
 
-Two shapes arrive often enough to need a primitive each, and both used to need a
-hand-written script:
-
-* **Long format** -- `Cruise, StNo, parm, depth, value`. The variable is named in a CELL,
-  not a header, so every file looks like one 'value' column with no Table 3a variable in
-  it. `pivot_long` turns the variable column into columns.
-* **A matrix** -- taxa down the rows, stations (and a second key such as mesh size) across
-  the columns, as plankton count sheets are typed. `melt_matrix` turns it into one row per
-  cell, which is the shape a Taxa-Record needs.
+`pivot_long` turns long format (`StNo, parm, depth, value`) into one column per variable;
+`melt_matrix` turns a matrix sheet (taxa by samples) into one row per cell.
 
     from wod_etl.staging import read_table, pivot_long, melt_matrix
 
@@ -16,8 +9,7 @@ hand-written script:
     cols, rows, info = pivot_long(tables, keys=["StNo", "depth"], variable="parm",
                                   value="value", key_aliases={"depth": ["dep"]})
 
-Neither raises. Both return `(columns, rows, info)`, and `info` is where a conflict or a
-silently-blank cell would otherwise disappear.
+Neither raises. Both return `(columns, rows, info)`; `info` reports conflicts and blanks.
 """
 import collections
 import re
@@ -27,12 +19,7 @@ Table = Tuple[List[str], List[List[str]]]
 
 
 def _canonical_key(text: str) -> str:
-    """'4.9690' and '4.969' are one depth; '01' and '1' one station. Text keys are stripped.
-
-    Keys are joined as text, and two files that spell the same number differently would
-    otherwise share no key at all -- an outer join that looks complete and is two disjoint
-    blocks.
-    """
+    """Canonical join key: '4.9690' and '4.969' are one depth; '01' and '1' one station."""
     s = str(text).strip()
     try:
         f = float(s)
@@ -65,24 +52,15 @@ def pivot_long(
 ) -> Tuple[List[str], List[List[str]], Dict[str, Any]]:
     """Pivot long-format rows -- one row per (keys, variable) -- into one row per key.
 
-    `tables` is one `(columns, rows)` pair or a list of them: the common case is one file per
-    variable, each in long format, as in
+    `tables` is one `(columns, rows)` pair or a list of them (e.g. one file per variable).
+    `keys` names the columns identifying a level (`["StNo", "depth"]`); `key_aliases` gives
+    their other spellings (`{"depth": ["dep"]}`). Numeric keys are compared as numbers.
 
-        Cruise,StNo,ObsItem,parm,dep,value        <- temperature file
-        Cruise,StNo,ObsItem,parm,depth,value      <- salinity file: 'depth', not 'dep'
+    `columns` maps a variable's cell text to its column name, which is where the unit goes:
+    `{"Temperature": "Temperature (deg C)"}`. Unnamed variables keep their cell text.
 
-    `keys` names the columns that identify a level (`["StNo", "depth"]`); `key_aliases` gives
-    their other spellings (`{"depth": ["dep"]}`). Numeric keys are compared as numbers, so
-    `4.969` and `4.9690` meet.
-
-    `columns` maps a variable as written in the cells to the column name to give it --
-    **this is where the unit goes**, because unit detection reads only the column name:
-    `{"Temperature": "Temperature (deg C)"}`. A variable not named here keeps its cell text.
-
-    `info` reports, per variable, how many levels carry it and how many levels lack it;
-    `conflicts` -- the same key and variable with two different values, which the pivot
-    cannot resolve and does not guess (the first is kept, every one is listed); and
-    `per_table` -- which key columns each table used. Read all three.
+    `info` reports per-variable level counts, `conflicts` (same key and variable with two
+    values; the first is kept) and `per_table` (the key columns each table used).
     """
     if tables and isinstance(tables, tuple) and len(tables) == 2 and \
             tables[0] and isinstance(tables[0][0], str):
@@ -167,30 +145,21 @@ def melt_matrix(
     thousands: Optional[str] = ",",
     blank: str = "absent",
 ) -> Tuple[List[str], List[List[str]], Dict[str, Any]]:
-    """Turn a matrix sheet into one row per cell.
-
-    A plankton count sheet is typed as taxa down the rows and samples across the columns,
-    with one or more header rows naming each sample:
+    """Turn a matrix sheet (e.g. taxa down the rows, samples across) into one row per cell.
 
         ,,,Station,1,,3,,                          <- header row 0: station, spans 2 cols
         Order,Family,Taxa,mesh size,"0,1mm",0.335mm,"0,1mm",0.335mm    <- header row 1
         Calanoida,Acartiidae,Acartia danae,adult,,8,,                  <- data
         Calanoida,,Acartia negligens,adult,100,16,,84
 
-    `header_rows` is how many rows at the top are headers. `label_columns` names the leading
-    columns that describe the row (`["Order", "Family", "Taxon", "Stage"]`) -- named here
-    because the header text above them is usually a label for the header rows, not for the
-    data. `header_names` names what each header row holds (`["Station", "Mesh"]`).
+    `header_rows` is the number of header rows; `label_columns` names the leading label
+    columns (`["Order", "Family", "Taxon", "Stage"]`); `header_names` names what each header
+    row holds (`["Station", "Mesh"]`). `fill_across` carries a header value right over
+    blanks (merged cells); `fill_down` names label columns whose blank means "same as above".
+    `thousands` strips a thousands separator from values (`"1,700"`).
 
-    `fill_across` carries a header value right over blank cells, which is how a merged
-    spreadsheet cell exports (station 1 spans both of its mesh columns). `fill_down` names
-    label columns whose blank means "same as the row above" -- a Family written once per
-    group. `thousands` strips a thousands separator from values (`"1,700"`).
-
-    **A blank value cell is not a zero and not a missing measurement**: in a count sheet it
-    usually means the taxon was not found in that sample. `blank="absent"` (the default)
-    writes no row for it and counts it in `info["blank_cells"]`; `blank="zero"` writes 0,
-    which is a claim the originator must have made. Decide from the readme, and say which.
+    A blank value cell usually means "not found", not zero: `blank="absent"` writes no row
+    and counts it in `info["blank_cells"]`; `blank="zero"` writes 0.
     """
     if len(rows) <= header_rows:
         return [], [], {"error": f"only {len(rows)} row(s); expected {header_rows} header "
@@ -236,8 +205,7 @@ def melt_matrix(
         info["data_rows"] += 1
         for j, cell in enumerate(r[n_labels:]):
             v = cell.strip()
-            # A leading group of 0 is never thousands grouping: '0,335' is a decimal comma
-            # (these sheets head columns '0,1mm'), and stripping it wrote 335 for 0.335.
+            # A leading 0 group is never thousands grouping: '0,335' is a decimal comma.
             if thousands and re.fullmatch(
                     rf"[1-9]\d{{0,2}}(?:{re.escape(thousands)}\d{{3}})+(?:\.\d+)?", v):
                 v = v.replace(thousands, "")

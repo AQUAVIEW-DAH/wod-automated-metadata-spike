@@ -1,4 +1,4 @@
-"""The per-accession run log: written by any run that touches an accession, person or agent."""
+"""The per-accession run log: written by any run that touches an accession, command or script."""
 import json
 import logging
 
@@ -26,7 +26,7 @@ def acc(tmp_path):
     return d
 
 
-class TestAgentRunsAreLogged:
+class TestLibraryRunsAreLogged:
     def test_process_accession_writes_both_logs(self, acc, tmp_path, isolated_runs_dir):
         process_accession(str(acc), dataset_type="CTD", output_dir=str(tmp_path / "o"),
                           raw_dir=str(tmp_path / "r"), run_id="t_log", resume=False,
@@ -116,4 +116,4 @@ class TestTheLogItself:
             with runlog.accession_log("0303928"):
                 pass
         text = (isolated_runs_dir / "0303928" / "run.log").read_text()
-        assert text.count("agent run ") == 2 and text.count("end of run ") == 2
+        assert text.count("library run ") == 2 and text.count("end of run ") == 2

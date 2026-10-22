@@ -2,7 +2,7 @@
   "table": "Table 12. Definition of the quality control flags",
   "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
   "page": 55,
-  "note": "FOUR SEPARATE FLAG SCALES. The same integer means different things in each. Do not mix them in one column.",
+  "note": "FIVE SEPARATE FLAG SCALES. The same integer means different things in each. Do not mix them in one column.",
   "scales": {
     "entire_cast": {
       "applies_to": "whole cast, as a function of variable",

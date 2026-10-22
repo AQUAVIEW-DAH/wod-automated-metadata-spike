@@ -1,30 +1,12 @@
-"""Where a mooring's instruments are, from the description that came with it.
+"""Place a mooring's instruments at depth from the instrument table in its description.
 
-A logger that records no pressure, and whose file states no depth, is placed by the
-mooring's description when the accession has one: a table listing the instruments by serial
-number, with each one's depth -- or with its position along the line from a reference point:
-
-    | Type     | Pos (m) | Ref. Pt. | Serial |       reference point 1: bottom of 50m line
-    | SBE37SM  |      48 |          |  10552 |
-    | RBR Solo |      45 |        1 | 100028 |
+The table lists serial numbers with a stated depth or a position along the line from a
+reference point. A position becomes a depth only where a pressure-recording instrument on
+the same line fixes the reference point; anything that cannot be placed says why.
 
     from wod_etl.staging.mooring_layout import find_layout, place_instruments
-
-    layout = find_layout(folder_files, members)          # the table that names them
+    layout = find_layout(folder_files, members)
     placed = place_instruments(layout, members)          # {file name: {"depth", "how", ...}}
-
-A depth the table states is used as it stands. A position along the line is not a depth --
-the line leans in a current, and where its top floats is not written down -- so it becomes
-one only where an instrument on the same line records pressure: that instrument's depth
-fixes where the reference point is, and each position is a distance up (or down) the line
-from it. Every other instrument that records pressure must agree with the result: one listed
-between two positions must lie between their depths. A logger listed beside one pressure
-instrument with no position of its own (on the same frame) takes that instrument's depth.
-Which way positions run is read from the header ("height above bottom"), what the reference
-point is ("bottom of 50m line": up from it), or the instruments that know their depth.
-
-Nothing is guessed past that: a position with no pressure instrument on its line, a table the
-pressure records disagree with, or a serial number listed twice places nothing, and says why.
 """
 import csv
 import io
@@ -71,8 +53,7 @@ def file_serial(name: str) -> Optional[str]:
 
 
 def depth_from_name(name: str) -> Optional[float]:
-    """The depth a file name states (`T_45m.nc` -> 45.0), or None: one such number, no
-    more."""
+    """The single depth a file name states (`T_45m.nc` -> 45.0), or None."""
     found = {float(x) for x in _NAME_DEPTH.findall(Path(name).stem)}
     return found.pop() if len(found) == 1 and 0 <= next(iter(found)) <= 11000 else None
 
@@ -112,7 +93,7 @@ def _number(cell: str) -> Optional[float]:
 def _tables(text: str) -> List[Dict[str, Any]]:
     """Every table in a text: pipe tables (org, markdown) and delimited ones, each as
     `{"rows": [[cells]], "blocks": [block number per row], "line": first line}`. A rule
-    line inside a pipe table starts a new block: tables group a line's instruments so."""
+    line inside a pipe table starts a new block."""
     lines = text.splitlines()
     out: List[Dict[str, Any]] = []
     i = 0
@@ -219,8 +200,7 @@ def find_layout(candidates: Sequence[Tuple[str, Any]], members: Sequence[Dict[st
 
 # ----------------------------------------------------------------------- placing
 def _tolerance(depth: float) -> float:
-    """How far apart two placements of one point may be and still agree: a moored line
-    leans and stretches, and its instruments ride a few metres up and down."""
+    """How far apart two placements of one point may be and still agree."""
     return max(5.0, 0.05 * abs(depth))
 
 

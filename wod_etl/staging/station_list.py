@@ -1,24 +1,19 @@
 """Read a sibling station list and join it to the casts it locates.
 
-The commonest reason a cast cannot be processed as it stands is that its position and date
-live in another file: `SHU1505_StationInfo.csv`, `CTD_readme.csv`, `latlon-*.csv`. Every
-accession's list is shaped a little differently -- coordinates as `142°18’E` or
-`49-46.9858S` or three columns, the year in its own column, a footer of remarks in the
-station column -- and before these existed each one needed a hand-written parser.
-
     from wod_etl.staging import read_station_list, join_station_list
 
-    stations, info = read_station_list("0-data/SHU1505_StationInfo.csv")
+    stations, info = read_station_list("0-data/stations.csv")
     matched, report = join_station_list(["1", "2", "11"], stations)
 
-Neither raises. Every row that is not a station, and every cast with no station, is named in
-the returned info -- never dropped silently.
+Neither raises; rows that are not stations and casts without a station are reported.
 """
 import collections
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from wod_etl.terms import english_terms
+from wod_etl.time_zones import ZONE_NAMES
 from wod_etl.staging.parse import parse_coordinate, parse_timestamp
 from wod_etl.staging.tables import read_table
 
@@ -35,16 +30,15 @@ _ROLE_PATTERNS = {
 }
 
 # A zone named in a header: 'Date time (UTC)', 'start time (local)', 'Time [JST]'.
-_ZONE_IN_HEADER = re.compile(r"[\(\[]\s*(utc|gmt|z|local|lt|jst|ship'?s?\s*time)\s*[\)\]]",
-                             re.I)
+_ZONE_IN_HEADER = re.compile(
+    r"[\(\[]\s*(utc|gmt|ut|z|local|lt|ship'?s?\s*time|"
+    + "|".join(re.escape(z) for z in ZONE_NAMES) + r")\s*[\)\]]", re.I)
 
 
 def normalise_station(value: Any) -> str:
     """A comparable station key: 'St-01', 'stn 1', 'Station 1' and '1' are all '1'.
 
-    Keys are compared by this, never by raw text, because the station list and the data file
-    are typed by different people. A key that does not reduce to a number keeps its letters,
-    lower-cased, so 'A01' and 'a01' meet but 'A01' and 'B01' do not.
+    A non-numeric key keeps its letters, lower-cased.
     """
     s = str(value or "").strip().lower()
     s = re.sub(r"^(?:station|stn|st)[\s._#-]*(?:no\.?)?[\s._#-]*", "", s)
@@ -52,6 +46,28 @@ def normalise_station(value: Any) -> str:
     if re.fullmatch(r"\d+(?:\.0+)?", s):
         return str(int(float(s)))
     return s
+
+
+def _header_row_below_title(path, delimiter) -> int:
+    """The header row of a list that opens with a title line, as an index into the
+    non-blank rows; 0 when it opens with its header."""
+    from wod_etl.config import TEXT_ENCODINGS
+    from wod_etl.discovery.profile_raw_data import delimited_layout
+
+    for enc in TEXT_ENCODINGS:
+        try:
+            lines = Path(path).read_text(encoding=enc).splitlines()
+            break
+        except (UnicodeDecodeError, OSError):
+            continue
+    else:
+        return 0
+    layout = delimited_layout(lines, delimiter or ",")
+    if not layout:
+        return 0
+    # Counted as read_table counts rows: a line of bare delimiters (',,,') is blank.
+    return sum(1 for line in lines[:layout["header_line"]]
+               if line.replace(delimiter or ",", "").strip())
 
 
 def _detect_columns(columns: List[str], given: Dict[str, Optional[str]]) -> Dict[str, Optional[str]]:
@@ -63,7 +79,7 @@ def _detect_columns(columns: List[str], given: Dict[str, Optional[str]]) -> Dict
         for c in columns:
             if c in taken or not c:
                 continue
-            if re.search(pattern, c.strip().lower()):
+            if re.search(pattern, english_terms(c).strip().lower()):
                 out[role] = c
                 taken.add(c)
                 break
@@ -86,24 +102,21 @@ def read_station_list(
 ) -> Tuple["collections.OrderedDict", Dict[str, Any]]:
     """Parse a station list into `{station_key: entry}`, in file order.
 
-    `source` is a path, or `(columns, rows)` already read with `read_table`. Column roles
-    are detected from the header (`Station No.`, `Lat`, `Long`, `Date`, `Year`, `Time`) and
-    any of them can be named explicitly instead.
+    `source` is a path, or `(columns, rows)` from `read_table`. Column roles are detected
+    from the header (`Station No.`, `Lat`, `Long`, `Date`, `Year`, `Time`) or named here.
 
     Each entry holds `station` (as written), `latitude`, `longitude`, `date` (YYYY-MM-DD),
-    `time` (HH:MM, or None), `time_known`, `time_zone`, `row` and `raw` -- the cells as
-    written, so a staged header can cite them.
+    `time` (HH:MM, or None), `time_known`, `time_zone`, `row` and `raw` (cells as written).
 
-    `info` says which column played which role, which rows were dropped and why (a footer
-    remark lands in the station column and has no position), and which station keys occur
-    more than once. **A repeated key is a re-occupied station**: only the first is kept
-    under the bare key, the rest under `key#2`, `key#3`, and all are listed -- group the
-    casts on station AND date in that case.
+    `info` records the column roles, dropped rows and why, and repeated station keys. A
+    repeated key is a re-occupied station, kept as `key#2`, `key#3`; group its casts on
+    station and date.
 
-    `time_zone` states the zone of the list's dates and times when the list does not. When a
-    header names one (`Date time (UTC)`), that is used and recorded instead. Nothing is
-    converted: a zone is recorded so a reader knows what the date means.
+    `time_zone` is recorded, not converted; a zone named in a header (`Date time (UTC)`)
+    takes precedence.
     """
+    if isinstance(source, (str, Path)) and header_row == 0:
+        header_row = _header_row_below_title(source, delimiter)
     if isinstance(source, (str, Path)):
         columns, rows, read_info = read_table(source, header_row=header_row,
                                               encoding=encoding, delimiter=delimiter,
@@ -142,12 +155,33 @@ def read_station_list(
     cell = lambda r, role: (r[idx[roles[role]]].strip()
                             if roles.get(role) and idx[roles[role]] < len(r) else "")
 
+    def position(r, role):
+        """A coordinate in one cell, or split over the unnamed cells after it: 62 | 9.6 | N.
+        Those cells are read only when they hold minutes (after whole degrees) or a
+        hemisphere."""
+        j = columns.index(roles[role])
+        cell = lambda k: r[k].strip() if k < len(r) else ""
+        degrees, rest = cell(j), []
+        for k in range(j + 1, min(j + 3, len(columns))):
+            if columns[k]:
+                break
+            rest.append(cell(k))
+        minutes = hemisphere = None
+        if rest and re.fullmatch(r"-?\d{1,3}", degrees) \
+                and re.fullmatch(r"\d{1,2}(?:\.\d+)?", rest[0]) and float(rest[0]) < 60:
+            minutes = rest.pop(0)
+        if rest and re.fullmatch(r"[NSEW]", rest[0], re.I):
+            hemisphere = rest[0]
+        if minutes is not None:
+            return parse_coordinate(degrees, minutes, hemisphere)
+        return parse_coordinate(f"{degrees} {hemisphere}" if hemisphere else degrees)
+
     stations: "collections.OrderedDict" = collections.OrderedDict()
     seen = collections.Counter()
     for i, r in enumerate(rows):
         raw_station = cell(r, "station")
-        lat = parse_coordinate(cell(r, "latitude"))
-        lon = parse_coordinate(cell(r, "longitude"))
+        lat = position(r, "latitude")
+        lon = position(r, "longitude")
         if not raw_station or lat is None or lon is None:
             text = " | ".join(c for c in r if c.strip())[:120]
             reason = ("no station key" if not raw_station else
@@ -166,8 +200,7 @@ def read_station_list(
             info["duplicates"].append({"station": raw_station, "row": i,
                                        "occurrence": seen[key]})
             key = f"{key}#{seen[key]}"
-        # A clock time in its own column, or inside a combined 'Date time (UTC)' cell -- the
-        # date role takes such a column, and there is then no time column at all.
+        # The time may be in its own column or inside a combined date-time cell.
         time_known = stamp is not None and bool(
             cell(r, "time") or re.search(r"\d:\d{2}|\dT\d{2}", cell(r, "date")))
         stations[key] = {
@@ -196,11 +229,8 @@ def join_station_list(
 ) -> Tuple[Dict[Any, Dict[str, Any]], Dict[str, Any]]:
     """Match casts to station-list entries on a normalised station key.
 
-    Returns `(matched, report)`. `matched` maps each cast key to its station entry.
-    `report` names the casts with no station and the stations with no cast -- **both** sides,
-    because a name present on one and absent on the other is usually one cast under two
-    spellings, not a missing cast. Check gear, depth range and date before deciding, and
-    record the identification in the staged notes.
+    Returns `(matched, report)`: `matched` maps each cast key to its station entry; `report`
+    names casts with no station and stations with no cast (often one cast spelt two ways).
     """
     by_norm = {k: v for k, v in stations.items()}
     matched: Dict[Any, Dict[str, Any]] = {}

@@ -121,6 +121,7 @@ async function refreshFiles() {
             (f.include ? `<span class="badge">${esc(f.dataset || "in")}</span>`
                        : `<span class="badge out">out</span>`) +
             (f.depth != null ? `<span class="badge depth">${esc(f.depth.toFixed(1))} m</span>` : "") +
+            (f.taxa ? `<span class="badge taxa">Taxa-Records</span>` : "") +
             (f.data ? `<div class="data">${esc(f.data)}</div>` : "") + "</div>").join("") +
           "</div>";
       }).join("");
@@ -168,8 +169,7 @@ function renderGutter() {
   // The trailing space keeps a last empty line as tall as the textarea draws it.
   const hl = $("highlight");
   hl.innerHTML = highlightToml(ta.value) + "\n ";
-  // The textarea's scrollbars take room the <pre> has not got: give the <pre> the same box,
-  // or the colours drift a scrollbar's width from the text at the far right.
+  // Match the textarea's scrollbar space so the highlight stays aligned with the text.
   hl.style.right = `${ta.offsetWidth - ta.clientWidth}px`;
   hl.style.bottom = `${ta.offsetHeight - ta.clientHeight}px`;
   syncGutter();
@@ -181,8 +181,7 @@ function syncGutter() {
   $("highlight").scrollLeft = ta.scrollLeft;
 }
 
-// TOML, a line at a time: comments, [tables], keys, strings (a multi-line one carries over to
-// the next line), numbers, dates and booleans -- `include = true` and `false` stand out.
+// TOML highlighting, a line at a time; a multi-line string carries over to the next line.
 const span = (cls, text) => `<span class="t-${cls}">${esc(text)}</span>`;
 const KEY = String.raw`(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')`;
 const KEY_LINE = new RegExp(String.raw`^(\s*)(${KEY}(?:\s*\.\s*${KEY})*)(\s*=)(.*)$`);
@@ -190,9 +189,8 @@ const INLINE_KEY = new RegExp(String.raw`^${KEY}(?:\s*\.\s*${KEY})*(?=\s*=)`);
 const TABLE = new RegExp(String.raw`^(\s*)(\[\[?(?:[^\]"']|"(?:[^"\\]|\\.)*"|'[^']*')*\]\]?)(.*)$`);
 const TRIPLE = ['"""', "'''"];
 
-// Where a multi-line string that opened before `from` closes: the index just past its
-// delimiter, or -1. In a basic (""") one a delimiter after an odd run of backslashes is
-// escaped; a literal (''') one has no escapes.
+// Index just past the delimiter closing a multi-line string, or -1. Basic (""") strings
+// honour backslash escapes; literal (''') ones do not.
 function closing(text, quote, from) {
   for (let i = text.indexOf(quote, from); i >= 0; i = text.indexOf(quote, i + 1)) {
     let slashes = 0;
@@ -354,19 +352,34 @@ async function refreshOutputs() {
     list.innerHTML = `<p class="empty">Confirm writes the WOD files here.</p>`;
     return;
   }
-  const verified = r.verified === true ?
-    `<div class="verified ok">Verified: every value is within WOD's ranges</div>` :
+  const checked = [r.files.some((f) => f.kind !== "taxa") ? "every value is within WOD's ranges" : null,
+                   r.files.some((f) => f.kind === "taxa") ? "every Taxa-Record is complete" : null]
+    .filter(Boolean).join(", ");
+  const verified = r.verified === true ? `<div class="verified ok">Verified: ${checked}</div>` :
     r.verified === false ? `<div class="verified bad">NOT verified: see the problems above</div>` : "";
   list.innerHTML = verified + r.files.map((f) => {
-    const meta = [f.dataset, f.year, f.casts != null ? `${f.casts} casts` : null,
-                  fmtSize(f.size)].filter(Boolean).join(" · ");
+    const meta = (f.kind === "taxa" ?
+      ["OSD Taxa-Records", f.year, f.hauls != null ? `${f.hauls} hauls` : null,
+       f.records != null ? `${f.records} records` : null, fmtSize(f.size)] :
+      [f.dataset, f.year, f.casts != null ? `${f.casts} casts` : null, fmtSize(f.size)])
+      .filter(Boolean).join(" · ");
+    const resolution = f.kind === "taxa" && f.records != null ?
+      `<div class="meta">taxa: ${f.resolved} resolved · ${f.higher_rank} one rank up · ` +
+      `${f.by_name} by name only</div>` : "";
     const from = f.sources.length ?
       `<div class="meta" title="${esc(f.sources.join("\n"))}">from ${esc(f.sources.slice(0, 3)
         .map(base).join(", "))}${f.sources.length > 3 ? ` and ${f.sources.length - 3} more` : ""}</div>` : "";
     return `<div class="out"><a href="/api/outputs/${encodeURIComponent(ui.acc)}/` +
       `${encodeURIComponent(f.name)}" download>${esc(f.name)}</a>` +
-      `<div class="meta">${esc(meta)}</div>${from}</div>`;
-  }).join("") + `<p class="meta">In ${esc(r.folder)}` +
+      `<div class="meta">${esc(meta)}</div>${resolution}${from}</div>`;
+  }).join("") +
+    (r.taxa_list_unavailable ? `<p class="meta warn">Taxa list unavailable: names kept as ` +
+      `written. To resolve them, run online: uv run wod-etl confirm ${esc(ui.acc)} ` +
+      `--from process</p>` : "") +
+    (r.taxa_not_stated ? `<p class="meta warn" title="${esc(r.taxa_not_stated.join("\n"))}">` +
+      `${esc(r.taxa_not_stated.length)} Biological Header field(s) not stated: ask the ` +
+      `submitter</p>` : "") +
+    `<p class="meta">In ${esc(r.folder)}` +
     (r.written_at ? `, written ${esc(r.written_at)}` : "") + "</p>";
 }
 

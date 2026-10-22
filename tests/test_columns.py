@@ -1,8 +1,6 @@
 """Resolving and renaming columns.
 
-A column name is the only carrier of three separate facts -- the WOD variable code, the
-originator's unit, and the measurement scale -- and nothing else supplies any of them. So
-every test here is about a rename that would still validate while having destroyed one.
+A column name carries the WOD variable code, unit and scale; a rename must keep all three.
 """
 import pytest
 
@@ -11,8 +9,7 @@ from wod_etl.staging import rename_columns, suggest_column_names
 
 
 class TestResolveColumn:
-    """"Rename the latitude column" does not say the column is spelt LAT, and the caller
-    should not have to know."""
+    """Find a column from a variable name without knowing the file's spelling."""
 
     def test_a_wod_variable_name_finds_the_instrument_spelling(self):
         r = resolve_column("latitude", ["LAT", "LON", "Depth (m)"])
@@ -39,8 +36,7 @@ class TestResolveColumn:
         assert r["column"] == columns[0] and r["wod_code"] == code
 
     def test_two_sensors_on_one_code_is_ambiguous_not_a_guess(self):
-        """t090C and t190C are the primary and secondary temperature sensor and BOTH
-        resolve to code 1. Picking one silently drops a real measurement."""
+        """Primary and secondary sensors share code 1; picking one would drop data."""
         r = resolve_column("temperature", ["t090C", "t190C", "sal00"])
         assert r["column"] is None
         assert r["ambiguous"] is True
@@ -48,8 +44,7 @@ class TestResolveColumn:
         assert "primary and secondary" in r["note"]
 
     def test_a_variable_wod_does_not_store_is_refused_with_its_reason(self):
-        """Asking for "the temperature column" must not quietly return a potential
-        temperature, which is a different quantity with no Table 3a code."""
+        """Potential temperature is not temperature and has no Table 3a code."""
         r = resolve_column("temperature", ["Potential Temperature (deg C)", "Depth (m)"])
         assert r["column"] is None
         assert "does not store" in r["note"]
@@ -72,9 +67,7 @@ class TestRenameAppliesTheObviousCase:
         assert audit["renames"][0]["resolved_by"] == "wod_code"
 
     def test_naming_a_headerless_fixed_width_column_needs_no_escape_hatch(self):
-        """col_0 -> Depth (m) goes from NO code to code 0. That is an improvement, and
-        the one rename the pipeline most needs must not be the one that requires
-        strict=False."""
+        """Going from no code to code 0 is an improvement, so it needs no strict=False."""
         cols, audit = rename_columns(["col_0", "col_1"],
                                      {"col_0": "Depth (m)", "col_1": "Temp (deg C)"})
         assert cols == ["Depth (m)", "Temp (deg C)"]
@@ -86,8 +79,7 @@ class TestRenameAppliesTheObviousCase:
 
 
 class TestRenameRefusesToChangeMeaning:
-    """Each of these would leave a file that converts and validates, having lost one of
-    the three facts the column name carries."""
+    """Each rename would still validate but lose the code, unit or scale."""
 
     def test_dropping_the_unit_is_refused_and_the_fix_is_printed(self):
         cols, audit = rename_columns(["Temp (deg F)", "Depth (m)"],
@@ -109,7 +101,7 @@ class TestRenameRefusesToChangeMeaning:
         assert "VARIABLE_ALIASES" in audit["problems"][0]
 
     def test_renaming_the_depth_axis_onto_bottom_depth_is_refused(self):
-        """`depth` inside `bottom_depth` once set every level of a cast to the seafloor."""
+        """`depth` inside `bottom_depth` must not match the depth axis."""
         cols, audit = rename_columns(["Depth (m)", "Temp (deg C)"],
                                      {"Depth (m)": "Bottom Depth (m)"})
         assert cols == ["Depth (m)", "Temp (deg C)"]
@@ -149,8 +141,7 @@ class TestRenameNeverCorrupts:
 
 
 class TestRenamePreservesTheContract:
-    """The property that matters: a rename must not change what the mapping contract says
-    about the file. If it does, the rename changed the data."""
+    """A rename must not change the mapping contract generated for the file."""
 
     @pytest.mark.parametrize("columns,renames", [
         (["LAT", "LON", "Depth (m)", "T090C"], {"latitude": "Latitude"}),
@@ -178,8 +169,7 @@ class TestSuggestColumnNames:
         assert suggested["DO"] == "DO (mg/L)"
 
     def test_a_suggestion_makes_the_conversion_detectable(self):
-        """Proof by consequence: the point of folding the unit in is that the pipeline
-        then knows a conversion is needed."""
+        """Folding the unit into the name lets the mapping flag a needed conversion."""
         s = suggest_column_names(["DO"], units=["mg/L"])
         new = s["columns"][0]["suggested"]
         contract = _contract(["LAT", "LON", "Depth (m)", new])
@@ -196,9 +186,7 @@ class TestSuggestColumnNames:
         assert cols == ["DO", "Depth (m)"]
 
     def test_a_blank_column_does_not_shift_the_units_onto_their_neighbours(self):
-        """A units row is aligned to the original header, blanks included. Indexing a
-        filtered copy of the columns put metres on the temperature column -- a wrong unit
-        that `rename_columns` cannot catch, because it only guards a unit already there."""
+        """A units row aligns with the original header, blank columns included."""
         s = suggest_column_names(["", "Depth", "Temp", "Sal"],
                                  units=["", "m", "deg C", "PSU"])
         unit = {c["column"]: c["unit"] for c in s["columns"]}

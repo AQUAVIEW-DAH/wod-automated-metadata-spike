@@ -1,15 +1,7 @@
 """Split a file containing several casts into individual casts.
 
-Historical oceanographic files routinely concatenate many casts into one file, each
-introduced by its own header block. Everything downstream assumes one cast per contract, so
-this runs before mapping.
-
-The signal is a header/comment line appearing AFTER data rows have started: that marks the
-beginning of the next cast. A file with a single leading header block yields one cast, so
-callers can run this unconditionally.
-
-(Placed in discovery/ rather than writers/ because it interprets raw file structure, the
-same job as profile_raw_data, and its output feeds Phase 2.)
+A header or comment line after data rows marks the start of the next cast. A file with a
+single leading header block yields one cast, so callers can run this unconditionally.
 """
 import os
 import re
@@ -119,9 +111,7 @@ def _read(file_path_or_text: str) -> Optional[str]:
         return file_path_or_text
     p = Path(file_path_or_text)
     if not p.exists():
-        # A single-line string that names a file is a PATH, and a missing one is an error
-        # the caller must see. Returning it as its own content produced a phantom one-row
-        # cast whose only datum was the path string.
+        # A missing path-like string is an error, not inline text.
         looks_like_a_path = "/" in file_path_or_text or os.sep in file_path_or_text or bool(p.suffix)
         if looks_like_a_path or not file_path_or_text.strip():
             return None
@@ -132,28 +122,3 @@ def _read(file_path_or_text: str) -> Optional[str]:
         except (UnicodeDecodeError, OSError):
             continue
     return None
-
-
-if __name__ == "__main__":
-    import json
-    multi = """# CRUISE: STOCS85A
-# CAST: 1
-LAT: 61.930 LON: -172.270
-Depth, Temp_C
-0.0, 9.13
-10.0, 8.96
-# CRUISE: STOCS85A
-# CAST: 2
-LAT: 62.100 LON: -172.500
-Depth, Temp_C
-0.0, 8.70
-15.0, 8.40
-25.0, 7.90
-"""
-    res = split_casts(multi)
-    print(json.dumps({k: v for k, v in res.items() if k != "casts"}, indent=2))
-    for c in res["casts"]:
-        print(f"\n--- cast {c['index']} (lines {c['start_line']}-{c['end_line']}, "
-              f"{c['data_row_count']} rows) ---")
-        print(c["header_block"])
-        print(c["data_text"])

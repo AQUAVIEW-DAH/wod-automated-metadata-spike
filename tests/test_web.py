@@ -5,7 +5,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from wod_etl.orchestration import web
+from wod_etl.web import server as web
 
 ACC = "0999998"
 CAST = ("# LAT: 21.0\n# LON: 142.3\n# DATE: 2015-11-09\n"
@@ -15,8 +15,7 @@ CAST = ("# LAT: 21.0\n# LON: 142.3\n# DATE: 2015-11-09\n"
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    """The page's server, every data folder under tmp_path, and a small accession: one CTD
-    cast and the NCEI readme."""
+    """The web server, data folders under tmp_path, and an accession of one CTD cast."""
     from wod_etl import config
 
     for name in ("RAW_DIR", "STAGING_DIR", "PROCESSED_DIR"):
@@ -101,7 +100,7 @@ class TestOneCommandAtATime:
         again = c.post("/api/run", json={"source": str(acc)})
         assert again.status_code == 409 and "one command at a time" in again.json()["detail"]
         assert c.put(f"/api/decisions/{ACC}", json={"text": ""}).status_code == 409
-        for _ in range(200):                          # its first line, as it says it
+        for _ in range(200):                          # wait for its first output line
             s = c.get(f"/api/status/{ACC}").json()
             if s["job"]["lines"]:
                 break

@@ -1,9 +1,4 @@
-"""Write a file so that a crash at any moment leaves either the old file or the new one.
-
-Used for every ledger a run resumes from -- the per-run manifest, an accession's pipeline
-state, its report. A half-written ledger is worse than none: it reads as a run that did
-something it did not.
-"""
+"""Atomic file writes: a crash leaves either the old file or the new one."""
 import json
 import os
 import tempfile

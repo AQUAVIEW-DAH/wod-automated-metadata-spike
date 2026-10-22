@@ -1,5 +1,4 @@
-"""What a cast IS beyond its numbers: when it was taken, what it is called, which codes
-describe it, and what the stager recorded about it -- all of it reaching the NetCDF."""
+"""A cast's time, ids, codes and staging provenance, and how they reach the NetCDF."""
 from pathlib import Path
 
 import numpy as np
@@ -79,7 +78,7 @@ class TestTimeOfDay:
 
     @pytest.mark.parametrize("zone,hours", [("UTC", 0.0), ("UTC+10", 10.0),
                                             ("GMT-3:30", -3.5), ("+0900", 9.0),
-                                            ("JST", None), ("local", None)])
+                                            ("JST", 9.0), ("CST", None), ("local", None)])
     def test_offsets(self, zone, hours):
         assert utc_offset_hours(zone) == hours
 
@@ -179,7 +178,7 @@ class TestCodeLists:
 
     def test_two_vessels_of_one_name_are_ambiguous_whatever_follows_the_name(
             self, offline_code_lists):
-        """10793 is a 1973 SHUNYO MARU, later renamed. A name cannot tell them apart."""
+        """Code 10793 is an older ship of the same name."""
         cache_code_list(offline_code_lists, "s_3_platform", PLATFORMS)
         r = lookup_code("secondary_header", 3, "Shunyo-Maru")
         assert r["status"] == "ambiguous"
@@ -253,7 +252,7 @@ class TestProvenanceReachesTheOutput:
         assert g["source_files_raw"].endswith("U2015-015_CTD_Temp.csv")
         assert Path(g["source_file"]).name == "cast.csv"
         assert g["source_format"].startswith("delimited_text")
-        assert "wod-agent-etl" in g["history"]
+        assert "wod-etl:" in g["history"]
         assert g["originator_cruise_id"] == "SHU1505"
         ds.close()
 
@@ -275,8 +274,7 @@ class TestProvenanceReachesTheOutput:
 
 
 class TestDepthFromPressure:
-    """WOD computes the depths of casts measured on pressure surfaces and keeps the pressure
-    as a variable (WOD manual, cast structure)."""
+    """Pressure casts get computed depths and keep pressure as a variable (WOD manual)."""
 
     def _run(self, tmp_path, column):
         d = tmp_path / "in"

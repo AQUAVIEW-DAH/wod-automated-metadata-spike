@@ -1,12 +1,8 @@
 """Write CF-compliant contiguous ragged array NetCDF files.
 
-All profile variables share ONE observation dimension (`z_obs`) with a single `z_row_size`
-count variable on the `casts` dimension. That is what makes the array a CF Discrete
-Sampling Geometry: depth and every measurement are index-aligned, and `z_row_size` says how
-many observations belong to each cast.
-
-Variable names are sanitised to CF identifiers (letter first, then letters/digits/
-underscore); the WOD name is preserved in `long_name`.
+All profile variables share one observation dimension (`z_obs`), with `z_row_size` giving
+each cast's count (CF Discrete Sampling Geometry). Variable names are CF-safe identifiers;
+the WOD name is kept in `long_name`.
 """
 import os
 import re
@@ -16,26 +12,26 @@ import netCDF4 as nc
 import numpy as np
 import pandas as pd
 
-from wod_etl.config import CF_CONVENTIONS, NETCDF_FILL_VALUE, QC_FILL_VALUE, WOD_VERSION
+from wod_etl.config import (CF_CONVENTIONS, NETCDF_FILL_VALUE, QC_FILL_VALUE, TOOL_NAME,
+                            WOD_VERSION)
+from wod_etl.time_zones import utc_offset_hours
 from wod_etl.reference.load_tables import flag_meanings_attr, flag_values_attr
 from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE
 
 OBS_DIM = "z_obs"
 CAST_DIM = "casts"
-# Every file this writer makes says so: what a rerun may replace is only a file it wrote.
+# Marks files this writer made: a rerun replaces only those.
 TITLE = "WOD Intermediate Standardized Ocean Profile"
 
-# CF flag attributes are generated from Table 12 rather than transcribed, so the file's
-# flag_meanings can never disagree with the flags the QC phase actually assigned.
+# CF flag attributes come from Table 12, so they always match the flags QC assigned.
 _OBS_FLAG_VALUES = flag_values_attr("observed_level")
 _OBS_FLAG_MEANINGS = flag_meanings_attr("observed_level")
 _DEPTH_FLAG_VALUES = flag_values_attr("depth")
 _DEPTH_FLAG_MEANINGS = flag_meanings_attr("depth")
 
 
-# CF wants `units` a UDUNITS string. Table 3a's own wording ("Degrees Celsius") is not one,
-# so it goes in `wod_units` and nothing a WOD reader relies on is lost. Keyed by Table 3a's
-# standard unit; the values are what the data already are -- no conversion happens here.
+# Table 3a units as UDUNITS strings for CF `units`; Table 3a's wording goes in `wod_units`.
+# No conversion happens here.
 CF_UNITS = {
     "Degrees Celsius": "degree_C", "Dimensionless": "1", "Micromole kilogram-1": "umol kg-1",
     "Microgram liter-1": "ug L-1", "Millimole liter-1": "mmol L-1", "Micro atmosphere": "uatm",
@@ -43,8 +39,7 @@ CF_UNITS = {
     "Day": "day", "Tritium Unit": "1e-18", "Nanomole kilogram-1": "nmol kg-1",
     "Percent": "percent", "Per mille": "1e-3", "Picomole kilogram-1": "pmol kg-1",
 }
-# CF standard names for the Table 3a variables that have one, as WOD stores them. pH has no
-# scale in WOD, so it gets none rather than a guessed one.
+# CF standard names for Table 3a variables that have one. pH has no WOD scale, so none.
 CF_STANDARD_NAMES = {
     1: "sea_water_temperature", 2: "sea_water_practical_salinity",
     3: "moles_of_oxygen_per_unit_mass_in_sea_water",
@@ -117,8 +112,7 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
     n_casts = len(casts)
 
     with nc.Dataset(output_nc_path, "w", format="NETCDF4") as ds:
-        # Dimensions first: the globals can write per-cast variables (notes, character data
-        # that differ between casts), and those need the `casts` dimension to exist.
+        # Dimensions first: the globals may write per-cast variables.
         ds.createDimension(CAST_DIM, n_casts)
         ds.createDimension(OBS_DIM, total_obs)
 
@@ -139,10 +133,8 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
         tv[:] = times["time"]
         _describe_time(tv, times)
 
-        # WOD's own ragged files carry the date and the time of day separately, because they
-        # are known separately: a cast with a date and no clock time has `date` and a fill
-        # `GMT_time`. Folding both into `time` alone wrote such a cast as 00:00 UTC -- a
-        # precise-looking midnight nobody measured.
+        # Date and time of day are separate, as in WOD's files, so a cast with no clock time
+        # gets a fill `GMT_time` rather than an implied midnight.
         dv = ds.createVariable("date", "i4", (CAST_DIM,), fill_value=np.int32(-2147483647))
         dv.long_name = "cast date, YYYYMMDD (UTC when the time of day is known)"
         dv[:] = np.array(times["date"], dtype="i4")
@@ -160,9 +152,7 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
                        "within this file; verify_output checks it across a run")
         for i, cid in enumerate(_cast_ids(casts)):
             idv[i] = cid
-        # An id a suffix made unique within this file, though casts of two SOURCE files had it:
-        # one cast exported twice, or two that cannot be told apart. Said here so verify
-        # finds it, as it did when each source had a file of its own.
+        # Ids shared by casts of different source files, recorded for verify_output.
         shared = _ids_shared_by_sources(casts)
         if shared:
             idv.repeated_across_source_files = "; ".join(shared)
@@ -172,8 +162,7 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
         rs.sample_dimension = OBS_DIM
         rs[:] = np.array(row_sizes, dtype="i4")
 
-        # Per cast, as WOD's own files carry it: a cast keeps its dataset when files are
-        # merged, which a file-level attribute does not survive.
+        # Per cast, as in WOD's files, so a cast keeps its dataset when files are merged.
         dv_ = ds.createVariable("dataset", str, (CAST_DIM,))
         dv_.long_name = "WOD dataset (Table 2)"
         for i, code in enumerate(_dataset_codes(casts)):
@@ -214,8 +203,7 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
             v.coordinates = "time lat lon z"
             if var.get("unit_abbrev"):
                 v.unit_abbrev = var["unit_abbrev"]
-            # Missing is the declared _FillValue, not NaN under it: a CF reader masks the
-            # one and sees a number in the other.
+            # Missing is the declared _FillValue, not NaN, so CF readers mask it.
             v[:] = np.ma.masked_invalid(data)
 
             ancillary = []
@@ -229,11 +217,8 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
                 q[:] = flags
                 ancillary.append(qname)
 
-            # The originator's own flags, carried through verbatim. They are NOT WOD Table
-            # 12 flags -- a submitter's 1 may mean 'good' where WOD's 1 means a failed range
-            # check -- so they get their own variable, no flag_values/flag_meanings, and an
-            # attribute pointing at the code table that names the scheme. Translating them
-            # would invent meaning; dropping them would lose the only QC the file has.
+            # The originator's flags, verbatim in their own variable: they are not Table 12
+            # flags, so they carry no WOD flag_values/flag_meanings.
             orig, orig_sources, schemes = _concat_originator_flags(casts, total_obs, var)
             if orig is not None:
                 oname = f"{name}_qc_originator"
@@ -254,14 +239,11 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
             if ancillary:
                 v.ancillary_variables = " ".join(ancillary)
 
-            # setncattr, not setattr: netCDF4 reserves a set of Python attribute names on
-            # Variable ('scale', 'mask', 'name', 'dtype'...) and rebinding one raises.
+            # setncattr, not setattr: netCDF4 reserves names such as 'scale' and 'name'.
             shared, varying = _variable_metadata(casts, var)
             for attr, value in shared.items():
                 v.setncattr(attr, value)
-            # What differs between the casts -- two source files naming the column, or
-            # stating its unit, differently -- is said per cast rather than the first
-            # cast's value claimed for all of them.
+            # Attributes that differ between casts are written per cast.
             per_cast = [_per_cast_text(ds, f"{name}_{attr}", values,
                                        f"{var['wod_name']}: {attr.replace('_', ' ')}")
                         for attr, values in varying.items()]
@@ -362,11 +344,9 @@ def _concat_flags(casts, total_obs, var=None, depth=False) -> Optional[np.ndarra
 
 
 def _concat_originator_flags(casts, total, var):
-    """The originator's flag column for one variable, concatenated across casts, with each
-    cast's flag column name and stated flag scheme (None for a cast without flags).
-
-    Kept as float, not int: an originator flag is not always an integer -- some submitters
-    use letters or decimals -- and coercing to int would silently rewrite them.
+    """The originator's flag column for one variable across casts, with each cast's flag
+    column name and stated scheme (None for a cast without flags). Float, since originator
+    flags are not always integers.
     """
     out = np.full(total, np.nan, dtype=float)
     at, found = 0, False
@@ -390,11 +370,8 @@ def _concat_originator_flags(casts, total, var):
 
 
 def _write_originator_flag_source(ds, o, oname, sources, schemes) -> None:
-    """Which column the originator's flags came from, and the originator's own scheme where
-    the source states it (CF 3.5: what their 0 and 1 mean, so the numbers can be read).
-
-    Variable attributes when every flagged cast agrees -- one source file always does. Casts
-    from sources that differ get them per cast: one file's scheme is not another's."""
+    """Record the originator flags' source column and stated scheme (CF 3.5): as variable
+    attributes when every flagged cast agrees, per cast otherwise."""
     flagged = [i for i, s in enumerate(sources) if s is not None]
     named = {sources[i] for i in flagged}
     if len(named) == 1:
@@ -437,9 +414,7 @@ def _per_cast_text(ds, name: str, values: List[str], long_name: str) -> str:
 def _cast_variable_metadata(mapping: Dict[str, Any]) -> Dict[str, Any]:
     """One cast's Table 5a variable specific headers for one variable, as attributes.
 
-    The originator's unit and the measurement scale are the two that always matter: a
-    conversion is only auditable against the unit the source declared, and a temperature is
-    ambiguous without knowing whether it is on ITS-90 or IPTS-68.
+    Includes the originator's unit and measurement scale whenever known.
     """
     attrs: Dict[str, Any] = {}
     headers = mapping.get("variable_specific_headers") or {}
@@ -502,30 +477,11 @@ def _coord(cast, key) -> float:
 _EPOCH = pd.Timestamp("1770-01-01")
 
 
-def utc_offset_hours(zone: Any) -> Optional[float]:
-    """Hours to ADD to UTC to get the zone's local time, or None if the zone is not numeric.
-
-    'UTC', 'GMT', 'Z' -> 0; 'UTC+10', 'GMT-3:30', '+09:00', '+0900' -> the offset. Named
-    zones ('JST', 'local', 'ship time') return None: converting on a guess about a name
-    is how a whole cruise shifts by a day.
-    """
-    z = str(zone or "").strip().upper()
-    if z in ("UTC", "GMT", "Z", "UT"):
-        return 0.0
-    m = re.fullmatch(r"(?:UTC|GMT|UT)?\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?", z)
-    if not m:
-        return None
-    hours = int(m.group(2)) + int(m.group(3) or 0) / 60.0
-    return hours if m.group(1) == "+" else -hours
-
-
 def _cast_times(casts) -> Dict[str, Any]:
     """Per cast: `time` (days since 1770), `date` (YYYYMMDD), `hours` (UTC, or fill).
 
-    A cast with a date and no time of day keeps its date and gets a fill time of day; `time`
-    sits at 00:00 of that date because CF needs a value, and the variable's comment says so.
-    A stated numeric zone with a known time of day is converted to UTC; a named zone, or a
-    date with no time, is recorded and NOT converted -- there is no hour to shift.
+    A cast with a date but no time of day gets a fill `hours` and `time` at 00:00. A numeric
+    zone with a known time of day is converted to UTC; otherwise the zone is only recorded.
     """
     out = {"time": [], "date": [], "hours": [], "time_known": [], "date_known": [],
            "zone": [], "converted": []}
@@ -544,7 +500,7 @@ def _cast_times(casts) -> Dict[str, Any]:
         ts = day + pd.Timedelta(hours=int(pc.get("hour") or 0),
                                 minutes=int(pc.get("minute") or 0),
                                 seconds=float(pc.get("second") or 0))
-        offset = utc_offset_hours(zone) if zone else None
+        offset = utc_offset_hours(zone, ts) if zone else None
         converted = bool(known and offset)
         if converted:
             ts = ts - pd.Timedelta(hours=offset)
@@ -604,13 +560,10 @@ def _write_time_zones(ds, casts, times) -> None:
 
 
 def _cast_id(cast, index) -> str:
-    """A cast identifier that means something outside this file.
+    """A cast identifier meaningful outside this file.
 
-    It used to be the platform plus the cast's position within its own file, so every
-    one-cast file got `<platform>_0000` and a run of eleven casts had eleven identical ids.
-    Built now from what identifies a cast to a reader -- the accession (or, with none, the
-    platform), the originator's cruise, the cast or station (or, with neither, the source
-    file's name), and the date with its time of day when known.
+    Built from the accession (else the platform), the originator's cruise, the cast or
+    station (else the source file name), and the date with time of day when known.
     """
     meta = _cast_secondary_headers(cast)
     contract = cast["contract"]
@@ -620,8 +573,7 @@ def _cast_id(cast, index) -> str:
                   or {}).get("value") or "").strip()
     cast_or_station = value("5") or (f"st{value('7')}" if value("7") else "")
     if not cast_or_station:
-        # Nothing names the cast, so the file it came from does: several XBT drops on one
-        # day from one ship would otherwise share platform-and-date.
+        # Nothing names the cast, so its source file name does.
         src = str(contract.get("source") or "")
         stem = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", src.replace("\\", "/").rsplit("/", 1)[-1])
         cast_or_station = stem if stem not in ("", "unknown") else ""
@@ -632,16 +584,22 @@ def _cast_id(cast, index) -> str:
             date += f"T{int(pc['hour']):02d}{int(pc.get('minute') or 0):02d}"
     except (KeyError, TypeError, ValueError):
         date = ""
-    # The accession scopes the id; without one the platform does, so ids from two
-    # accessions' files cannot meet on a bare station number.
+    # The accession (else the platform) scopes the id, so bare station numbers cannot clash.
     scope = value("1") or value("3")
     parts = [scope, cruise if cruise and cruise not in cast_or_station else "",
              cast_or_station]
     if not any(parts):
         parts = ["unknown"]
-    parts.append(date)
-    cid = "_".join(re.sub(r"[^A-Za-z0-9.-]+", "-", p).strip("-") for p in parts if p)
-    return (cid or f"cast_{index:04d}")[:64]
+    # At most 60 characters so a suffix fits; shorten the cruise name, never the date.
+    clean = lambda p: re.sub(r"[^A-Za-z0-9.-]+", "-", p).strip("-")
+    parts = [clean(p) for p in parts if p]
+    room = 60 - (len(date) + 1 if date else 0)
+    if len(parts) == 3 and len("_".join(parts)) > room:
+        keep = room - len(parts[0]) - len(parts[2]) - 2
+        parts[1] = parts[1][:keep].rstrip("-.") if keep >= 4 else ""
+    head = "_".join(p for p in parts if p)[:room].rstrip("_-")
+    cid = f"{head}_{date}" if head and date else head or date
+    return cid or f"cast_{index:04d}"
 
 
 def _ids_shared_by_sources(casts) -> List[str]:
@@ -659,7 +617,7 @@ def _cast_ids(casts) -> List[str]:
         cid = _cast_id(c, i)
         if cid in seen:
             seen[cid] += 1
-            cid = f"{cid}_{seen[cid]:02d}"[:64]
+            cid = f"{cid}_{seen[cid]:02d}"
         else:
             seen[cid] = 1
         ids.append(cid)
@@ -671,8 +629,8 @@ def _dataset_codes(casts) -> List[str]:
 
 
 def cast_year(cast: Dict[str, Any]) -> Optional[int]:
-    """The year of a cast's date as it is written -- UTC once a stated numeric zone is
-    applied -- which is the year WOD files the cast under. None when it has no date."""
+    """The year WOD files the cast under (its date, in UTC when a numeric zone is applied),
+    or None when it has no date."""
     times = _cast_times([cast])
     return int(times["date"][0]) // 10000 if times["date_known"][0] else None
 
@@ -683,9 +641,8 @@ def cast_time(cast: Dict[str, Any]) -> float:
 
 
 def _shared_or_per_cast(ds, name: str, values: List[Optional[str]], long_name: str) -> None:
-    """A value every cast shares is a global attribute; values that differ are a `casts`
-    variable of the same name, so a file of several sources says which cast came from which.
-    Nothing is written when no cast has one."""
+    """A value every cast shares as a global attribute, else a `casts` variable of the same
+    name. Nothing is written when no cast has one."""
     values = ["" if v is None else str(v) for v in values]
     if len(set(values)) == 1:
         if values[0]:
@@ -699,13 +656,11 @@ def _write_globals(ds, casts) -> None:
     ds.Conventions = CF_CONVENTIONS
     ds.featureType = "profile"
     ds.WOD_version = WOD_VERSION
-    # WOD keeps one dataset per file; a file that mixes them says so here, and the per-cast
-    # `dataset` variable says which cast is which. It used to take the FIRST cast's dataset,
-    # labelling a single-level OSD cast written beside CTD casts as CTD.
+    # WOD keeps one dataset per file; a mixed file says so, and the per-cast `dataset`
+    # variable says which cast is which.
     codes = set(_dataset_codes(casts))
     ds.wod_dataset_type = codes.pop() if len(codes) == 1 else "mixed"
-    # The file that was read -- a path, not the reader's description of it. That moved to
-    # `source_format`; it used to fill this attribute with 'delimited_text, delimiter comma'.
+    # The path that was read; how it was read is in `source_format`.
     _shared_or_per_cast(ds, "source_file",
                         [str(c["contract"].get("source") or "unknown") for c in casts],
                         "the source file this cast was read from")
@@ -723,13 +678,11 @@ def _write_globals(ds, casts) -> None:
     institution = _shared_secondary_header_value(casts, 4)
     if institution:
         ds.institution = institution
-    ds.source = "generated by wod-agent-etl"
+    ds.source = f"generated by {TOOL_NAME}"
 
     _write_shared_secondary_headers(ds, casts)
 
-    # Each cast's own conversions, each once: shared by every cast (one source's casts are)
-    # it is the file's attribute, and per cast when two sources converted differently -- a
-    # file of a thousand casts used to say it a thousand times, and of two sources the union.
+    # Unit conversions: a file attribute when every cast shares them, else per cast.
     logs = [c.get("transform_log") or {} for c in casts]
     _shared_or_per_cast(ds, "unit_conversions",
                         ["; ".join(dict.fromkeys(
@@ -765,12 +718,9 @@ def _write_density(ds, logs) -> None:
 
 
 def _write_provenance(ds, casts) -> None:
-    """The staged header's notes, as CF `comment`, and the run, as CF `history`.
+    """The staged header's notes as CF `comment`, and the run as CF `history`.
 
-    Every derivation and judgement a stager recorded -- a position taken from a station list,
-    fluorescence written as chlorophyll, a date chosen between two sources -- lived in the
-    staged CSV and nowhere else, so the NetCDF a reader actually receives said none of it.
-    Notes every cast shares are global; notes that differ go to a per-cast variable.
+    Notes every cast shares are global; the rest go to a per-cast variable.
     """
     import datetime as _dt
 
@@ -786,11 +736,10 @@ def _write_provenance(ds, casts) -> None:
             v[i] = "\n".join(notes)
     stamp = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
     sources = list(dict.fromkeys(str(c["contract"].get("source") or "unknown") for c in casts))
-    ds.history = (f"{stamp} wod-agent-etl: standardized to WOD intermediate NetCDF from "
+    ds.history = (f"{stamp} {TOOL_NAME}: standardized to WOD intermediate NetCDF from "
                   + (sources[0] if len(sources) == 1 else
                      f"{len(sources)} source files (variable source_file)"))
-    # Header keys with no WOD field, kept so they are not lost: those every cast shares in
-    # the file's attributes, the rest per cast -- two sources' `title` are two titles.
+    # Header keys with no WOD field: shared ones as a file attribute, the rest per cast.
     keys = [list(dict.fromkeys(f"{u.get('key')}={u.get('value')!r}"
                                for u in (c["contract"].get("unresolved_metadata") or [])))
             for c in casts]
@@ -822,12 +771,8 @@ def _write_character_data(ds, casts) -> None:
 
 
 def _cast_secondary_headers(cast) -> Dict[str, Any]:
-    """One cast's Table 4a headers, from the full metadata map or the older key.
-
-    `secondary_headers` comes from map_metadata and covers the header block AND metadata
-    columns; `extracted_header_metadata` is the narrower set the original parser produced.
-    Both are read so a contract built by either path still writes its metadata.
-    """
+    """One cast's Table 4a headers: `secondary_headers` merged over the legacy
+    `extracted_header_metadata`."""
     contract = cast["contract"]
     full = contract.get("secondary_headers") or {}
     legacy = contract.get("extracted_header_metadata") or {}
@@ -841,10 +786,8 @@ _CODE_OK = ("matched", "already_a_code")
 def split_coded_value(entry: Dict[str, Any]):
     """(value to write in the field, originator text to write beside it, lookup summary).
 
-    A coded field holds a code. When the value was looked up and is not one -- ambiguous, no
-    entry, list unavailable -- the field itself is left unwritten and the originator's text
-    goes beside it with the reason. An entry that was never looked up (a contract built by
-    hand) is written as it stands.
+    A value whose lookup found no code is not written in the field; its text goes beside
+    it with the reason. A value never looked up is written as it stands.
     """
     if not entry:
         return None, None, None
@@ -877,11 +820,9 @@ def _is_shared(values) -> bool:
 
 
 def _shared_secondary_header_value(casts, sec_id: int):
-    """One Table 4a header's value AS THE ORIGINATOR WROTE IT, when every cast agrees on it.
+    """One Table 4a header's value as the originator wrote it, when every cast agrees on it.
 
-    For the human-readable CF attributes (`institution`): a header whose text was resolved
-    to a code holds the code in `value` and the text in `originator_value`, and a CF
-    `institution` of '1234' names nobody.
+    For human-readable CF attributes such as `institution`, where a resolved code is useless.
     """
     per_cast = [_cast_secondary_headers(c) for c in casts]
     entries = [m.get(str(sec_id), m.get(sec_id, {})) for m in per_cast]
@@ -890,13 +831,9 @@ def _shared_secondary_header_value(casts, sec_id: int):
 
 
 def _write_shared_secondary_headers(ds, casts) -> None:
-    """Only headers every cast agrees on may be file-global attributes.
+    """Write headers every cast agrees on as global attributes.
 
-    Bottom depth, station number and bottom hit are per-cast by definition. Writing the first
-    cast's value as a global attribute silently relabels every other cast with it and drops
-    any header the first cast happens not to carry -- so those go to `casts`-dimension
-    variables instead, in _write_varying_secondary_headers. A single-cast file agrees with
-    itself on everything and so keeps the all-global layout it has always had.
+    Headers that differ are written per cast by _write_varying_secondary_headers.
     """
     for sec_id, _name, key, values, code_table, texts, lookups in _secondary_header_columns(casts):
         url = code_table.get("csv") or code_table.get("html") or code_table.get("pdf")
@@ -909,9 +846,7 @@ def _write_shared_secondary_headers(ds, casts) -> None:
         if not _is_shared(values):
             continue
         ds.setncattr(key, str(values[0]))
-        # A coded value is unusable without the list it is coded against, and WOD publishes
-        # those online rather than in the manual. Carrying the URL means a reader of the
-        # NetCDF alone can resolve the code.
+        # WOD publishes its code lists online; the URL lets a reader resolve the code.
         if url:
             ds.setncattr(f"{key}_code_table", url)
 
@@ -935,9 +870,8 @@ def _write_varying_secondary_headers(ds, casts) -> None:
         if all(v is None for v in values) and any(t is not None for t in texts):
             continue                         # nothing coded to write; the text went beside it
         if all(v is None for v in values):
-            # The header was identified but its value is not in the file -- header 96 when
-            # flag columns are present but the flag SET is not named, for instance. A
-            # variable of pure fill says nothing; an attribute says what is known.
+            # Header identified but its value not stated (e.g. header 96 with no named flag
+            # set): record that as an attribute rather than a variable of fill.
             ds.setncattr(f"{key}_status",
                          "present in this file but its value is not stated in the source; "
                          "it must come from the submitter or the accession documentation")
@@ -945,8 +879,7 @@ def _write_varying_secondary_headers(ds, casts) -> None:
                 ds.setncattr(f"{key}_code_table", url)
             continue
         if all(v is None or isinstance(v, (int, float)) for v in values):
-            # The declared fill for a cast that does not state it, like every other numeric
-            # variable here -- not NaN.
+            # Missing values use the declared fill, not NaN.
             v = ds.createVariable(key, "f8", (CAST_DIM,), fill_value=NETCDF_FILL_VALUE)
             v[:] = np.ma.masked_invalid(np.array([np.nan if x is None else float(x)
                                                   for x in values], dtype=float))
@@ -968,37 +901,3 @@ def _cast_var(ds, name, dtype, values, **attrs):
         setattr(v, k, val)
     v[:] = np.array(values, dtype=float)
     return v
-
-
-if __name__ == "__main__":
-    import json
-
-    df = pd.DataFrame({
-        "Depth": [0.0, 10.0, 20.0],
-        "Depth_qc_flag": [0, 0, 0],
-        "Temp_C": [21.0, 19.5, 18.0],
-        "Temp_C_qc_flag": [0, 0, 1],
-        "DIC": [2100.0, 2105.0, 2110.0],
-        "DIC_qc_flag": [0, 0, 0],
-    })
-    contract = {
-        "source": "test_xctd.txt",
-        "wod_dataset_code": "CTD",
-        "parsed_coordinates": {"latitude": 61.93, "longitude": -172.27,
-                               "year": 1985, "month": 6, "day": 12},
-        "extracted_header_metadata": {"3": {"name": "Platform Code", "value": "STOCS85A"}},
-        "column_mapping": [
-            {"raw_column": "Depth", "wod_code": 0, "wod_name": "Depth", "target_unit": "meters"},
-            {"raw_column": "Temp_C", "wod_code": 1, "wod_name": "Temperature",
-             "target_unit": "Degrees Celsius"},
-            {"raw_column": "DIC", "wod_code": 21, "wod_name": "Dissolved inorganic carbon",
-             "target_unit": "Millimole liter-1"},
-        ],
-    }
-    res = generate_netcdf_ragged(df, contract, "data/processed/demo_single.nc")
-    print(json.dumps(res, indent=2))
-
-    res2 = write_ragged_profiles(
-        [{"df": df, "contract": contract}, {"df": df.iloc[:2], "contract": contract}],
-        "data/processed/demo_multi.nc")
-    print(json.dumps({k: res2[k] for k in ("cast_count", "total_observations", "row_sizes")}, indent=2))

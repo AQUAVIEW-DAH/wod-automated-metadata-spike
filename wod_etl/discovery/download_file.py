@@ -1,10 +1,7 @@
 """Download a complete file to data/raw/.
 
-Phase 1's fetch_and_peek_file only reads the first few kilobytes, which is enough to decide
-what a file is but not enough to process it. This is the skill that actually retrieves it.
-
-Downloads stream to a .part file and are renamed on completion, so an interrupted run never
-leaves a truncated file that looks finished.
+Downloads stream to a .part file renamed on completion, so an interrupted run never leaves a
+truncated file that looks finished.
 """
 import hashlib
 import os
@@ -36,9 +33,8 @@ def download_file(
 ) -> Dict[str, Any]:
     """Fetch a file to local disk and report where it landed.
 
-    A local path is copied rather than downloaded, so callers can treat local and remote
-    sources identically. Returns a dict with `status` in {"downloaded", "cached", "copied",
-    "error"} -- errors are returned, never raised, so an unattended run can continue.
+    A local path is copied instead. Returns a dict with `status` in {"downloaded", "cached",
+    "copied", "error"}; errors are returned, not raised.
     """
     dest_root = Path(dest_dir) if dest_dir else RAW_DIR
     if subdir:
@@ -112,12 +108,7 @@ def _copy_local(src: str, dest: Path, overwrite: bool) -> Dict[str, Any]:
                 "note": "source is already inside the raw directory"}
     note = None
     if dest.exists() and not overwrite:
-        # A copy is only current if it still matches its source. Returning it regardless
-        # meant a staged file regenerated under the same run id was never read again: the
-        # run reprocessed the stale copy and reported success. copy2 keeps the source's
-        # mtime to the nanosecond, so a copy is current when size and mtime are the SAME --
-        # "not newer, to the second" took another file of one size, written in the same
-        # second (a run id reused on another folder), for the one copied.
+        # The copy is current only if size and mtime_ns match the source (copy2 keeps mtime).
         s, d = src_p.stat(), dest.stat()
         if s.st_size == d.st_size and s.st_mtime_ns == d.st_mtime_ns:
             return {"status": "cached", "source": src, "local_path": str(dest),
@@ -143,13 +134,7 @@ def _safe_component(name: str) -> str:
 
 
 def _safe_subpath(name: str) -> Path:
-    """Sanitise a MULTI-segment subdirectory, keeping the nesting.
-
-    `_safe_component` keeps only the last segment, which is right for a filename but drops
-    the run id from 'run_07/stationA' -- so a raw copy landed outside its own run. Each
-    segment is sanitised separately instead; '.' and '..' cannot survive that, so the
-    traversal guard is unchanged.
-    """
+    """Sanitise a multi-segment subdirectory segment by segment, keeping the nesting."""
     parts = [_safe_component(part) for part in name.replace("\\", "/").split("/")]
     parts = [p for p in parts if p and p not in (".", "..")]
     return Path(*parts) if parts else Path()
@@ -161,10 +146,3 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: fh.read(DOWNLOAD_CHUNK_BYTES), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-if __name__ == "__main__":
-    import json
-    res = download_file("https://www.ncei.noaa.gov/data/oceans/woa/WOD/DOC/wodreadme.pdf",
-                        max_bytes=5 * 1024 * 1024)
-    print(json.dumps(res, indent=2))

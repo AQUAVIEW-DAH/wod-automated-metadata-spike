@@ -1,24 +1,8 @@
-"""A log per accession: what was run against it, by whom, and what happened.
+"""Per-accession run log: what was run, by whom, and what happened.
 
-Every run touching an accession -- `wod-etl run` or `confirm` typed by a person, or a
-coding agent calling `process_accession` -- appends to the same two files:
-
-    data/runs/<accession>/run.log        human-readable, one line per event
-    data/runs/<accession>/events.jsonl   the same events as JSON, one object per line
-
-Each invocation opens with a banner (invocation id, actor, arguments, git commit, effective
-configuration) and closes with how it ended, so a later reader can tell one run from the
-next and see which code produced an output.
-
-    from wod_etl.runlog import accession_log
-
-    with accession_log("0303928", actor="agent"):
-        ...  # any wod_etl call made here is logged to data/runs/0303928/
-
-The library's entry points (`process_accession`, `process_taxa`, `classify_accession`, the
-staged writers) open the log on their own when they can tell which accession they are
-working on, so an agent gets a log without asking for one. When they cannot tell, nothing
-is logged -- a run never fails because of its log.
+Runs append to data/runs/<accession>/run.log (text) and events.jsonl (JSON lines), opening
+with a banner (invocation, actor, arguments, git commit, config) and closing with the outcome.
+Nothing is logged when the accession is unknown, and logging never fails a run.
 """
 import contextvars
 import datetime as dt
@@ -40,9 +24,7 @@ EVENTS_LOG = "events.jsonl"
 # Set for a script recipe's subprocess: log to stderr, which the parent run records.
 TO_STDERR_ENV = "WOD_LOG_TO_STDERR"
 
-# The log open in this context, if any. Re-entrant: a pipeline that opens the log and then
-# calls process_accession must not attach a second pair of handlers and write every line
-# twice.
+# The log open in this context, if any; nested calls reuse it rather than add handlers.
 _ACTIVE: contextvars.ContextVar = contextvars.ContextVar("wod_etl_accession_log", default=None)
 
 
@@ -101,15 +83,14 @@ def _git_head() -> Optional[str]:
 
 
 @contextmanager
-def accession_log(accession: str, actor: str = "agent",
+def accession_log(accession: str, actor: str = "library",
                   arguments: Optional[Dict[str, Any]] = None,
                   banner: bool = True) -> Iterator[Dict[str, Any]]:
     """Log everything `wod_etl` does inside the block to the accession's run log.
 
-    `actor` says who ran it: `"cli"` for the `wod-etl` command, `"agent"` or `"library"` for
-    a call from Python; `arguments["command"]` (`run`, `confirm`) names what was run. The
-    yielded dict has `status`, which the caller may set; it is written in the closing line.
-    Nested calls reuse the log already open.
+    `actor` is `"cli"` or `"library"`; `arguments["command"]` names the command. The caller
+    may set the yielded dict's `status`, written in the closing line. Nested calls reuse the
+    open log.
     """
     current = _ACTIVE.get()
     if current is not None:
@@ -129,8 +110,7 @@ def accession_log(accession: str, actor: str = "agent",
         logger.setLevel(logging.INFO)
     token = _ACTIVE.set(context)
     log = logging.getLogger(f"{LOGGER_NAME}.runlog")
-    # Banners belong to a run folder. There is none under a parent run (a banner there would
-    # open a second run inside the parent's) or when the folder cannot be written.
+    # Banners need a run folder; there is none under a parent run or if it is unwritable.
     banner = banner and context["dir"] is not None
     if banner:
         event(log, logging.INFO,
@@ -161,9 +141,7 @@ def accession_log(accession: str, actor: str = "agent",
 def _handlers(accession: str, context: Dict[str, Any]) -> List[logging.Handler]:
     """run.log and events.jsonl in the accession's folder, or stderr under a parent run.
 
-    `wod-etl confirm` sets TO_STDERR_ENV for a script recipe's subprocess and copies what it
-    prints into its own run log, under its own invocation. The subprocess opening the run
-    folder as well would log a second invocation, under an accession guessed from a path.
+    Under TO_STDERR_ENV the parent run records the output, so no second invocation is logged.
     """
     if os.environ.get(TO_STDERR_ENV):
         h = logging.StreamHandler(sys.stderr)
@@ -184,16 +162,15 @@ def _handlers(accession: str, context: Dict[str, Any]) -> List[logging.Handler]:
 
 def accession_log_for(source: Any, accession: Optional[str] = None, actor: str = "library",
                       arguments: Optional[Dict[str, Any]] = None, banner: bool = True):
-    """The log for whatever accession `source` belongs to -- or a no-op.
+    """The log for the accession `source` belongs to, or a no-op.
 
-    Used by the library's entry points. Inside an open log it does nothing extra; with no
-    accession to be found (a test folder, an ad-hoc file) it does nothing at all.
+    A no-op inside an open log or when no accession can be found.
     """
     if _ACTIVE.get() is not None:
         return nullcontext(_ACTIVE.get())
     from wod_etl.discovery.list_remote_directory import accession_for
 
-    # An explicit id wins as given -- a local survey need not have an NCEI number.
+    # An explicit id is used as given; a local survey need not have an NCEI number.
     acc = (accession_for(accession) or str(accession)) if accession else accession_for(source)
     if not acc:
         return nullcontext(None)

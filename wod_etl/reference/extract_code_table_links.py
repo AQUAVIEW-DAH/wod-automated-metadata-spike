@@ -1,18 +1,7 @@
-"""Rebuild knowledge/wod_code_tables/code_table_links.json from the manual's own hyperlinks.
+"""Rebuild code_table_links.json from the code-list hyperlinks in the WOD manual PDF.
 
-The WOD manual defines the metadata FIELDS in Tables 4a, 5a, 6a and 7a but publishes the
-VALUE code lists online, as a hyperlink beside each entry. Those links are PDF annotations,
-so they survive neither a text extraction nor a copy-paste -- which is why the "App" column
-looks like a dead end when you read the extracted text.
-
+Maintainer tool, re-run after a new WOD release; the pipeline reads only the JSON.
     uv run python -m wod_etl.reference.extract_code_table_links
-
-Re-run it after replacing wod_readme.pdf with a newer WOD release. Nothing fetches the
-linked pages: they are external, they change between releases, and a cached copy would go
-stale without saying so.
-
-Sits beside index_manual.py for the same reason: both rebuild a file in knowledge/ from the
-PDF, both need the dev-only `pypdf`, and neither is imported by anything at runtime.
 """
 import collections
 import json
@@ -56,7 +45,7 @@ NAME_OF = {
 
 
 def annotations(pdf_path: Path):
-    """Every (uri, page) hyperlink annotation in the PDF. Requires the dev dep `pypdf`."""
+    """Every (uri, page) hyperlink annotation in the PDF. Requires `pypdf`."""
     from pypdf import PdfReader
 
     reader = PdfReader(str(pdf_path))
@@ -78,7 +67,7 @@ def build(pdf_path: Path) -> dict:
     try:
         import pypdf                                        # noqa: F401
     except ImportError:
-        return {"error": "pypdf is not installed. It is a dev dependency: `uv sync`."}
+        return {"error": "pypdf is not installed: `uv sync` installs it."}
 
     found = collections.defaultdict(dict)
     pages_seen = set()

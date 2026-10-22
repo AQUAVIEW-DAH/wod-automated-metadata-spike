@@ -1,4 +1,4 @@
-"""Phase 3: Conversions & QC Flagging skills."""
+"""Phase 3: unit conversions and (opt-in) WOD QC flagging."""
 
 from .convert_units_and_types import convert_units_and_types
 from .apply_qc_auditing import apply_qc_auditing

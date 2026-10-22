@@ -1,14 +1,14 @@
 # Phase 1 — Discovery
 
-**Find files, work out what's inside them, and get the data into memory.**
+Find files, work out what is in them, and load the data into memory.
 
-Everything here operates on raw bytes and text. Nothing here knows about WOD yet — that
-starts in [Phase 2](../mapping/README.md).
+Everything here works on raw bytes and text; WOD terms start in
+[Phase 2](../mapping/README.md).
 
-**This phase assumes the file carries its own coordinates and parses as a table.** When it
-does not — positions in a sibling station list or a readme PDF, one table holding the whole
-cruise, a title row above the header, a cp932 encoding, `**NS`/`*DL` sentinels — go through
-[Phase 0 — Staging](../staging/README.md) first and point discovery at the staged copy.
+This phase assumes a file carries its own coordinates and parses as a table. When it does not
+(positions in a station list or readme PDF, one table for the whole cruise, a title row above
+the header, a cp932 encoding, `**NS`/`*DL` sentinels), stage it first with
+[Phase 0 — Staging](../staging/README.md) and point discovery at the staged copy.
 
 ```python
 from wod_etl.discovery import (list_remote_directory, resolve_accession_url,
@@ -26,31 +26,29 @@ list_remote_directory   what files exist?
         ↓
 download_file           fetch one to data/raw/
         ↓
-sniff_format            what IS this file? (bytes, not extension)
+sniff_format            what is this file? (bytes, not extension)
         ↓
 read_any                → [{cast_id, df, header_block}]   for every format
         ↓
 classify_dataset        which WOD dataset is this cast?   → Phase 2
 ```
 
-`read_any` is the dispatcher. Underneath it, delimited text still goes through
-`profile_raw_data` → `split_casts` → `load_tabular`, which remain callable on their own and
-are documented below; NetCDF, Sea-Bird `.cnv`, fixed-width ASCII and spreadsheets take their
-own readers. Everything comes back in the same shape.
+`read_any` is the dispatcher. Delimited text goes through `profile_raw_data` →
+`split_casts` → `load_tabular` (each callable on its own, documented below); NetCDF, Sea-Bird
+`.cnv`, fixed-width ASCII and spreadsheets have their own readers. All return the same shape.
 
-`fetch_and_peek_file` can run on a *remote URL* before downloading, which is the point of
-it: decide whether a 4 GB file is worth fetching by reading 8 KB of it.
+`fetch_and_peek_file` works on a remote URL, so you can inspect 8 KB of a large file before
+downloading it.
 
-**Reading a file that does not just open** is a procedure, not an API call:
-[`.claude/skills/wod-etl/reading-unknown-files.md`](../../.claude/skills/wod-etl/reading-unknown-files.md)
-walks the six questions to answer before staging anything.
+For a file that does not open cleanly, follow
+[`knowledge/reading_unknown_files.md`](../../knowledge/reading_unknown_files.md).
 
 ---
 
 ## `list_remote_directory(url_or_path, recursive=False, filter_extension=None)`
 
-Crawls an open HTTP directory index (Apache/NGINX, as NCEI serves) or a local folder.
-Auto-detects which by checking whether the path exists on disk.
+Lists an HTTP directory index (Apache/NGINX, as NCEI serves) or a local folder, detected by
+whether the path exists on disk.
 
 ```python
 res = list_remote_directory(
@@ -65,70 +63,62 @@ res = list_remote_directory(
             "last_modified": "2023-04-12T14:25:00"}]}
 ```
 
-**What it handles for you**
+- Sizes like `1.0M` / `14K` become bytes; `-` becomes `null`.
+- Dates like `12-Apr-2023 14:25` or `2023-04-12 14:25` become ISO strings.
+- Links that leave the starting directory (including NCEI's absolute parent link) are
+  refused and counted in `skipped_navigation_links`.
+- Recursion is capped at depth 8 and tracks visited URLs, so symlink loops cannot hang it.
+- Network errors return `{"error": "...", "total_items": 0, "items": []}`; it never raises.
+  Requests go through `wod_etl.http_util.get_with_retries`: 429, 5xx and timeouts are
+  retried `HTTP_RETRIES` times with backoff; 404 is not.
 
-- Sizes written as `1.0M` / `14K` are converted to bytes; `-` becomes `null`.
-- Dates in `12-Apr-2023 14:25` or `2023-04-12 14:25` form become ISO strings.
-- Links that leave the starting directory are refused. NCEI writes its parent link as an
-  absolute path (`/data/oceans/archive/arc0222`), not `../`, so a naive filter would list
-  the parent as a child and `recursive=True` would crawl upward into the whole archive.
-  `skipped_navigation_links` counts what was rejected.
-- Recursion is depth-capped at 8 and tracks visited URLs, so a symlink loop cannot hang it.
+**Input resolution.** A landing page, an `/archive/accession/<n>` URL or a bare accession
+number holds no files. `resolve_accession_url(text)` reads the landing page's FTP link
+(e.g. `ftp://ftp-oceans.ncei.noaa.gov/nodc/archive/arc0238/0303535/`) and returns the HTTPS
+directory under `/data/oceans/archive/`, recorded under `resolution`. If the page cannot be
+read, the result has an `error` and a `hint`. `accession_number(text)` extracts the number
+from any of these forms.
 
-**Failure** — network problems come back as `{"error": "...", "total_items": 0, "items": []}`.
-Never raises. Every request goes through `wod_etl.http_util.get_with_retries`: 429 and 5xx
-responses and timeouts are retried `HTTP_RETRIES` times with backoff, a 404 is not.
+**Versioned accessions.** When an accession holds `1.1/`, `2.2/`… (each a full copy), a
+recursive listing covers only the highest version; `version` says which and what else
+exists. Point at a version's URL to use another.
 
-**A citation is resolved to its data directory before anything is listed.** An NCEI
-metadata landing page, an `/archive/accession/<n>` URL and a bare accession number hold no
-files. `resolve_accession_url(text)` reads the landing page -- whose file listing renders
-client-side, but whose static HTML still carries the FTP link
-`ftp://ftp-oceans.ncei.noaa.gov/nodc/archive/arc0238/0303535/` -- and returns the HTTPS
-directory under `/data/oceans/archive/`. The listing records it under `resolution`. When the
-landing page cannot be read, the result is an `error` plus a `hint` naming the page to open.
-`accession_number(text)` pulls the number out of any of those forms.
-
-**A versioned accession is narrowed to its latest version.** Newer accessions hold `1.1/`,
-`2.2/`... each a full copy of the bundle; a recursive crawl of the root processed every file
-once per version. With `recursive=True` only the highest version is listed, and `version`
-says which and what else exists. Point at a version's URL to take another.
-
-**A local archive is extracted.** A `.tar`, `.tar.gz`, `.tgz` or `.zip` is unpacked once under
-`data/raw/<name>/` and that folder is listed (`extracted_from`). A member that would land
-outside the target -- an absolute path, `..`, a link -- is refused and listed in
+**Local archives.** A `.tar`, `.tar.gz`, `.tgz` or `.zip` is extracted once under
+`data/raw/<name>/` and that folder is listed (`extracted_from`). Members that would land
+outside the target (absolute paths, `..`, links) are refused and listed in
 `refused_members`.
 
-**Gotcha** — `filter_extension` only filters *files*. Directories are always returned so
-recursion can work, so a `.csv` filter still shows folders.
+**Gotcha:** `filter_extension` filters files only. Directories are always returned so
+recursion works.
 
 ---
 
 ## `download_file(url_or_path, dest_dir=None, overwrite=False, max_bytes=2GB, subdir=None)`
 
-Streams a complete file to `data/raw/` (or `dest_dir`). Use `subdir=run_id` to keep runs
-separate.
+Streams a file to `data/raw/` (or `dest_dir`). Use `subdir=run_id` to keep runs separate.
 
 ```json
 {"status": "downloaded", "source": "https://...", "local_path": "data/raw/<run>/cast_01.csv",
  "size_bytes": 48213, "sha256": "9f2c...", "content_type": "text/csv", "attempts": 1}
 ```
 
-`status` is one of `downloaded`, `cached` (already present — pass `overwrite=True` to
-refetch), `copied` (source was a local path), or `error`.
+`status` is `downloaded`, `cached` (already present; `overwrite=True` refetches), `copied`
+(local source) or `error`.
 
-Writes to `<name>.part` and renames on completion, so an interrupted run never leaves a
-truncated file that looks finished. Retries 3 times with backoff. Refuses files above
-`max_bytes`, checking both the declared `content-length` and the actual stream.
+- Writes to `<name>.part` and renames when complete, so an interrupted download never looks
+  finished.
+- Retries 3 times with backoff.
+- Refuses files over `max_bytes`, checking both `content-length` and the actual stream.
 
-**Gotcha** — filenames are sanitised to `[A-Za-z0-9._-+]` and truncated to 200 chars, so
-`local_path` may not exactly match the remote name. Use the returned path, don't rebuild it.
+**Gotcha:** filenames are sanitised to `[A-Za-z0-9._-+]` and truncated to 200 characters.
+Use the returned `local_path`; do not rebuild it.
 
 ---
 
 ## `sniff_format(path, num_bytes=65536)`
 
-**What the file is, from its bytes.** Extensions lie: `.dat` is CSV as often as it is
-fixed-width, NetCDF arrives with no extension, and `.txt` is sometimes a Sea-Bird header.
+Identifies a file from its bytes, not its extension (`.dat` may be CSV, NetCDF may have no
+extension, `.txt` may be a Sea-Bird header).
 
 ```json
 {"format_family": "netcdf4_hdf5", "reader": "netcdf", "confidence": "high",
@@ -136,15 +126,18 @@ fixed-width, NetCDF arrives with no extension, and `.txt` is sometimes a Sea-Bir
  "evidence": ["magic bytes b'\\x89HDF\\r\\n\\x1a\\n'"], "size_bytes": 48213}
 ```
 
-`reader` is the strategy `read_any` will dispatch to: `netcdf`, `spreadsheet`, `delimited`,
-`fixed_width`, `sea_bird_cnv`, or `none`.
+`reader` is what `read_any` dispatches to: `netcdf`, `spreadsheet`, `delimited`,
+`fixed_width`, `sea_bird_cnv`, `wod_csv`, `probe_dat`, `tsk_xctd`, or `none`.
 
 | `format_family` | How it is recognised |
 | --- | --- |
 | `netcdf_classic`, `netcdf_64bit_offset`, `netcdf_64bit_data`, `netcdf4_hdf5` | magic bytes |
-| `spreadsheet_xlsx`, `opendocument`, `archive_zip` | ZIP magic, then the member list |
+| `spreadsheet_xlsx`, `word_document`, `presentation`, `opendocument`, `archive_zip` | ZIP magic, then the member list |
 | `pdf`, `gzip`, `bzip2`, `xz`, `sqlite`, `access_db` | magic bytes |
-| `image` (JPEG, PNG, GIF, TIFF) | magic bytes -- a document, never a table |
+| `image` (JPEG, PNG, GIF, TIFF) | magic bytes; a document, never a table |
+| `wod_csv` | WOD's own CSV export: `CAST`, `VARIABLES ,` and `UNITS` rows |
+| `tsk_xctd` | a Tsurumi-Seiki header record: serial, date, time, `DD-MM.MMN`, probe `CT1`/`CT4` |
+| `probe_dat` | a first line `# XCTD|XBT cruise yyyymmdd hhmm lat lon n` |
 | `sea_bird_cnv` | `*END*` / `# name 0 =` markers |
 | `json`, `xml` | parses as JSON, or opens with a tag |
 | `delimited_text` | one delimiter splits ≥60% of rows into the same field count |
@@ -153,67 +146,65 @@ fixed-width, NetCDF arrives with no extension, and `.txt` is sometimes a Sea-Bir
 | `unstructured_text` | rows exist but <50% of their fields are numeric: prose |
 | `binary_unknown` | no configured encoding decodes it |
 
-**Delimiters are counted outside quotes.** A station list whose last column is a quoted
-remark (`"CTD, trawl, NORPAC"`) has a different raw comma count on every row; counted as csv
-does, it is a table. A `LAT: 21.0` line above a staged table is not a data row, so a staged
-cast of three levels still sniffs as delimited.
+Delimiters are counted outside quotes, so a quoted remark column (`"CTD, trawl, NORPAC"`)
+does not break detection. `Key: value` lines above a table are not counted as data rows.
 
-**Two flags, and they are not the same.** `readable` means there is a table to read.
-`is_document` means the file is documentation or a container *by nature* — PDF, archive,
-XML metadata. A caller should **skip** an `is_document` file and **fail** on anything else
-that will not read: a silent skip is how a real cast in an unrecognised layout disappears
-from a run.
+**`readable` vs `is_document`.** `readable` means there is a table to read. `is_document`
+means the file is documentation or a container (PDF, archive, XML metadata). Skip an
+`is_document` file; treat any other unreadable file as a failure, not a skip.
 
 **Gotchas**
 
-- `fixed_width_text` `colspecs` are **inferred** from where whitespace held in the sample.
-  A column that is full in the first rows and empty later shifts every field after it.
-  Verify against the accession's format description.
-- `delimited_text` with `confidence: medium` usually means a units row under the header, or
-  a trailing comment. That is information — look at it.
-- `unstructured_text` is still worth reading during triage. Coordinates and sentinel legends
-  live in readmes.
+- `fixed_width_text` `colspecs` are inferred from the sample. A column that is empty later
+  in the file shifts every field after it; check against the format description.
+- `delimited_text` with `confidence: medium` usually means a units row under the header or a
+  trailing comment.
+- `unstructured_text` files (readmes) often hold coordinates and sentinel legends; read them
+  during triage.
 
 ---
 
 ## `read_any(path, sniff=None, profile=None, max_casts=None)`
 
-**One call that reads any supported format into the same shape.**
+Reads any supported format into the same shape.
 
 ```python
 casts, info = read_any("data/raw/0287423/2-CTD/cast_01")
 # casts: [{"cast_id": "0", "df": DataFrame, "header_block": "...", "source_note": "..."}]
 ```
 
-`header_block` is `Key: value` text in the form `generate_field_mapping` already parses, so
-a position held in a NetCDF attribute or a `.cnv` `* NMEA Latitude =` line reaches the
-mapping contract by the same route as a `# Latitude:` comment.
-
-**Per format**
+`header_block` is `Key: value` text that `generate_field_mapping` parses, so a position from
+a NetCDF attribute or a `.cnv` `* NMEA Latitude =` line reaches mapping the same way as a
+`# Latitude:` comment.
 
 | Reader | What it does | Watch for |
 | --- | --- | --- |
-| `delimited` | `profile_raw_data` → `split_casts` → `load_tabular`, unchanged | one cast per header block |
-| `netcdf` | one cast per profile; handles 1-D, `N_PROF × N_LEVELS`, and CF contiguous ragged (`row_size` + `sample_dimension`) | units are folded into the column name |
-| `sea_bird_cnv` | names from `# name N =`, data after `*END*` | `=`-style header lines are rewritten to `Key: value` |
-| `fixed_width` | `read_fwf` with sniffed `colspecs` | headerless files get `col_0…col_N` and a warning — nothing can map those |
-| `spreadsheet` | every non-empty sheet becomes one cast | needs an Excel engine; a workbook has no header block |
+| `delimited` | `profile_raw_data` → `split_casts` → `load_tabular` | one cast per header block; a cruise-wide table splits by station |
+| `netcdf` | one cast per profile; handles 1-D, `N_PROF × N_LEVELS`, CF contiguous ragged (`row_size` + `sample_dimension`), and flattened ERDDAP-style tables (one `row` dimension, profile variables in `cdm_profile_variables`; upcasts dropped when downcasts exist) | units are folded into the column name; an opaque name (a BODC code, `TEMPS901`) is replaced by its `long_name`; a flag named in `ancillary_variables` becomes `<variable>_QC` |
+| `sea_bird_cnv` | names from `# name N =`, or the row of names after `*END*` (ASCII export); data after it | `=`-style header lines become `Key: value`; date from `NMEA UTC`, `System UTC`, `start_time` or upload time (UTC only for the first two) |
+| `fixed_width` | `read_fwf` with sniffed `colspecs` | headerless files get `col_0…col_N` and a warning; these cannot be mapped |
+| `spreadsheet` | one cast per non-empty sheet; an RBR Ruskin workbook gives one cast per downcast | needs an Excel engine; upcasts are not written |
+| `wod_csv`, `probe_dat`, `tsk_xctd` | `known_formats.py` | WOD's own flags (F) are dropped, the originator's (O) kept |
 
-**Failure** — `([], {"error": ...})`. Never raises. Always read `info["warnings"]`: a
-transposed NetCDF variable, a `.cnv` whose name count does not match its column count, and
-inferred fixed-width boundaries are all reported there and nowhere else.
+On failure it returns `([], {"error": ...})` and never raises. Always read
+`info["warnings"]`: transposed NetCDF variables, `.cnv` name/column count mismatches and
+inferred fixed-width boundaries are reported only there.
 
-**NetCDF specifics.** Global attributes and per-profile scalars both go into
-`header_block`, under their original name *and* — for the ones it recognises — again as
-`Latitude:` / `Longitude:` / `Date:` so the mapper can parse them. Nothing is lost and the
-provenance stays visible. Files over 20 million cells are refused rather than loaded.
+**NetCDF.** Global attributes and per-profile scalars go into `header_block` under their
+original names, and recognised ones are repeated as `Latitude:` / `Longitude:` / `Date:` for
+the mapper. Files over 100 million cells are refused.
+
+**Table layouts.** `profile_raw_data` finds the header row below a title, `Key,value` rows or
+a blank-line-separated block, and folds a units row into the names (`Temperature (degC)`). A
+table holding many stations (station, date, latitude and longitude columns) is split into one
+cast per station; without a depth axis it splits only on a sample column, so an underway
+track stays one cast. Japanese column names are matched through `wod_etl/terms.py`.
 
 ---
 
 ## `classify_dataset(path=None, columns=None, header_text="", depth_increment_m=None, ...)`
 
-**Which WOD dataset this is — or whether it is WOD profile data at all.** This is what
-replaced `dataset_type` as a required argument.
+Decides which WOD dataset a file is, or whether it is WOD profile data at all.
 
 ```json
 {"verdict": "profile", "dataset_type": "CTD", "confidence": "high", "score": 9.0,
@@ -223,54 +214,47 @@ replaced `dataset_type` as a required argument.
  "possible_exclusions": []}
 ```
 
-`is_wod_profile_data` has **three** values: `True` needs evidence for a profile (a named
-instrument or a depth axis), `False` is an exclusion, and `None` means nothing decided it --
-such a file used to default to `True`, so a plankton matrix and NCEI's bounding-box file
-passed triage as profile data. `long_format` is set for a `parm,value` table, with the
-`pivot_long` call to make.
+`verdict` is one of:
 
-`verdict` is `profile`, `excluded` or `unidentified`. **They are three different outcomes:**
+- `profile`: process it as `dataset_type`.
+- `excluded`: it cannot become a profile. `exclusion.route` says where it belongs;
+  `exclusion.belongs_in_wod` separates plankton (in WOD, another path) from currents and
+  eDNA (not in WOD).
+- `unidentified`: profile-shaped, but nothing names an instrument. Do not guess; read the
+  folder readme and pass the type explicitly.
 
-- `profile` — process it as `dataset_type`.
-- `excluded` — it cannot become a profile. `exclusion.route` says where it belongs instead,
-  and `exclusion.belongs_in_wod` distinguishes plankton (belongs in WOD, other path) from
-  currents and eDNA (not in WOD at all).
-- `unidentified` — profile-shaped, but nothing names an instrument. **Do not guess**; read
-  the folder readme and pass the type explicitly.
+`is_wod_profile_data` is `True` (evidence of a profile: a named instrument or a depth axis),
+`False` (excluded) or `None` (undecided). `long_format` is set for a `parm,value` table, with
+the `pivot_long` call to make.
 
-**Evidence, weighted.** Path and header text count fully, column names at 0.8, extra context
-at 0.6. The raw text, a separator-flattened copy and a CamelCase-split copy are searched,
-because `\bglider\b` does not match `glider_slocum` (`_` is a word character) and `\btrawl\b`
-cannot match inside `TrawlInfo`.
+**Evidence weighting.** Path and header text count fully, column names 0.8, extra context
+0.6. Matching runs on the raw text, a separator-flattened copy and a CamelCase-split copy, so
+`glider_slocum` and `TrawlInfo` match `glider` and `trawl`.
 
-**Exclusions are scored, not tried in order.** Each category -- plankton, fish catch,
-currents, eDNA, bathymetry, contaminants -- sums weighted signals from the path and the
-columns, and the strongest wins; `alternatives` lists the rest. A word both biological
-categories use (`species`, `taxa`, `genus`, `family`) counts for both, so a file whose only
-evidence is a `Species` column comes back `biological sample: plankton or fish catch
-(ambiguous)` with `belongs_in_wod: None` -- first-match-wins had labelled trawl catch as
-plankton. A file of station, latitude and longitude columns with nothing measured is a
-**sidecar** (`exclusion.kind == "sidecar"`): it locates casts; join it with
-`read_station_list`. A haul staged by `wod_etl.staging.write_staged_haul` is recognised by its marker line.
+**Exclusions are scored.** Each category (plankton, fish catch, currents, eDNA, bathymetry,
+contaminants) sums weighted signals from path and columns; the strongest wins and
+`alternatives` lists the rest. Words shared by both biological categories (`species`, `taxa`,
+`genus`, `family`) count for both, so a file whose only evidence is a `Species` column comes
+back as `biological sample: plankton or fish catch (ambiguous)` with `belongs_in_wod: None`.
+A file with only station, latitude and longitude columns is a sidecar
+(`exclusion.kind == "sidecar"`); join it with `read_station_list`. A haul staged by
+`wod_etl.staging.write_staged_haul` is recognised by its marker line.
 
-**File-level versus column-level.** Currents, plankton, eDNA, bathymetry, catch and
-contaminants exclude the **file**. Conductivity, sigma-t, sound velocity, nitrite alone,
-ammonium, CDOM, turbidity and potential temperature are **columns WOD does not store**: they
-appear in `unstorable_columns`, are dropped, and never exclude the file. A CTD cast that also
-logs conductivity is still a CTD cast, and excluding it would throw away its temperature too.
+**File vs column exclusions.** Currents, plankton, eDNA, bathymetry, catch and contaminants
+exclude the file. Conductivity, sigma-t, sound velocity, nitrite alone, ammonium, CDOM,
+turbidity and potential temperature are columns WOD does not store: they are listed in
+`unstorable_columns`, dropped, and never exclude the file.
 
-**Prose is not evidence about content.** A readme listing an accession's folders mentions
-plankton and ADCP; matches found only in header or context text land in
-`possible_exclusions` for you to check, never in `exclusion`.
+**Prose is not content.** Matches found only in header or context text (e.g. a readme
+listing other folders) go to `possible_exclusions` for review, never to `exclusion`.
 
 ---
 
 ## `classify_accession(root, max_files=None, peek_bytes=8192)` and `classify_file(path, rel=None)`
 
-**Triage the whole accession before processing any of it.** Reads each file's head, so it is
-cheap enough to run first. **The per-file verdict is the answer**: NCEI archives a
-submission as one `data/0-data` folder holding casts, station lists, plankton sheets and
-reports together, so a folder verdict describes a mixture.
+Triages the whole accession before processing. It reads each file's head, so it is cheap to
+run first. The per-file verdict is what counts: one NCEI folder often mixes casts, station
+lists, plankton sheets and reports.
 
 ```json
 {"file_count": 23, "folder_count": 3,
@@ -286,102 +270,100 @@ reports together, so a folder verdict describes a mixture.
 | --- | --- |
 | `process` | profile data with a dataset type |
 | `stage` | profile data that must be reshaped first (long format) |
-| `sidecar` | a station list -- join it into the casts it locates |
+| `sidecar` | a station list; join it into the casts it locates |
 | `exclude` | not a profile; `exclusion` and `belongs_in_wod` say why and where |
 | `document` | documentation, metadata, or an NCEI bundle file |
 | `inspect` | the evidence did not decide |
 
-Every file also carries what the person reviewing `decisions.toml` reads: **`data`** (what
-it holds, in a line), **`include`** (whether it goes into WOD), **`dataset`** (the WOD
-dataset it would be written as, Table 2 -- XCTD is written as CTD), **`why`** (the
-evidence, citing Table 3a where it decides) and, when a variable is a copy of another,
-**`drop`**. `data` lists only the variables the proposed dataset stores (Table 3a: MBT
-stores temperature only), and `why` says what is not written.
+Each file also carries the fields shown in `decisions.toml`: `data` (what it holds),
+`include`, `dataset` (the WOD dataset it would be written as, Table 2; XCTD is written as
+CTD), `why` (the evidence, citing Table 3a where relevant) and, when one variable is a copy
+of another, `drop`. `data` lists only variables the proposed dataset stores (Table 3a: MBT
+stores temperature only); `why` says what is not written.
 
-**NCEI's own bundle files are recognised by name** -- `NCEI-Readme.txt`, `journal.txt`,
-`<accession>.md5`, `*-ISO-19115-2.xml`, `*_preview.jpg`, `<accession>_map.jpg`, the
-confirmation e-mails, the Send2NCEI submission report `<ID>-report.txt`, and
-`<accession>_lonlat.txt`, which is two numeric columns that sniff as a table. `ncei_bundle`
-says what each is for. `process_accession` skips them before downloading. **Documentation
-is recognised by content too**: a text file that is prose to its end (head and tail, so a
-data file under a long header is not mistaken for one), or one named as documentation
-(`readme`, `*description*`, `notes`) whatever its body sniffs as.
+**NCEI bundle files** are recognised by name: `NCEI-Readme.txt`, `journal.txt`,
+`<accession>.md5`, `*-ISO-19115-2.xml`, `*_preview.jpg`, `<accession>_map.jpg`, confirmation
+e-mails, the Send2NCEI report `<ID>-report.txt`, and `<accession>_lonlat.txt`. `ncei_bundle`
+says what each is for; `process_accession` skips them before downloading.
 
-**A NetCDF file is opened, not peeked at.** It has no text head, so triage reads its global
-attributes (as header text: `MOORING`, `INST_TYPE`, `platform` name the dataset) and its
-variables (as columns: long name and unit, since `TEMPERATURE (C)` says what `T_20` does
-not). A file whose every variable is one value per time step, at a position that does not
-move, over a day or more, is one instrument's record from a mooring: `stage`, dataset
-`MRB`, with a `time_series` summary (platform, instrument, samples, days) and a `mooring`
-one (variables WOD stores in MRB, its serial number, whether it records pressure and its
-usual pressure under water, a depth the file states, position). In WOD a moored buoy's
-profile is the concurrent readings of all of its instruments at one time (manual p.17), kept
-as daily means (p.14), so **a mooring's instruments are triaged together**, after every file
-has been read: grouped into moorings, given the deployment their pressure records show (none:
-the record without its first and last day), and each placed at a depth -- by its pressure,
-the depth its file or file name states, or the mooring's description (a table of serial
-numbers with depths, or positions along the line that the pressure instruments fix:
-`staging/mooring_layout.py`). The `mooring` summary says where (`group`, `deployed`,
-`depth`, `placed_by`, `depth_note`). One that nothing places is proposed left out, its `why`
-saying so; `wod-etl` stages the rest into MRB profiles (orchestration README, *What wod-etl
-works out*). A record that cannot be a level -- nothing in it MRB stores, or several depths
-in one file -- is `exclude`d as a `moored instrument time series`, with the reason.
+**Documentation** is recognised by content (prose at both head and tail, so a data file with
+a long header is not misread) or by name (`readme`, `*description*`, `notes`).
 
-**Long-format files are located together too:** their `long_format` gets the
-`station_list` beside them that names their casts (of several, the one naming the most); with
-none, they are proposed left out -- their casts would have no position.
-The same shape on a platform that moves, with no depth axis, is an underway record (a keel
-CTD, a thermosalinograph): `exclusion = "underway record along a track"` -- SUR in WOD,
-one cast per position, which wod-etl does not split out yet. A moving record with a depth
-or pressure variable (a glider) is left to the usual classification.
+**NetCDF files are opened**, not peeked. Global attributes are read as header text
+(`MOORING`, `INST_TYPE`, `platform`) and variables as columns (long name and unit).
 
-The **instrument** a NetCDF file names -- a global `instrument`, `INST_TYPE`,
-`instrumentType`, RBR's `model`, or an `instrument` container variable's `make_model` --
-counts like the path: `instrumentType: adcp` *with* velocity variables makes a file a
-current record even though it also logs its transducer's temperature (an ADCP's scalar
-record, with no velocity, stays a moored temperature record). An SV&T probe (sound velocity
-and temperature, no conductivity cell) is a digital BT: MBT. Plain `SVP` is not a drifter.
-The **depth increment** of the depth axis is read, so CTD is decided by WOD's own rule
-(< 2 m, manual p.19). A measured variable that **equals another at every level** -- a
-salinity filled with the temperature -- is proposed as `drop`. **Seabed sediment** (grain
-size, d50) is its own exclusion: WOD holds the water column.
+**Moorings.** A file whose every variable is one value per time step, at a fixed position,
+over a day or more, is one instrument's record from a mooring: `stage`, dataset `MRB`, with
+a `time_series` summary (platform, instrument, samples, days) and a `mooring` summary
+(variables MRB stores, serial number, pressure record and usual submerged pressure, stated
+depth, position). A moored buoy's profile is the concurrent readings of all its instruments
+at one time (manual p.17), kept as daily means (p.14), so a mooring's instruments are triaged
+together after every file is read:
 
-`classify_file` is the same triage for one local file; the dry run uses it. Per file the
-result also carries the dataset type, `empty_columns` and `measurement_density`.
+- grouped into moorings;
+- given the deployment their pressure records show (with none, the record minus its first
+  and last day);
+- each placed at a depth from its pressure, the depth its file or file name states, or the
+  mooring's description (`staging/mooring_layout.py`).
 
-**`measurement_density` ignores station, depth, time and flag columns on purpose.** A
-nutrient file whose station and depth are full and whose three nutrient columns are entirely
-`Not analyzed` scores `0.0`, which is the answer; an overall density would score `0.4` and
-look like data.
+The `mooring` summary records `group`, `deployed`, `depth`, `placed_by` and `depth_note`. An
+instrument nothing places is proposed left out, with the reason; `wod-etl` stages the rest
+into MRB profiles (see *What wod-etl works out* in the
+[orchestration README](../orchestration/README.md)). A record that cannot be a level
+(nothing MRB stores, or several depths in one file) is excluded as a `moored instrument
+time series`.
+
+**Long-format files** get the `station_list` beside them that names their casts (of several,
+the one naming most); with none, they are proposed left out.
+
+**Underway records.** The same time-series shape on a moving platform with no depth axis
+(keel CTD, thermosalinograph) is excluded as `underway record along a track` (SUR in WOD;
+not split out yet). A moving record with a depth or pressure variable (a glider) is
+classified normally.
+
+**Other rules**
+
+- The instrument a NetCDF file names (global `instrument`, `INST_TYPE`, `instrumentType`,
+  RBR's `model`, or an `instrument` variable's `make_model`) counts like the path.
+  `instrumentType: adcp` with velocity variables is a current record; an ADCP's scalar record
+  without velocity stays a moored temperature record.
+- An SV&T probe (sound velocity and temperature, no conductivity) is a digital BT: MBT.
+  Plain `SVP` is not a drifter.
+- The depth increment decides CTD by WOD's rule (< 2 m, manual p.19).
+- A measured variable equal to another at every level (a salinity filled with temperature)
+  is proposed as `drop`.
+- Seabed sediment (grain size, d50) is excluded: WOD holds the water column.
+
+`classify_file` is the same triage for one local file; the dry run uses it. Its result also
+carries the dataset type, `empty_columns` and `measurement_density`.
+
+`measurement_density` ignores station, depth, time and flag columns, so a nutrient file whose
+nutrient columns are all `Not analyzed` scores `0.0`.
 
 ### `cross_file_shapes` — one cast split across many files
 
-A folder's files are usually one cast each. Two shapes break that, and neither is visible in
-any single file, because the evidence is the *relationship* between them:
+Two shapes are visible only by comparing files in a folder:
 
 | `shape` | What it is | What to do |
 | --- | --- | --- |
 | `one file per depth level` | identical columns, one or two rows each | `combine_levels`, sort by depth, stage one file |
-| `one file per variable` | disjoint measurement columns sharing a depth or time column | `combine_on_key(key=...)` — and check `info["per_table"]` |
+| `one file per variable` | disjoint measurement columns sharing a depth or time column | `combine_on_key(key=...)` and check `info["per_table"]` |
 | `long format` / `long format, one file per variable` | the variable named in a cell (`parm,value`); `variables_sampled` lists what each file holds | `pivot_long` with every file together, then `group_rows` per cast |
 
-Processed as they stand, the first produces a pile of single-level profiles and the second a
-set of casts each missing most of its variables. Both look like successful runs.
+Processed as they stand, the first gives many single-level profiles and the second casts
+missing most of their variables, and both look like successful runs.
 
-The check is a comparison of the heads already read, so it costs nothing extra. It is a
-flag, not a verdict — **confirm against the folder readme before combining**, and for the
-join, a near-zero key overlap means the files do not actually share a key.
+This is a flag, not a verdict. Confirm against the folder readme before combining; a
+near-zero key overlap means the files do not share a key.
 
-**Limitation** — it reads the first few KB. A folder that looks empty may have data further
-in. Count real values over the whole file before excluding anything, and read every folder's
-readme before acting on a verdict. `inspect` means the evidence did not decide.
+**Limitation:** triage reads only the first few KB. Count real values over the whole file
+before excluding it, and read each folder's readme before acting on a verdict.
 
 ---
 
 ## `fetch_and_peek_file(file_url_or_path, num_bytes=8192)`
 
-Reads only the first N bytes, via an HTTP `Range` request when remote. This is how you
-identify an extension-less ASCII file without downloading it.
+Reads the first N bytes, using an HTTP `Range` request when remote.
 
 ```json
 {"source": "...", "peek_size_bytes": 8192, "detected_encoding": "utf-8",
@@ -390,8 +372,7 @@ identify an extension-less ASCII file without downloading it.
 
 Decoding falls back UTF-8 → Latin-1 → lossy ASCII, so `preview_text` is always a string.
 
-**Gotcha** — a server that ignores `Range` returns the whole file. `peek_size_bytes` tells
-you what actually arrived; check it before assuming you read only a prefix.
+**Gotcha:** a server that ignores `Range` returns the whole file. Check `peek_size_bytes`.
 
 ---
 
@@ -408,32 +389,30 @@ Works out the file's structure from the peeked text.
  "detected_scientific_variables": ["temperature", "depth", "salinity"]}
 ```
 
-A line counts as header if it starts with `#`, `%`, `*`, `//`, or matches `Key: value` — so
-`LAT: 61.930 LON: -172.270` is captured as metadata, not data. That header block is what
-Phase 2 mines for coordinates.
+A line is header if it starts with `#`, `%`, `*`, `//`, or matches `Key: value`, so
+`LAT: 61.930 LON: -172.270` is captured as metadata. Phase 2 reads coordinates from this
+header block.
 
-**`format_family` decides what happens next:**
-
-| Value | Meaning |
+| `format_family` | Meaning |
 | --- | --- |
 | `tabular_ascii` | Normal path. Proceed. |
 | `custom_ascii_or_fixed_width` | Pandas could not parse it. Inspect `raw_first_data_line` and pass an explicit `delimiter` to `load_tabular`. |
-| `unstructured_text_or_metadata` | No data rows — documentation, not measurements. Skip the file. |
+| `unstructured_text_or_metadata` | No data rows; documentation. Skip the file. |
 
 **Gotchas**
 
-- `detected_delimiter` is a `repr`, so a comma appears as `"','"`. `load_tabular` unwraps
-  this for you; if you use it yourself, strip the quotes.
+- `detected_delimiter` is a `repr` (`"','"`). `load_tabular` unwraps it; strip the quotes if
+  you use it yourself.
 - `inferred_dtypes` keys keep pandas' leading spaces (`" Temp (deg F)"`) while `columns` is
-  stripped. Do not join the two by key. Nothing downstream uses `inferred_dtypes`.
-- `detected_scientific_variables` is a rough hint only. Phase 2's `match_variable` is the
-  authority on what a column is.
+  stripped. Do not join them by key. Nothing downstream uses `inferred_dtypes`.
+- `detected_scientific_variables` is a hint. Phase 2's `match_variable` decides what a
+  column is.
 
 ---
 
 ## `split_casts(file_path_or_text, profile_result=None, min_data_rows=1)`
 
-Splits a file that concatenates several casts. Safe to call unconditionally — a normal file
+Splits a file that concatenates several casts. Safe to call on any file; a normal file
 returns one cast.
 
 ```json
@@ -444,28 +423,22 @@ returns one cast.
             "data_row_count": 2, "start_line": 0, "end_line": 5}]}
 ```
 
-**The signal** is a header/comment line appearing *after* data rows have started. Each cast
-carries its own `header_block`, which is what gives it its own position and time.
+A new cast starts when a header/comment line appears after data rows. Each cast keeps its
+own `header_block` (its position and time). `data_text` includes the column header row and
+parses directly as CSV; `data_row_count` excludes it.
 
-`data_text` includes the column header row, so it parses directly as CSV.
-`data_row_count` excludes it.
+**Limitation:** heuristic. Casts separated another way (blank line, record count,
+fixed-width record boundaries) will not split. A table with a `Station` column and no
+repeated header returns one cast for the whole cruise; split it with
+[`group_rows`](../staging/README.md) during staging.
 
-**Limitation** — heuristic. Files that separate casts some other way (a blank line, a
-leading record count, fixed-width record boundaries) will not split. If a file should have
-many casts and returns one, look at it by hand before trusting the output.
-
-A table with a `Station` column and no repeated header block is the common case this cannot
-handle: there are no per-cast headers to detect, so it returns one cast covering the whole
-cruise. Split it with [`group_rows`](../staging/README.md) during staging instead.
-
-Use `cast_as_profile_input(cast)` to rebuild one cast as text for `profile_raw_data`.
+`cast_as_profile_input(cast)` rebuilds one cast as text for `profile_raw_data`.
 
 ---
 
 ## `load_tabular(file_path, profile_result=None, delimiter=None, header_lines=None, ...)`
 
-Reads the **complete** file into a DataFrame. This is the bridge into Phase 3 — `profile_raw_data`
-only ever saw 8 KB.
+Reads the complete file into a DataFrame (`profile_raw_data` only saw 8 KB).
 
 ```python
 df, info = load_tabular(local_path, profile)
@@ -479,37 +452,28 @@ if df is None:
  "dtypes": {...}, "all_na_columns": [], "warnings": []}
 ```
 
-**What it handles**
+- Recounts the header block against the full file. Override with `header_lines=`.
+- Maps unambiguous missing-value sentinels to NaN: `-999`, `-9999`, `-99999`, `-999.9`,
+  `-1e34`, `NA`, `null`, `-` and similar. Pass `na_values=` to replace the list. `-9`, `-99`,
+  `9999` and `99999` are not in the list because they can be real values.
+- Drops whole-line `#` and `//` comments below the header row and reports the count in
+  `warnings`. `*` and `%` lines are kept, since they start sentinel cells like `**NS`.
+- Drops all-empty rows and trailing unnamed columns from lines ending in the delimiter.
+- Warns when the full file's columns differ from the preview's.
+- On failure returns `(None, {"error": ...})`; never raises.
 
-- Recounts the header block against the *full* file rather than trusting the truncated
-  preview. Override with `header_lines=` when you know better.
-- Maps the *unambiguous* missing-value sentinels to NaN: `-999`, `-9999`, `-99999`,
-  `-999.9`, `-1e34`, `NA`, `null`, `-`, and friends. Pass `na_values=` to replace the list.
-  `-9`, `-99`, `9999` and `99999` are deliberately **not** in the list: pandas expands them
-  to their float forms, so a real air temperature of −9.0, a longitude of −99.0 or a
-  sounding of 9999 m silently became NaN. A sentinel left in the data shows up as an absurd
-  value range in `audit_dataset`; a real value turned to NaN shows up as nothing at all.
-- Drops whole-line `#` and `//` comments that sit *below* the header row, and says how many
-  in `warnings`. `*` and `%` are left alone — they begin real sentinel cells like `**NS`.
-- Drops all-empty rows and trailing unnamed columns left by lines ending in the delimiter.
-- Warns when the full file's columns differ from what the preview showed.
+**Check `all_na_columns`** before mapping: an all-missing column maps to a WOD code and
+writes a variable full of fill values.
 
-**Failure** — returns `(None, {"error": ...})`. Never raises.
-
-**Check `all_na_columns`** before mapping: a column that is entirely missing will map to a
-WOD code and then write a variable full of fill values.
-
-**`load_tabular` knows numeric sentinels only** (`-999`, `NA`, `null` and friends). It does
-not know an originator's asterisk legend — `**NS`, `*DL`, `***NA`, `**ND` — which is defined
-per submission, usually in the last rows of the sheet or in the readme. Those cells survive
-as strings, become NaN at `convert_units_and_types`, and are counted in its warnings; to
-handle and *report* them properly, clean them during staging with
-[`clean_sentinels`](../staging/README.md). Below-detection markers matter most: they are real
-measurements WOD has no flag for, so the loss should be quantified, not absorbed.
+**Originator sentinels** (`**NS`, `*DL`, `***NA`, `**ND`) are not known here; they are
+defined per submission. They survive as strings, become NaN in `convert_units_and_types`,
+and are counted in its warnings. To handle and report them, clean them during staging with
+[`clean_sentinels`](../staging/README.md). Below-detection markers are real measurements WOD
+has no flag for, so report the count.
 
 ---
 
 ## Next
 
-[Phase 2 — Mapping](../mapping/README.md) turns `profile_result` plus the loaded columns
+[Phase 2 — Mapping](../mapping/README.md) turns `profile_result` and the loaded columns
 into the mapping contract.

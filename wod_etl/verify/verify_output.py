@@ -1,47 +1,33 @@
-"""Read the written NetCDF back and judge it, not just measure it.
+"""Read the written NetCDF back and check that its values are possible.
 
-`validate_intermediate_netcdf` gates the structure: does this file obey CF and the ragged
-array contract. `audit_dataset` reports what a dataset mapped, dropped and flagged. Neither
-says whether the NUMBERS are possible -- and the failure that matters most is the one that
-passes both: a variable in the wrong unit validates cleanly, reads back cleanly, and is
-wrong by a factor of a thousand.
-
-This closes that. It compares every observation against the manual's own acceptable range
-for that variable at that depth (Appendix 11), and turns what it finds into FINDINGS with a
-severity, so a run can fail its own output instead of waiting to be asked.
+Compares every observation against the manual's acceptable range for its variable at its
+depth (Appendix 11) and reports findings with a severity. Nothing raises: an unreadable file
+is a finding.
 
     from wod_etl.verify import verify_output
     report = verify_output("data/processed/2-CTD")
     report["passed"], report["findings"]
 
-`process_accession` calls this at the end of every run. Nothing here raises: an unreadable
-file becomes a finding.
-
-**A finding is not proof.** The ranges are the union across all 30 ocean basins, so they are
-more permissive than a basin-aware check -- which cuts one way only: something flagged here
-is outside EVERY basin's bound and needs looking at, while something unflagged may still be
-wrong. `high` severity means the whole variable is out of range, which is a unit or a
-conversion, not bad data.
+Ranges are the union across all ocean basins: a flagged value is outside every basin's bound,
+while an unflagged one may still be wrong. `high` means a whole variable is out of range,
+usually a unit or conversion error.
 """
 import glob
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import re
+
 import numpy as np
 
-# A variable entirely outside its acceptable range is not a data problem. Individual bad
-# levels are normal in real casts; ALL of them being bad means the column was converted
-# wrongly, or not at all.
+# At least this fraction out of range means a unit or conversion error, not bad levels.
 SYSTEMATIC_FRACTION = 0.5
 
-# Below this, out-of-range levels are reported as a count without raising severity: a
-# handful of extreme values in a real cast is what QC flags exist for.
+# Below this fraction, out-of-range levels are reported at low severity.
 NOTABLE_FRACTION = 0.02
 
-# Conversion factors whose signature is recognisable in a ratio. Naming the likely cause
-# saves the reader deriving it, and getting it wrong costs nothing -- it is phrased as a
-# suspicion and the evidence is printed beside it.
+# Conversion factors recognisable in a ratio, reported as a suspected cause.
 _SUSPECT_RATIOS = [
     (1000.0, "values are ~1000x too large: a per-litre column written into a per-kilogram "
              "variable, or mmol read as umol"),
@@ -54,16 +40,12 @@ _SUSPECT_RATIOS = [
 ]
 _RATIO_TOLERANCE = 0.15
 
-# A value just below a lower bound of zero is usually not an impossible value but a sensor
-# zero offset: a fluorometer's dark count, a nutrient analyser's blank. Below the bound by no
-# more than this fraction of the variable's own 99th percentile, it is reported as an offset
-# rather than counted as out of range -- 0303928's fluorometer chlorophyll had 14% of levels
-# at -0.02 ug/l and was reported as 'enough levels are impossible to be worth reading'.
+# Values below a zero lower bound by at most this fraction of the variable's 99th
+# percentile are reported as a sensor zero offset, not as out of range.
 NEAR_ZERO_FRACTION = 0.1
 
 
-# The range check is vectorised, so every value of an accession is checked up to this many
-# per variable; past it the report says how many were not.
+# Values range-checked per variable; past this the report says how many were not.
 SAMPLE_LEVELS = 5_000_000
 
 
@@ -71,10 +53,8 @@ def verify_output(processed_dir, sample_levels: int = SAMPLE_LEVELS,
                   paths: Optional[List[str]] = None) -> Dict[str, Any]:
     """Check every NetCDF in a directory against the manual's acceptable ranges.
 
-    `paths` checks exactly those files instead -- the ones a run wrote, not whatever else is
-    in the folder. `sample_levels` caps how many observations of one variable are
-    range-checked, so a multi-million-level dataset stays cheap. The cap is reported when it
-    bites.
+    `paths` checks exactly those files instead. `sample_levels` caps how many observations
+    of one variable are range-checked; the cap is reported when it applies.
     """
     paths = (sorted(str(p) for p in paths) if paths is not None
              else sorted(glob.glob(str(Path(processed_dir) / "*.nc"))))
@@ -123,8 +103,7 @@ def verify_output(processed_dir, sample_levels: int = SAMPLE_LEVELS,
     report["finding_counts"] = {
         s: sum(1 for f in report["findings"] if f["severity"] == s)
         for s in ("high", "medium", "low")}
-    # `passed` is about the numbers being possible, not about the run finishing. A medium
-    # finding is a question; a high finding is a variable that cannot be what it claims.
+    # `passed` means no high finding; a medium finding is a question, not a failure.
     report["passed"] = report["finding_counts"]["high"] == 0
     report["text"] = render(report)
     log = logging.getLogger(__name__)
@@ -146,15 +125,22 @@ def _read_one(path, per_variable, flags, report, sample_levels, cast_ids=None) -
             _register_cast_ids(ds, Path(path).name, cast_ids)
 
         z = _numeric(ds.variables["z"]) if "z" in ds.variables else None
-        # A file of several sources is judged source by source, as each was when it had a
-        # file of its own: one source's salinity copied from its temperature, or its
-        # bottom depth on the vertical axis, must not hide among another's good casts.
+        # Judge a multi-source file per source, so one source's problem cannot hide among
+        # another's good casts.
         measured = _measured(ds)
+        sizes = (np.ma.filled(np.ma.asarray(ds.variables["z_row_size"][:]), 0).astype(int)
+                 .ravel() if "z_row_size" in ds.variables else None)
+        starts = np.concatenate([[0], np.cumsum(sizes)[:-1]]) if sizes is not None else None
         for source, levels in _source_levels(ds):
             where = Path(path).name + (f" ({source})" if source else "")
             if z is not None:
+                # Casts of one level each (surface samples at 0 m) share a depth by nature.
+                n_casts = (None if sizes is None else len(sizes) if levels is None
+                           else int(np.isin(starts, levels).sum()))
+                n_levels = z.size if levels is None else len(levels)
                 _check_depth_axis(where, z if levels is None else z[levels],
-                                  report["findings"])
+                                  report["findings"], str(getattr(ds, "wod_dataset_type", "")),
+                                  one_level_casts=n_casts == n_levels)
             _check_copies(where, measured, report["findings"], levels)
 
         for name, var in ds.variables.items():
@@ -171,6 +157,7 @@ def _read_one(path, per_variable, flags, report, sample_levels, cast_ids=None) -
             data = _numeric(var)
             if data is None:
                 continue
+            bad = _flagged_bad(ds, name, data.size)
             entry = per_variable.setdefault(name, {
                 "wod_code": int(code), "units": getattr(var, "units", ""),
                 "n": 0, "n_finite": 0, "min": np.inf, "max": -np.inf,
@@ -182,17 +169,17 @@ def _read_one(path, per_variable, flags, report, sample_levels, cast_ids=None) -
             if finite.any():
                 entry["min"] = min(entry["min"], float(data[finite].min()))
                 entry["max"] = max(entry["max"], float(data[finite].max()))
-            # Keep values and their depths together: the acceptable range is depth-dependent,
-            # so a value cannot be judged without the level it was measured at.
+            # Keep values with their depths: the acceptable range depends on depth.
             room = sample_levels - len(entry["values"])
-            present = np.flatnonzero(finite)
+            # A level its originator flagged bad is not judged again: it is known bad.
+            entry["originator_bad"] = entry.get("originator_bad", 0) + int((finite & bad).sum())
+            present = np.flatnonzero(finite & ~bad)
             keep = present[:max(room, 0)]
             entry["values"].extend(data[keep].tolist())
             entry["depths"].extend((z[keep].tolist() if z is not None
                                     and z.size == data.size
                                     else [np.nan] * keep.size))
-            # Said whenever the cap bites -- mid-file too -- so "verified" never claims
-            # values that were not checked.
+            # Report whenever the cap applies, so unchecked values are never claimed verified.
             if keep.size < present.size:
                 entry["truncated"] = True
                 entry["not_checked"] = entry.get("not_checked", 0) + int(present.size - keep.size)
@@ -220,9 +207,8 @@ def _cast_sources(ds) -> Optional[List[str]]:
 
 
 def _register_cast_ids(ds, name: str, cast_ids: Dict[str, List[str]]) -> None:
-    """Record each cast id of a file. An id the writer says casts of two source files share
-    (`repeated_across_source_files`) is recorded once more: it is one id in two sources, as
-    it was found when each source had a file of its own."""
+    """Record each cast id of a file. An id the writer marks as shared across source files
+    (`repeated_across_source_files`) is recorded again so it is reported as a duplicate."""
     var = ds.variables["cast_id"]
     for cid in np.asarray(var[:]).ravel():
         cast_ids.setdefault(str(cid), []).append(name)
@@ -251,9 +237,8 @@ def _source_levels(ds) -> List[tuple]:
 
 def _check_copies(name: str, measured: Dict[str, np.ndarray], findings,
                   levels: Optional[np.ndarray] = None) -> None:
-    """Two measured variables equal at every level: one is a copy of the other. A salinity
-    column filled with the temperature passes every range check -- 5 to 8 is a possible
-    salinity -- and only this catches it. `levels` limits it to one source's levels."""
+    """Two measured variables equal at every level: one is a copy of the other, which range
+    checks cannot catch. `levels` limits the check to one source's levels."""
     names = list(measured)
     for i, a in enumerate(names):
         for b in names[i + 1:]:
@@ -274,12 +259,28 @@ def _check_copies(name: str, measured: Dict[str, np.ndarray], findings,
                     "decisions.toml entry."))
 
 
+# Flag meanings that say a value is wrong (CF flag_meanings, as the originator stated them).
+_BAD_MEANING = re.compile(r"^(?:bad|erroneous|wrong|incorrect|fail(?:ed)?|reject(?:ed)?|"
+                          r"invalid)(?:_|$)", re.I)
+
+
+def _flagged_bad(ds, name: str, size: int) -> np.ndarray:
+    """Levels whose originator flag (`<name>_qc_originator`) means bad, by its own scheme."""
+    o = ds.variables.get(f"{name}_qc_originator")
+    meanings = str(getattr(o, "flag_meanings", "") or "").split() if o is not None else []
+    values = np.atleast_1d(getattr(o, "flag_values", [])) if o is not None else []
+    bad_values = [float(v) for v, m in zip(values, meanings) if _BAD_MEANING.match(m)]
+    flags = _numeric(o) if bad_values else None
+    if flags is None or flags.size != size:
+        return np.zeros(size, dtype=bool)
+    return np.isin(flags, bad_values)
+
+
 def _numeric(var) -> Optional[np.ndarray]:
     try:
         if var.dtype == str or np.asarray(var[:]).dtype.kind in "USO":
             return None
-        # np.ma, not np: a plain array drops the mask, and every _FillValue then reads as a
-        # measured -9999.
+        # np.ma keeps the mask, so fill values become NaN rather than measurements.
         return np.ma.filled(np.ma.asarray(var[:], dtype=float), np.nan).ravel()
     except (ValueError, TypeError):
         return None
@@ -295,7 +296,8 @@ def _summarize(name, v, findings) -> Dict[str, Any]:
            "max": None if v["n_finite"] == 0 else round(v["max"], 6),
            "levels_range_checked": len(v["values"]),
            "sample_truncated": v["truncated"],
-           "values_not_range_checked": v.get("not_checked", 0)}
+           "values_not_range_checked": v.get("not_checked", 0),
+           "flagged_bad_by_originator": v.get("originator_bad", 0)}
 
     if v["n_finite"] == 0:
         findings.append(_finding(
@@ -413,7 +415,8 @@ def _suspect_cause(values, lo, hi) -> str:
             f"against Table 3a.")
 
 
-def _check_depth_axis(filename, z, findings) -> None:
+def _check_depth_axis(filename, z, findings, dataset: str = "",
+                      one_level_casts: bool = False) -> None:
     finite = z[np.isfinite(z)]
     if finite.size == 0:
         return
@@ -423,7 +426,9 @@ def _check_depth_axis(filename, z, findings) -> None:
             f"{int((finite < 0).sum())} level(s) below zero, minimum {finite.min():g} m",
             "Depth is positive down. A negative depth is a sign convention that was not "
             "applied, or a height above the surface written into the depth axis."))
-    if finite.size > 1 and finite.min() == finite.max():
+    surface = dataset == "SUR"           # a track at the surface: every level is 0 m
+    if finite.size > 1 and finite.min() == finite.max() and not surface \
+            and not one_level_casts:
         findings.append(_finding(
             "flat_depth_axis", "high", filename, "z",
             f"every one of {finite.size} levels is {finite.min():g} m",

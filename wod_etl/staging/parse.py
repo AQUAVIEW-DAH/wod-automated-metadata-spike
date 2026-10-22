@@ -12,17 +12,13 @@ _DEG_MIN_DASH = re.compile(r"^\s*([-+]?\d+)\s*-\s*(\d+(?:\.\d+)?)\s*([NSEW])?\s*
 # "62 09 36 N" degrees, minutes, seconds
 _DMS = re.compile(r"^\s*([-+]?\d+)[\s:]+(\d+)[\s:]+(\d+(?:\.\d+)?)\s*([NSEW])?\s*$", re.I)
 
-# Degree, minute and second marks as station lists actually type them. A Japanese or
-# Word-authored list writes `142°18’E` -- a degree sign and a RIGHT SINGLE QUOTATION MARK, not
-# an ASCII apostrophe -- and none of the patterns above allowed any mark between the fields,
-# so every row of such a list returned None. The marks carry no information the field order
-# does not already give, so they are folded to the space the patterns already accept.
+# Degree, minute and second marks (curly quotes included), folded to spaces before matching.
 _ANGLE_MARKS = re.compile(
     "[°º˚∘"           # degree sign, masculine ordinal, ring above, ring op
     "′’‘ʼ´'`"    # prime, right/left single quote, modifier, acute, '
     "″”“\"]"               # double prime, right/left double quote, "
     "|\\bdeg(?:rees?)?\\b|\\bmin\\b|\\bsec\\b", re.I)
-# "N 21 00.0" -- the hemisphere written FIRST. Moved to the end, where the patterns read it.
+# "N 21 00.0": a leading hemisphere, moved to the end before matching.
 _LEADING_HEMISPHERE = re.compile(r"^\s*([NSEW])\s*([-+]?\d.*)$", re.I)
 
 
@@ -48,7 +44,7 @@ def _signed(magnitude: float, sign_source: Any, hemisphere: Optional[str]) -> fl
 def parse_coordinate(value: Any, minutes: Any = None, hemisphere: Any = None) -> Optional[float]:
     """Return signed decimal degrees, or None if the value cannot be read.
 
-    Accepts every form seen in NCEI submissions:
+    Accepted forms:
 
         parse_coordinate(62.16)                  ->   62.16
         parse_coordinate("170 30.01 W")          -> -170.500167
@@ -58,8 +54,7 @@ def parse_coordinate(value: Any, minutes: Any = None, hemisphere: Any = None) ->
         parse_coordinate("N 21°00.5'")           ->   21.008333  (hemisphere first)
         parse_coordinate(62, 9.6, "N")           ->   62.16      (separate columns)
 
-    A hemisphere letter always wins over a leading minus sign, because station lists
-    routinely write both and the letter is the one the originator intended.
+    A hemisphere letter wins over a leading minus sign.
     """
     if value is None:
         return None
@@ -75,7 +70,9 @@ def parse_coordinate(value: Any, minutes: Any = None, hemisphere: Any = None) ->
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return _signed(abs(float(value)), value, hemisphere)
 
-    text = _normalise_coordinate_text(str(value))
+    # A hemisphere letter written twice, as some NMEA headers do: '37 59.49 NN'.
+    text = _normalise_coordinate_text(re.sub(r"([NSEW])\1+\s*$", r"\1", str(value).strip(),
+                                             flags=re.I))
     if not text:
         return None
 
@@ -104,9 +101,7 @@ _TIME_FORMATS = (
     "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d",
     "%Y%m%d %H:%M:%S", "%Y%m%d %H:%M", "%Y%m%d %H%M%S", "%Y%m%d%H%M%S", "%Y%m%d",
     "%d/%m/%Y %H:%M", "%d/%m/%Y", "%d-%m-%Y",
-    # Month names, as cruise reports and hand-typed station lists write them. The text is
-    # normalised first (see _normalise_month_text), so 'Nov. 09, 2015' arrives as
-    # 'nov 09 2015' and 'Sept' as 'sep'.
+    # Month names; text is normalised first (see _normalise_month_text).
     "%b %d %Y %H:%M", "%b %d %Y", "%d %b %Y %H:%M", "%d %b %Y",
     "%B %d %Y %H:%M", "%B %d %Y", "%d %B %Y %H:%M", "%d %B %Y",
     "%Y %b %d", "%d-%b-%Y %H:%M", "%d-%b-%Y", "%Y-%b-%d",
@@ -116,12 +111,7 @@ _MONTH_NAME = re.compile(r"[A-Za-z]{3,}")
 
 
 def _normalise_month_text(text: str) -> str:
-    """'Nov. 09, 2015' -> 'nov 09 2015'; 'Sept. 3 2015' -> 'sep 3 2015'. Numeric text untouched.
-
-    strptime's %b wants 'Nov' with no period and no comma after the day, and does not know
-    'Sept'. Only applied when the text contains a word, so an all-numeric date is not
-    disturbed.
-    """
+    """'Nov. 09, 2015' -> 'nov 09 2015'; 'Sept. 3 2015' -> 'sep 3 2015'. Numeric text untouched."""
     if not _MONTH_NAME.search(text):
         return text
     s = re.sub(r"(?<=[A-Za-z])\.", " ", text)          # 'Nov.' -> 'Nov '
@@ -131,7 +121,11 @@ def _normalise_month_text(text: str) -> str:
 
 
 def _punctuate_time(t: str) -> str:
-    """'2102' -> '21:02', '031903' -> '03:19:03'. Anything else is returned untouched."""
+    """'2102' -> '21:02', '031903' -> '03:19:03', '08 30' -> '08:30'. Anything else is
+    returned untouched."""
+    m = re.fullmatch(r"(\d{1,2})\s+(\d{2})(?:\s+(\d{2}))?", t)
+    if m:
+        return ":".join(x.zfill(2) for x in m.groups() if x)
     if t.isdigit():
         if len(t) == 4:
             return f"{t[:2]}:{t[2:]}"
@@ -141,14 +135,11 @@ def _punctuate_time(t: str) -> str:
 
 
 def parse_timestamp(value: Any, time_value: Any = None, year: Any = None):
-    """Return a datetime, or None. Handles the separate-date-and-time-column form too.
+    """Return a datetime, or None. `time_value` is a separate time column.
 
-    Single-digit months and days ('2023/6/1') are what spreadsheets emit and are accepted.
-    Month names are accepted with or without a period or comma ('Nov. 09, 2015').
-
-    `year` is for station lists that split the year into its own column and write the date
-    as 'Nov. 09': `parse_timestamp("Nov. 09", year=2015)`. It is appended only when the date
-    text has no four-digit year of its own.
+    Accepts single-digit months and days ('2023/6/1') and month names ('Nov. 09, 2015').
+    `year` is appended when the date has no four-digit year: `parse_timestamp("Nov. 09",
+    year=2015)`.
     """
     import datetime as dt
 
@@ -163,10 +154,8 @@ def parse_timestamp(value: Any, time_value: Any = None, year: Any = None):
     if time_value is not None and str(time_value).strip():
         text = f"{text} {_punctuate_time(str(time_value).strip())}"
 
-    # A bare HHMM or HHMMSS still glued to the date parses under "%H%M%S", where strptime
-    # reads 2102 as 21:00:02 rather than failing. Punctuate it so the fields cannot slide.
-    # Only when the date part already holds its year: 'nov 09 2015' ends in four digits too,
-    # and read this way its year became the time 20:15.
+    # Punctuate a bare HHMM(SS) so strptime cannot read 2102 as 21:00:02; only when the date
+    # part already has its year, so a trailing year is not read as a time.
     m = re.fullmatch(r"(.+?)[ T](\d{4}|\d{6})", text)
     if m and re.search(r"\d{4}", m.group(1)):
         text = f"{m.group(1)} {_punctuate_time(m.group(2))}"
@@ -182,9 +171,7 @@ def parse_timestamp(value: Any, time_value: Any = None, year: Any = None):
 def pressure_to_depth(pressure_dbar: float, latitude_deg: float) -> float:
     """Pressure in decibars to depth in metres (UNESCO 1983, Fofonoff & Millard).
 
-    CTD exports often carry pressure and no depth. WOD requires a depth axis, and this is
-    the standard conversion. It is latitude-dependent through gravity, so pass the cast's
-    latitude rather than assuming one. Record the derivation in the staged header.
+    Depends on latitude through gravity, so pass the cast's latitude.
     """
     x = math.sin(math.radians(latitude_deg)) ** 2
     gravity = 9.780318 * (1.0 + (5.2788e-3 + 2.36e-5 * x) * x) + 1.092e-6 * pressure_dbar

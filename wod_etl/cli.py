@@ -1,12 +1,6 @@
-"""`wod-etl`: one accession, in two steps, from a terminal -- no agent required.
+"""The `wod-etl` command: `run` triages an accession, `confirm` writes it, `status` reports.
 
-    uv run wod-etl run <accession>       # triage it; write decisions.toml for review
-    uv run wod-etl confirm <accession>   # write what the reviewed decisions include
-    uv run wod-etl status <accession>    # where it stopped, what is open, where the files are
-
-`run` takes a landing-page URL, an accession number, a data URL, a local folder or a .tar.gz.
-Exit codes: 0 done · 1 a stage failed (or, for confirm, a file could not be written) ·
-2 decisions needed · 3 written, but the output is not verified · 130 interrupted.
+`wod-etl web` serves the same steps in a browser. Exit codes are listed in EPILOG.
 """
 import argparse
 import sys
@@ -80,17 +74,20 @@ def _paths(result) -> None:
 
 
 def _written(result) -> None:
-    """The WOD files a confirm wrote, one line each -- not after a confirm that stopped
-    before writing, whose process record is an earlier one's."""
+    """Print the WOD files a confirm wrote; nothing if it stopped before writing."""
     stages = result.get("stages") or {}
     if result.get("exit_code") not in (0, 1, 3) or any(
             (stages.get(s) or {}).get("status") != "done" for s in ("check", "stage", "process")):
         return
-    files = ((stages.get("process") or {}).get("outputs") or {}).get("files") or []
-    if files:
+    process = (stages.get("process") or {}).get("outputs") or {}
+    files, taxa = process.get("files") or [], process.get("taxa_files") or []
+    if files or taxa:
         print(f"\nOutput: {(result.get('paths') or {}).get('output')}")
         for f in files:
             print(f"  {f['name']}  {f['casts']} {f['dataset']} cast(s) from "
+                  f"{len(f.get('sources') or [])} source file(s)")
+        for f in taxa:
+            print(f"  {f['name']}  {f['hauls']} haul(s), {f['records']} Taxa-Record(s) from "
                   f"{len(f.get('sources') or [])} source file(s)")
 
 
@@ -139,10 +136,16 @@ def cmd_confirm(args) -> int:
     stages = result.get("stages") or {}
     if code == 0:
         verify = (stages.get("verify") or {}).get("outputs") or {}
-        print(f"\nFinished. {verify.get('casts')} cast(s) in {verify.get('netcdf_files')} "
-              f"file(s) written and verified." if verify.get("output_verified") else
-              "\nFinished. Nothing was written: the decisions include no file that holds a "
-              "profile (report.md says what was left out and why).")
+        taxa = ((stages.get("process") or {}).get("outputs") or {}).get("taxa_files") or []
+        written = [x for x in (
+            f"{verify.get('casts')} cast(s) in {verify.get('netcdf_files')} file(s)"
+            if verify.get("netcdf_files") else "",
+            f"{sum(f['hauls'] for f in taxa)} haul(s) in {len(taxa)} Taxa-Record file(s)"
+            if taxa else "") if x]
+        print(f"\nFinished. {' and '.join(written)} written and verified."
+              if verify.get("output_verified") else
+              "\nFinished. Nothing was written: the decisions include no file that can be "
+              "written (report.md says what was left out and why).")
         _print_problems(result["problems"])           # the notes that did not stop it
     elif code == 2:
         print("\nDecisions needed before anything is written:")
@@ -233,7 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_web(args) -> int:
-    from wod_etl.orchestration.web import serve
+    from wod_etl.web.server import serve
 
     serve(args.host, args.port)
     return 0

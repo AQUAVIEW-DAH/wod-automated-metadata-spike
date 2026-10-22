@@ -142,8 +142,7 @@ class TestEveryFileGetsAnEntry:
                     _file("d/X1_Stations.csv", action="sidecar", data="station list",
                           why="locates casts", columns=["Station", "Lat", "Lon"]))
         parsed = tomllib.loads("\n".join(dec.propose(t, {})))
-        # The person decides include or not, and nothing else: no recipe, no unit, no
-        # station check to fill in.
+        # The reviewer only sets include; the recipe is worked out.
         assert set(parsed) == {"files", "metadata"}
         plan = dec.build_plan(parsed, t, [])
         recipe = plan["profiles"]["x1_ctd"]
@@ -162,7 +161,7 @@ class TestEveryFileGetsAnEntry:
                                        "station_list": None}))
         entry = _entries(t)["d/X1_CTD_Temp.csv"]
         assert entry["include"] is False and "cannot be located" in entry["why"]
-        # Included anyway: not written, and said -- there is nothing to fill in instead.
+        # Included anyway: still not written, and reported.
         items, plan = dec.validate({"files": {"d/X1_CTD_Temp.csv": {"include": True}}}, t, {},
                                    [])
         assert not plan["profiles"] and not plan["direct"]
@@ -200,8 +199,7 @@ class TestValidation:
         assert plan["direct"] == ["x.csv"] and plan["dataset_overrides"] == {"x.csv": "OSD"}
 
     def test_the_reviewed_dataset_is_what_the_file_is_written_as(self):
-        """Processing does not classify again from less evidence: it sees no NetCDF
-        instrument attribute, and an SV&T probe's casts came out CTD instead of MBT."""
+        """Processing must not reclassify a file from less evidence than triage had."""
         t = _triage(_file("ctd.csv"), _file("mvp.nc", dataset="MBT"))
         _, plan = dec.validate({"files": {"ctd.csv": {"include": True, "dataset": "CTD"},
                                           "mvp.nc": {"include": True, "dataset": "MBT"}}},
@@ -406,7 +404,7 @@ why = "CTD by its path ('CTD') and depth increment 1.00 m is high-resolution (< 
         res = dec.reformat(p, new, old)
         assert res["written"] and res["dropped"] == ["data/*.csv"]   # both files have their own
         d = tomllib.loads(p.read_text())
-        assert d["files"]["data/a.csv"]["why"] == "the cast the PI asked for"   # the review's
+        assert d["files"]["data/a.csv"]["why"] == "the cast the PI asked for"   # reviewer's, kept
         assert d["files"]["data/a.csv"]["metadata"] == {"cruise": "SHU1505"}
         assert d["files"]["data/b.csv"] == {"include": False, "dataset": "CTD",
                                             "data": "CTD profiles: temperature",
@@ -426,8 +424,7 @@ why = "CTD by its path ('CTD') and depth increment 1.00 m is high-resolution (< 
 
 
 class TestAMooringIsWorkedOutNotAsked:
-    """A mooring's recipe is wod-etl's: its instruments' depths and its deployment come from
-    the files (triage places them), and the person only says which instruments go in."""
+    """Mooring depths and deployment come from triage; the reviewer only picks instruments."""
 
     @staticmethod
     def _instrument(path, *, group="deep", placed_by="pressure", depth=None, include=True,
@@ -474,7 +471,7 @@ class TestAMooringIsWorkedOutNotAsked:
         items, plan = dec.validate(d, t, {}, [])
         assert not [i for i in items if i["blocking"]]
         assert plan["profiles"]["deep"]["files"] == ["deep/sbe_1.nc"]
-        # Included anyway: it cannot be placed, so it is not written -- and that is said.
+        # Included anyway: it has no depth, so it is reported as not written.
         d["files"]["deep/rbr_1.nc"]["include"] = True
         items, plan = dec.validate(d, t, {}, [])
         assert not [i for i in items if i["blocking"]]
@@ -497,3 +494,12 @@ class TestAMooringIsWorkedOutNotAsked:
         plan = dec.build_plan(tomllib.loads("\n".join(dec.propose(t, {}))), t, [])
         assert {tuple(r["files"]) for r in plan["profiles"].values()} == {("c/p.nc",),
                                                                          ("c/q.nc",)}
+
+
+class TestAnInstrumentIsNotProposedAsThePlatform:
+    def test_ctd_in_the_platform_field_is_skipped(self, tmp_path):
+        """Some ISO records give an instrument such as 'CTD' as the platform."""
+        iso = ISO.replace("MV Steller", "CTD").replace("MV Pelican", "R/V Pelican")
+        (tmp_path / "X-ISO-19115-2.xml").write_text(iso)
+        t = {"root": str(tmp_path), "files": [_doc("X-ISO-19115-2.xml", "ISO 19115 metadata")]}
+        assert dec.iso_metadata(t)["platform"] == [("R/V Pelican", "X-ISO-19115-2.xml")]

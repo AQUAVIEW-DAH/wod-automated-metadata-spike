@@ -1,9 +1,6 @@
 """WOD's file layout: one file per dataset and year, `wod_ctd_2008_<accession>.nc`.
 
-An accession is processed source file by source file, and the result is written as WOD files:
-casts from many sources in one file, so everything that differs between sources must be said
-per cast, and the checks that used to judge one source per file must still judge each source
-on its own."""
+A file holds casts from many sources, so anything that differs between sources is per cast."""
 import copy
 from pathlib import Path
 
@@ -112,8 +109,6 @@ class TestProcessAccessionWritesWodFiles:
             assert "2 source files" in ds.history
 
     def test_a_single_level_cast_goes_to_its_own_osd_file_not_labelled_ctd(self, tmp_path):
-        """The bug this layout fixed: the file's dataset was the first cast's, so a
-        single-level cast routed to OSD was written into a file that said CTD."""
         src = tmp_path / ACC
         src.mkdir()
         (src / "mixed.csv").write_text(_cast_block(1, "2015-11-09", 21.0, 20)
@@ -166,7 +161,7 @@ class TestProcessAccessionWritesWodFiles:
         cast.write_text(_cast_block(1, "1999-11-09", 21.0, 20))
         out = tmp_path / "out"
         _run(src, tmp_path, run_id="first")
-        # the one-file-per-source output this package wrote before the WOD files
+        # the older one-file-per-source output
         process_one_file(str(cast), "CTD", str(out), "old", raw_root=str(tmp_path / "raw"),
                          stem="cast_01")
         (out / f"cast_01{CACHE_SUFFIX}").unlink()
@@ -342,8 +337,7 @@ class TestVerifyJudgesEachSourceOnItsOwn:
 
 class TestWhatOneFileOfManySourcesMustStillSay:
     def test_one_cast_in_two_source_files_is_still_a_duplicate_id(self, tmp_path):
-        """The writer makes ids unique within a file with a suffix; across two sources that
-        hid what used to be a duplicate_cast_id across two files."""
+        """Suffixing ids to make them unique in a file must not hide a duplicate."""
         a, b = make_cast(), make_cast()
         for c, source in ((a, "export_1.csv"), (b, "export_2.csv")):
             c["contract"]["source"] = source
@@ -431,7 +425,7 @@ class TestAFileIsDoneOnlyWhenItsResultIsSaved:
         (src / "a.csv").write_text(_cast_block(1, "2015-11-09", 21.0, 20))
         out = tmp_path / "out"
         out.mkdir()
-        # our writer's file under the old name, but from another source: not this item's
+        # an old-layout file from another source, so not this item's
         other = tmp_path / "elsewhere.csv"
         other.write_text(_cast_block(1, "2015-11-09", 21.0, 20))
         process_one_file(str(other), "CTD", str(tmp_path / "tmp_out"), "x",
@@ -443,7 +437,7 @@ class TestAFileIsDoneOnlyWhenItsResultIsSaved:
 
 class TestARunWritesOnlyWhatItAnswersFor:
     def test_two_files_of_one_name_and_different_extensions_are_both_written(self, tmp_path):
-        """Sea-Bird writes x.cnv beside x.btl: one stem used to be one result file."""
+        """e.g. Sea-Bird's x.cnv beside x.btl."""
         src = tmp_path / ACC
         src.mkdir()
         (src / "x.csv").write_text(_cast_block(1, "2015-11-09", 21.0, 20))
@@ -530,3 +524,28 @@ class TestARunWritesOnlyWhatItAnswersFor:
                           run_id="b", resume=False)
         report = audit_dataset(str(tmp_path / "A"), "CTD", str(tmp_path / "out"))
         assert report["staged_without_casts"] == ["cast.csv"]
+
+
+class TestTaxaRecordFilesSitBesideTheProfiles:
+    """Taxa-Record files are named so profile assembly never touches them."""
+
+    def test_the_name(self):
+        from wod_etl.writers import is_output_file_name, is_taxa_file_name, taxa_file_name
+
+        name = taxa_file_name(2015, ACC)
+        assert name == f"wod_osd_2015_{ACC}_taxa.nc"
+        assert is_taxa_file_name(name, ACC) and is_output_file_name(name, ACC)
+        assert not is_wod_file_name(name, ACC)
+        assert not is_taxa_file_name(name, "0000001")
+        assert not is_taxa_file_name(f"wod_ctd_2015_{ACC}_taxa.nc", ACC)
+        assert taxa_file_name(None, ACC) == f"wod_osd_undated_{ACC}_taxa.nc"
+
+    def test_profile_assembly_leaves_a_taxa_file_alone(self, tmp_path):
+        from wod_etl.writers import taxa_file_name
+
+        out = tmp_path / "out"
+        out.mkdir()
+        taxa = out / taxa_file_name(2015, ACC)
+        taxa.write_text("taxa")
+        assemble_profiles([], out, ACC)
+        assert taxa.exists()

@@ -18,25 +18,13 @@ def read_table(
 ) -> Tuple[List[str], List[List[str]], Dict[str, Any]]:
     """Read a delimited originator file as (columns, rows, info). Never raises on encoding.
 
-    Handles four things that stop `load_tabular` before it starts:
+    Tries `config.TEXT_ENCODINGS` in order and drops blank rows. `header_row` indexes the
+    non-blank rows (1 when a title line precedes the header). `delimiter=None` sniffs the
+    delimiter. `comment_prefix` (e.g. `"#"`) drops rows starting with it before the header
+    is located.
 
-    - **Encoding.** Tries `config.TEXT_ENCODINGS` in order. Japanese-authored CSVs are
-      commonly cp932 and raise UnicodeDecodeError on utf-8.
-    - **Blank rows.** Files written with \\r\\r\\n interleave an empty row between every
-      real one, which shifts the header and doubles the row count.
-    - **A title row above the header.** `header_row` is an index into the *non-blank*
-      rows, so a file whose first line is a dataset title uses `header_row=1`.
-    - **The delimiter.** `","` by default. Pass `delimiter=None` to sniff it from the
-      header instead, which is what a folder of tab- or semicolon-separated files needs:
-      read as CSV they come back as one column per row, which then reads downstream as a
-      file with no measurements rather than as the wrong delimiter.
-
-    `comment_prefix` (e.g. `"#"`) drops rows whose first cell starts with it before the
-    header is located -- the `# Source:` and `# Note:` lines a staged table carries.
-
-    `info` reports the encoding used, the delimiter, the row counts before and after
-    cleaning, and any duplicate column names -- all of which change how the file should
-    be read.
+    `info` reports the encoding, delimiter, row counts before and after cleaning, and
+    duplicate column names.
     """
     path = Path(path)
     encodings = (encoding,) if encoding else TEXT_ENCODINGS
@@ -81,22 +69,15 @@ def read_table(
     }
 
 
-# Whitespace is deliberately absent: it is also what separates fixed-width columns, and
-# calling a fixed-width file whitespace-delimited is the failure that produces ragged rows
-# and a phantom column. A fixed-width file belongs to read_any, not here.
+# Whitespace is excluded: it also separates fixed-width columns, which belong to read_any.
 _CANDIDATE_DELIMITERS = (",", "\t", ";", "|")
 
 
 def _sniff_delimiter(lines: List[str], sample: int = 20) -> str:
     """The delimiter that splits the most sampled lines into the same field count > 1.
 
-    Comma wins ties, so a file this would have read correctly before still does.
-
-    **It counts raw characters, including inside quoted fields**, which is where it can be
-    fooled: a semicolon-separated European file whose numbers use a decimal comma
-    (`1,5;2,3;4,5`) has more commas than semicolons on every line, both perfectly
-    consistent, so comma wins and the columns come back wrong. Check `len(columns)` against
-    what the file should have, and pass an explicit `delimiter` when it disagrees.
+    Comma wins ties. Raw characters are counted, so decimal commas (`1,5;2,3`) can make
+    comma beat semicolon; pass an explicit `delimiter` then.
     """
     body = [l for l in lines if l.strip()][:sample]
     if not body:
@@ -120,16 +101,9 @@ def clean_sentinels(
 ) -> Tuple[List[List[str]], Dict[str, int]]:
     """Replace originator missing-value codes with empty fields, and count every one.
 
-    Returns `(rows, counts)` where counts is keyed `"<column> :: <code>"`. Report those
-    counts. Two of the codes are not really missing data:
-
-    - **below detection limit** and **not detected** mean the value lies under a stated
-      threshold. That is real information, but WOD Table 12 has no observed-level flag
-      for it, so it still becomes missing. Say how much was lost this way.
-    - **not sampled** and **not analysed** are genuinely absent.
-
-    Substituting the detection limit for a below-detection marker would fabricate a
-    measurement; this deliberately does not do that.
+    Returns `(rows, counts)`, counts keyed `"<column> :: <code>"`. Below-detection markers
+    also become missing (WOD Table 12 has no flag for them); the detection limit is never
+    substituted.
     """
     codes = dict(NA_SENTINELS)
     codes.update(extra or {})
@@ -153,15 +127,8 @@ def group_rows(
 ) -> "collections.OrderedDict":
     """Split one cruise-wide table into per-cast groups, preserving file order.
 
-    A single table holding every station is the normal shape for bottle, nutrient and
-    plankton submissions. Group by whatever identifies a cast -- usually station, and
-    station plus date when a station was occupied more than once.
-
-    Rows whose key is entirely blank come back under the key `()`. That is not a
-    sufficient filter for footer junk: sheets often end with a legend block whose text
-    sits *in* the key column, so it groups as if it were a station. Drop a group when its
-    position will not parse -- a legend line has no coordinates -- and log what was
-    dropped rather than discarding it silently.
+    Rows whose key is entirely blank are grouped under `()`. Footer text in the key column
+    groups like a station, so drop groups whose position does not parse.
     """
     idx = {c: columns.index(c) for c in key_columns if c in columns}
     missing = [c for c in key_columns if c not in idx]
@@ -182,29 +149,27 @@ def fold_unit_row(
 ) -> List[str]:
     """Merge a second header row of units into the column names.
 
-    Originators very often write the variable on one row and its unit on the next:
-
         time (UTC),latitude,water temperature,chlorophyll
         ,degree N,degree C,ppb
 
-    Unit detection reads the full column name and nothing else, so a units row left in
-    place is invisible and the values are taken as already-standard. Folding it in is what
-    makes `mg/l`, `deg F` and `ml/l` detectable at all.
+    Unit detection reads only the column name, so the unit must be folded in.
 
         cols, rows, _ = read_table(path)          # header row
         cols = fold_unit_row(cols, rows[0])       # units row
-        rows = rows[1:]                           # real data starts after it
+        rows = rows[1:]
 
-    A column whose name already carries a bracketed unit is left alone, and a blank unit
-    cell is skipped.
+    Names that already carry a short bracketed unit, and blank unit cells, are left alone.
     """
     out = []
     for i, name in enumerate(columns):
         unit = (units[i].strip() if i < len(units) else "")
+        unit = re.sub(r"^[\(\[]\s*(.*?)\s*[\)\]]$", r"\1", unit)      # '(m)' is 'm'
         if not name:
             out.append(name)
             continue
-        if unit and not re.search(r"[\(\[\{].*[\)\]\}]", name):
+        # A name's own brackets may hold a unit ('(°C)') or a description ('(1-min average)').
+        held = re.findall(r"[\(\[\{]([^\)\]\}]*)[\)\]\}]", name)
+        if unit and not any(len(h.strip()) <= 12 for h in held):
             out.append(f"{name} ({unit})")
         else:
             out.append(name)
@@ -214,15 +179,10 @@ def fold_unit_row(
 def combine_levels(
     tables: List[Tuple[List[str], List[List[str]]]],
 ) -> Tuple[List[str], List[List[str]], Dict[str, Any]]:
-    """Concatenate same-schema tables into one cast. For data split one file per depth.
+    """Concatenate same-schema tables into one cast, for data split one file per depth.
 
-    A variable is sometimes archived as one file per depth level, each holding a single
-    row. Those are levels of one cast, not separate casts, and must be combined before
-    staging or the output is a pile of single-level profiles.
-
-    Returns `(columns, rows, info)`. Schema mismatches are reported in
-    `info["schema_mismatches"]` and those tables are dropped rather than silently
-    misaligned -- check it.
+    Returns `(columns, rows, info)`. Tables with a different schema are dropped and listed
+    in `info["schema_mismatches"]`.
     """
     tables = [t for t in tables if t and t[0]]
     if not tables:
@@ -244,37 +204,20 @@ def combine_on_key(
     key: str,
     key_aliases: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[List[str]], Dict[str, Any]]:
-    """Outer-join tables that each hold different variables for the same cast or track.
+    """Outer-join tables that hold different variables for the same cast or track.
 
-    One cast's variables are often split across files -- temperature in one, oxygen in
-    another, chemistry in a third. They belong in a single cast, joined on whatever they
-    share: depth for a profile, a timestamp for an underway track.
-
-    `key` names the join column in the first table; `key_aliases` gives its name in the
-    others when they differ (`["Depth (m)", "DEPTH", "depth_m"]`).
+    `key` names the join column (e.g. depth or time) in the first table; `key_aliases` gives
+    its name in the others (`["Depth (m)", "DEPTH", "depth_m"]`).
 
         cols, rows, info = combine_on_key([(c1, r1), (c2, r2)], key="Depth (m)")
 
-    The join is an outer join in first-appearance order of the key, so a level present in
-    only one file survives with the rest of its row empty. `info["per_table"]` reports, for
-    each table, its `key_column`, how many of its keys `matched_existing_keys` already
-    contributed by an earlier table, its `distinct_keys`, and its
-    `duplicate_keys_within_table`.
+    Keys keep first-appearance order; a key in one table only keeps the rest of its row
+    empty. `info["per_table"]` gives each table's `key_column`, `matched_existing_keys`,
+    `distinct_keys` and `duplicate_keys_within_table` (a repeated key overwrites the
+    earlier row). Near-zero matches mean the tables share no key.
 
-    **Two failures worth catching, and both need `per_table` to see.** A near-zero
-    `matched_existing_keys` means the files do not actually share a key and the join is
-    meaningless -- which looks like success, because every row survives in its own block.
-    A non-zero `duplicate_keys_within_table` means one file repeats a key: the later row
-    overwrites the earlier one and that measurement is gone. Divide by `distinct_keys`
-    rather than by `rows` when judging overlap, or a file that overwrites itself reads as
-    healthy.
-
-    **Keys are compared as raw text**, so `0`, `0.0` and `00.0` are three different keys.
-    That makes the trap bidirectional: files that genuinely share every depth can report
-    **zero** overlap purely because one wrote `0` and the other `0.0`. Normalise the key
-    column yourself before calling this when the files spell their depths differently --
-    format every key to the same number of decimals -- and check `per_table` afterwards to
-    confirm the overlap is what you expected.
+    Keys are compared as raw text (`0` and `0.0` differ); normalise them first if the files
+    format them differently.
     """
     names = [key] + list(key_aliases or [])
     order: List[str] = []
@@ -296,11 +239,7 @@ def combine_on_key(
                 collisions.append(c)
             else:
                 out_columns.append(c)
-        # A key already in `merged` means one of two very different things: an earlier
-        # table contributed it (a genuine match, which is what overlap measures) or THIS
-        # table already used it (a duplicate, whose row is about to be overwritten and
-        # lost). Counting both as `matched` inflated the very metric that exists to catch
-        # a bad join, so the two are tracked apart.
+        # Matches against earlier tables are counted apart from duplicates within this one.
         matched = 0
         seen_here: set = set()
         duplicates = 0

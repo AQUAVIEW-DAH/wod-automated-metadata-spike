@@ -1,4 +1,4 @@
-"""Phase 1: Ingestion & Inspection skills."""
+"""Phase 1: ingestion and inspection -- listing, fetching, sniffing, reading, classifying."""
 
 from .list_remote_directory import (list_remote_directory, accession_number,
                                     accession_for, resolve_accession_url)

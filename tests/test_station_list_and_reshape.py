@@ -1,4 +1,4 @@
-"""Station lists, long-format tables and count matrices: the shapes that needed a custom script."""
+"""Station lists, long-format tables, count matrices, reconciliation and PDF tables."""
 import datetime as dt
 
 import pytest

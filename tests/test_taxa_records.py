@@ -1,10 +1,6 @@
-"""Biological data (plankton): a haul's Biological Header and Taxa-Records, through the same
-phase packages a profile uses -- staged, mapped, written, validated.
+"""Plankton hauls as a Biological Header plus Taxa-Records: staged, mapped, written, validated.
 
-Before this, plankton was identified, excluded and reported as an unfinished item -- nothing
-could write a Taxa-Record. These pin the record model: a depth RANGE per record, the
-originator's name always kept, a code only when the list has exactly one, and every gap in
-the collection metadata named rather than filled.
+Each record keeps a depth range and the originator's name; gaps in metadata are named, not filled.
 """
 import numpy as np
 import pytest

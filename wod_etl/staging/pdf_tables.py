@@ -1,24 +1,18 @@
-"""Take rows out of a table in a PDF -- a cruise report, a station log -- with a citation.
+"""Extract table rows from a PDF page (e.g. a cruise report), with a citation.
 
-Positions, dates and the odd measurement are often stated ONLY in a report: 0303928's trawl
-positions and sea-surface temperatures are in Table 2 of the cruise report and nowhere else.
-Skipped as documentation, they could not be used even to cross-check a station list.
-
-PDF text comes out as a run of words with the table's layout gone, so a table is read by
-describing ONE row as a regular expression, one group per column, and finding every match
-on the page:
+PDF text loses its layout, so a row is described by a regular expression with one group per
+column, and every match on the page is a row:
 
     from wod_etl.staging import extract_pdf_rows
 
     cols, rows, info = extract_pdf_rows(
-        "0-data/Final.Report.U2015-015.JAPAN.pdf", page=8,
+        "0-data/cruise_report.pdf", page=8,
         row_pattern=r"(\\d+) (Nov\\. \\d{2}, \\d{4}) (\\S+E) (\\S+N) (\\d+\\.\\d) (\\d+)",
         columns=["Station", "Date", "Long", "Lat", "SST (deg C)", "Tow depth (m)"])
-    info["source"]     # 'Final.Report.U2015-015.JAPAN.pdf, PDF page 8'
+    info["source"]     # 'cruise_report.pdf, PDF page 8'
 
-Check `info["matches"]` against the number of rows the printed table has. A row the pattern
-misses is silently absent, so count them. `page` is the PDF's own page index (1-based), not
-the number printed on the page; `info` carries both when the printed one can be read.
+Check `info["matches"]` against the printed table: a missed row is silently absent. `page`
+is the 1-based PDF page index, not the printed page number.
 """
 import re
 from pathlib import Path
@@ -26,16 +20,14 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 def pdf_page_text(path, pages: Optional[Sequence[int]] = None) -> Tuple[Dict[int, str], Dict[str, Any]]:
-    """`({page_number: text}, info)` for a PDF, 1-based. Whitespace is collapsed to single
-    spaces, because pypdf separates words with tabs and runs of spaces at random."""
+    """`({page_number: text}, info)` for a PDF, 1-based, with whitespace collapsed."""
     try:
         from pypdf import PdfReader
     except ImportError:
         return {}, {"error": "pypdf is not installed; `uv sync` installs it"}
     import logging
 
-    # pypdf logs every repaired cross-reference ("Ignoring wrong pointing object"); harmless
-    # in a report PDF, and noise in a staging log.
+    # Silence pypdf's warnings about repaired cross-references.
     logging.getLogger("pypdf").setLevel(logging.ERROR)
     try:
         reader = PdfReader(str(path))

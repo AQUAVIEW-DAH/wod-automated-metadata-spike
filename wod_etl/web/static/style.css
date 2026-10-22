@@ -55,8 +55,7 @@ select {
   background: #fff;
 }
 
-/* Stages across the whole width, one equal segment each: run's, then confirm's, then the
-   report -- a rule between the groups. */
+/* Stages across the full width: run's, then confirm's, then the report. */
 .stages {
   display: flex; gap: 6px; list-style: none; margin: 12px 0 6px; padding: 0; flex-wrap: wrap;
 }
@@ -150,9 +149,9 @@ main {
 }
 .badge.out { background: #f1f2f4; color: var(--muted); font-weight: normal; }
 .badge.depth { background: #eef3fb; color: var(--run); font-weight: normal; }
+.badge.taxa { background: #f4eefb; color: #6a3fa0; font-weight: normal; }
 
-/* decisions.toml: the text is drawn twice -- highlighted in the <pre>, and typed into the
-   transparent textarea laid exactly over it, with the same font, padding and scroll. */
+/* decisions.toml: a highlighted <pre> under a transparent textarea with identical metrics. */
 .editor { position: relative; display: flex; flex: 1; min-height: 0; }
 #gutter, #decisions, #highlight {
   font: 12.5px/1.5 var(--mono); margin: 0; padding: 8px; tab-size: 4;
@@ -197,6 +196,7 @@ main {
 }
 .out a:hover { text-decoration: underline; }
 .out .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.meta.warn { color: #8a5a00; }
 .verified {
   margin: 10px 14px; padding: 7px 10px; border-radius: 8px; font-weight: 600; font-size: 13px;
 }

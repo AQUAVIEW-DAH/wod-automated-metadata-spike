@@ -1,8 +1,4 @@
-"""Phase 2 and 3: WOD spec lookup, mapping contract, conversions, QC flags.
-
-Several tests pin defects that were fixed; the docstring says which, so a regression is
-recognisable rather than just a red test.
-"""
+"""Phase 2 and 3: WOD spec lookup, mapping contract, conversions and QC flags."""
 import numpy as np
 import pandas as pd
 import pytest
@@ -63,7 +59,6 @@ class TestColumnMatching:
         ("Pressure (dbar)", 25),
     ])
     def test_unit_suffixed_names_match(self, raw, expected):
-        """Used to require an exact alias, so 'Temp (C)' matched nothing."""
         assert match_variable(raw) == expected
 
     def test_air_temperature_is_not_captured_by_temp(self):
@@ -91,7 +86,6 @@ class TestMappingContract:
         assert c["ready_for_transform"] is True
 
     def test_unit_conversion_is_detected_from_the_column_name(self):
-        """_detect_unit_conversion used to be unreachable and always returned 'none'."""
         c = self._contract(["Depth (ft)", "Temp (deg F)", "Oxygen (ml/l)"],
                            "LAT: 61.9 LON: -172.2\nDATE: 1985-06-12")
         conv = {m["raw_column"]: m["conversion_needed"] for m in c["column_mapping"]}
@@ -107,7 +101,6 @@ class TestMappingContract:
             assert m["conversion_needed"] != "molar_rescale"
 
     def test_integer_latitude_is_parsed(self):
-        """The regex used to require a decimal point, so 'LAT: 61' was dropped."""
         c = self._contract(["Depth (m)", "Temp (C)"], "LAT: 61 LON: -172\nDATE: 1985-06-12")
         assert c["parsed_coordinates"]["latitude"] == 61.0
         assert c["parsed_coordinates"]["longitude"] == -172.0
@@ -156,8 +149,7 @@ class TestConversions:
         assert "not specified by WOD" in log["seawater_density_provenance"]
 
     def test_a_rescale_without_endpoints_is_refused_not_guessed(self):
-        """`molar_rescale` is parameterised. A contract that names the label but not the
-        endpoints must leave the values alone and say so, never assume a direction."""
+        """Without from/to units the direction is unknown, so values are left alone."""
         df, log = self._run(
             pd.DataFrame({"A": [2.3]}),
             [{"raw_column": "A", "wod_code": 17, "conversion_needed": "molar_rescale"}])
@@ -177,7 +169,6 @@ class TestQCAuditing:
         assert list(out["Depth_qc_flag"]) == [0, 0, 1, 0, 1]
 
     def test_depth_errors_propagate_to_variable_flags(self):
-        """Levels at a bad depth used to pass as 0 = accepted."""
         df = pd.DataFrame({"Depth": [0., 10., 5.], "Temp": [9.0, 8.9, 8.8]})
         out, _ = apply_qc_auditing(df, self.CONTRACT)
         assert out["Temp_qc_flag"].iloc[2] != 0
@@ -189,14 +180,13 @@ class TestQCAuditing:
         assert list(out["Depth_qc_flag"])[1:] == [1, 1, 1, 1]
 
     def test_range_check_is_depth_dependent(self):
-        """A single global min/max used to be applied at every depth."""
         df = pd.DataFrame({"Depth": [0., 5000.], "Temp": [25.0, 25.0]})
         out, _ = apply_qc_auditing(df, self.CONTRACT)
         assert out["Temp_qc_flag"].iloc[0] == 0
         assert out["Temp_qc_flag"].iloc[1] == 1
 
     def test_flag_5_is_reachable(self):
-        """Combined gradient and inversion was unreachable: the branches were exclusive."""
+        """Flag 5 is a combined gradient and inversion failure."""
         seen = set()
         rng = np.random.default_rng(0)
         for _ in range(800):
@@ -234,11 +224,7 @@ class TestQCAuditing:
 
 
 class TestInstrumentExportNames:
-    """Sea-Bird exports name their columns by sensor, not by variable.
-
-    Every one of these was unmapped before, so a whole CTD cast reached the writer with
-    only the columns that happened to be spelled in English.
-    """
+    """Sea-Bird exports name their columns by sensor, not by variable."""
 
     @pytest.mark.parametrize("column,code", [
         ("PrDM", 25), ("PrdM", 25),            # pressure, digiquartz
@@ -252,13 +238,12 @@ class TestInstrumentExportNames:
 
     @pytest.mark.parametrize("column", ["DepSM", "DepSM (m)", "DepFM"])
     def test_sea_bird_depth_names_are_the_depth_axis(self, column):
-        """DepSM unmapped produced a file with an all-fill depth axis that still validated."""
+        """Unmapped, these leave an all-fill depth axis that still validates."""
         assert match_variable(column) == DEPTH_SENTINEL_CODE
 
     @pytest.mark.parametrize("column", ["C0S/m", "Sigma-t00", "SvDM", "Potemp090C"])
     def test_columns_with_no_wod_code_stay_unmapped(self, column):
-        """Conductivity, density, sound velocity and potential temperature have no Table 3a
-        code. Mapping potential temperature onto Temperature would duplicate the variable."""
+        """No Table 3a code; potential temperature must not map onto Temperature."""
         assert match_variable(column) is None
 
     @pytest.mark.parametrize("column,code", [
@@ -270,16 +255,14 @@ class TestInstrumentExportNames:
     @pytest.mark.parametrize("column", ["NO2−  (µmol L−1)", "NH4+ (µmol L−1)",
                                         "CDOM (m−1)", "Turbidity (FTU)"])
     def test_variables_wod_does_not_store(self, column):
-        """Nitrite was excluded from the online database (manual p.49); ammonium, CDOM and
-        turbidity have no Table 3a code at all."""
+        """Nitrite is excluded from the online database (manual p.49); the rest have no code."""
         assert match_variable(column) is None
 
 
 class TestUnitTraps:
-    """Unit errors that passed silently because the pattern was missing."""
+    """Units whose conversion is easy to miss."""
 
     def test_mg_per_litre_oxygen_is_converted(self):
-        """Undetected, a mg/L oxygen column was written as if it were already umol/kg."""
         from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion
         assert _detect_unit_conversion("DO[mg/L]", 3) == "mg_per_l_to_umol_per_kg"
 
@@ -297,8 +280,7 @@ class TestUnitTraps:
 
     @pytest.mark.parametrize("code", [17, 21])
     def test_per_mass_source_still_converts_for_per_volume_variables(self, code):
-        """Alkalinity and DIC are stored in mmol/l, so a umol/kg source is NOT standard.
-        Treating it as already-correct mislabelled both by a factor of ~1000."""
+        """Alkalinity and DIC are stored in mmol/l, so a umol/kg source is rescaled."""
         from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion, molar_units
         assert _detect_unit_conversion("DIC (µmol kg−1)", code) == "molar_rescale"
         assert molar_units("DIC (µmol kg−1)", code) == (("umol", "mass"), ("mmol", "volume"))
@@ -312,16 +294,13 @@ class TestUnitTraps:
         assert out["DIC (µmol kg−1)"].iloc[0] == pytest.approx(2.141, abs=0.001)
 
     def test_oxygen_in_umol_per_kg_needs_no_conversion(self):
-        """Code 3's standard unit IS umol/kg -- the per-volume rule must not overreach."""
+        """Code 3's standard unit is umol/kg."""
         from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion
         assert _detect_unit_conversion("Oxygen (µmol kg-1)", 3) == "none"
 
 
 class TestNonProfileQC:
-    """Manual p.37: surface-only data are not profile data. p.49: the identifying
-    variables get range checks only. Running the vertical checks on a surface track
-    flagged 85-100% of every variable, because a constant 0 m depth reads as a duplicate
-    depth at every level and therefore an inversion in every variable."""
+    """Surface-only data get range checks only, not vertical checks (manual p.37, p.49)."""
 
     @staticmethod
     def _surface_track():
@@ -366,9 +345,7 @@ class TestNonProfileQC:
 
 
 class TestHeaderMiningIsNotProseMining:
-    """The header scanner reads every line of the comment block. Staged files put free-text
-    notes above the coordinate lines, so prose that happens to contain 'cast', 'station' or a
-    quoted source header must not become a secondary header or a coordinate."""
+    """Prose in a header block must not become a secondary header or a coordinate."""
 
     @staticmethod
     def _headers(header_text):
@@ -407,20 +384,14 @@ class TestHeaderMiningIsNotProseMining:
         assert got["10"]["value"] == pytest.approx(2500.0)
 
     def test_bottom_hit_is_a_recognised_secondary_header(self):
-        """Table 4a id 34. An XBT that stops at the sea floor rather than at the probe's
-        terminal depth is a different cast, and WOD has a header for saying so."""
+        """Table 4a id 34: an XBT that stopped at the sea floor."""
         got = self._headers("# Bottom Hit: yes\n")["secondary_headers"]
         assert got["34"]["name"].lower().startswith("bottom hit")
         assert got["34"]["value"] == "yes"
 
 
 class TestShortAliasesDoNotMatchMidName:
-    """A one-character alias matched as a whole word inside a longer name.
-
-    'Sigma-t (kg/m3)' normalises to 'sigma_t', where 't' matched and claimed WOD code 1.
-    With a real CTD column set it claimed code 1 first and T090C was then dropped as a
-    duplicate, so the NetCDF `temperature` variable held density.
-    """
+    """A one-character alias such as 't' must not match inside 'sigma_t'."""
 
     @pytest.mark.parametrize("column", ["Sigma-t (kg/m3)", "sigma_t", "pot_t", "cond_t"])
     def test_a_t_inside_a_name_is_not_temperature(self, column):
@@ -449,8 +420,7 @@ class TestShortAliasesDoNotMatchMidName:
 
 
 class TestMolarPrefixIsNotConflated:
-    """`[µumn]mol/l` matched mmol/l too, so alkalinity and DIC -- whose Table 3a standard
-    unit IS mmol/l -- were read as micromolar and divided by 1000."""
+    """Milli-, micro- and nanomolar units are told apart."""
 
     @staticmethod
     def _conv(col, code):
@@ -473,8 +443,7 @@ class TestMolarPrefixIsNotConflated:
         assert molar_units("Helium (nmol/l)", 34) == (("nmol", "volume"), ("nmol", "mass"))
 
     def test_a_molar_source_on_a_non_molar_variable_is_left_alone(self):
-        """Chlorophyll's standard unit is ug/l. Rescaling a molar source onto it is
-        meaningless, so the values must not be touched."""
+        """Chlorophyll's standard unit is ug/l, so a molar source is not rescaled."""
         assert self._conv("Chlorophyll (µmol/l)", 11) == "none"
 
     @pytest.mark.parametrize("col,code,value,expected", [
@@ -493,8 +462,6 @@ class TestMolarPrefixIsNotConflated:
 
 class TestEachCoordinateIsCheckedOnItsOwnCode:
     def test_a_latitude_column_does_not_satisfy_longitude(self):
-        """`in_columns` tested membership of (30, 31) rather than the code being asked
-        about, so a file with latitude and no longitude reported ready_for_transform."""
         profile = {"columns": ["Depth (m)", "Latitude", "Temp (deg C)"], "raw_header_block": ""}
         contract = generate_field_mapping(
             profile, query_wod_spec("OSD", profile["columns"], 10.0))
@@ -503,24 +470,19 @@ class TestEachCoordinateIsCheckedOnItsOwnCode:
         assert contract["ready_for_transform"] is False
 
 
-MICRO = "\u00b5"      # U+00B5 MICRO SIGN -- what a keyboard and most CSVs produce
-GREEK_MU = "\u03bc"   # U+03BC GREEK SMALL LETTER MU -- what Word and journal PDFs produce
-MINUS = "\u2212"      # U+2212 MINUS SIGN -- pasted exponents, e.g. kg-1
+MICRO = "\u00b5"      # U+00B5 MICRO SIGN, common in CSVs
+GREEK_MU = "\u03bc"   # U+03BC GREEK SMALL LETTER MU, from Word and PDFs
+MINUS = "\u2212"      # U+2212 MINUS SIGN, in pasted exponents
 
 
 class TestTypographicUnitCharacters:
-    """Headers pasted from Word and journals use characters that look ASCII and are not.
-
-    Both failures below were silent: the column mapped to the right WOD code, so nothing
-    looked wrong, but the unit was lost and with it the conversion.
-    """
+    """Headers pasted from Word or journals use non-ASCII look-alike characters."""
 
     @pytest.mark.parametrize("mu", [MICRO, GREEK_MU])
     @pytest.mark.parametrize("tail", ["/kg", " kg-1", f" kg{MINUS}1"])
     def test_micromolar_per_mass_is_detected_however_it_is_spelt(self, mu, tail):
         from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion
-        # DIC is stored in mmol/l, so a micromolar source must rescale. Undetected, the
-        # values were written as if already standard -- a factor of ~1000.
+        # DIC is stored in mmol/l, so a micromolar source must rescale.
         assert _detect_unit_conversion(f"DIC ({mu}mol{tail})", 21) == "molar_rescale"
 
     @pytest.mark.parametrize("mu", [MICRO, GREEK_MU])
@@ -546,7 +508,7 @@ class TestTypographicUnitCharacters:
 
 
 class TestFluorescenceIsDecidedByItsUnit:
-    """It used to depend on a hand rename to 'Chlorophyll' during staging."""
+    """A concentration unit makes it chlorophyll; a raw signal is dropped."""
 
     @pytest.mark.parametrize("col", ["Fluorescence (ug/l)", "fluorescence (mg/m^3)",
                                      "Fluor [ppb]", "Fl (µg/L)", "FlSP", "flECO-AFL"])
@@ -606,3 +568,31 @@ class TestTheRangeLookupIsTheManualsRuleForAnyNumberOfDepths:
         lo, hi = ranges_at_depths(1, z)
         assert list(zip(lo, hi)) == [range_at_depth(1, float(d)) for d in z]
         assert ranges_at_depths(25, z) is None or len(ranges_at_depths(25, z)[0]) == z.size
+
+
+class TestNamesFromAccession0303809:
+    """Names from an AOML CTD NetCDF: DPTH, OXY and 'decibar = 10000 pascals'."""
+
+    @pytest.mark.parametrize("column, code", [
+        ("DPTH (meters)", 0), ("OXY (ml/l)", 3), ("PRES (decibar = 10000 pascals)", 25)])
+    def test_they_map(self, column, code):
+        from wod_etl.mapping.query_wod_spec import match_variable
+
+        assert match_variable(column) == code
+
+    @pytest.mark.parametrize("column", ["Oxygen saturation (%)", "OXY_SAT (%)", "O2sat"])
+    def test_oxygen_saturation_is_not_oxygen(self, column):
+        from wod_etl.mapping.query_wod_spec import explain_column, match_variable
+
+        assert match_variable(column) is None
+        assert explain_column(column)["variable"] == "oxygen_saturation"
+
+    def test_pressure_with_an_explained_decibar_unit_becomes_depth(self):
+        import pandas as pd
+
+        from wod_etl.orchestration.process_accession import _depth_from_pressure
+
+        df = pd.DataFrame({"PRES (decibar = 10000 pascals)": [0.0, 100.0],
+                           "TEMP (degC)": [20.0, 10.0]})
+        out, note = _depth_from_pressure(df, "Latitude: 8.5")
+        assert note and len(out.columns) == 3

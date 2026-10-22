@@ -1,10 +1,4 @@
-"""Everything in a file that is not a measurement value.
-
-The pipeline used to map two things: a column's name and its unit. Everything else -- the
-originator's unit, the measurement scale, the probe, the ship, the bottom depth, the
-sampling gear, the submitter's own quality flags -- resolved to no Table 3a code and was
-dropped. WOD has a field for every one of them. These tests pin that they arrive.
-"""
+"""Everything in a file that is not a measurement value: headers, units, scales and flags."""
 import netCDF4 as nc
 import numpy as np
 import pandas as pd
@@ -24,11 +18,7 @@ class TestNamesThatLookLikeVariablesAndAreNot:
         "pot_temperature",
     ])
     def test_potential_temperature_is_never_temperature(self, column):
-        """Theta is derived. Aliasing it to code 1 makes a cast report the wrong quantity.
-
-        With both columns present the cast claims Temperature twice; with only theta
-        present it silently reports theta as in-situ. Neither is recoverable downstream.
-        """
+        """Theta is derived; mapping it to code 1 would report the wrong quantity."""
         assert match_variable(column) is None
         assert explain_column(column)["variable"] == "potential_temperature"
 
@@ -49,7 +39,7 @@ class TestNamesThatLookLikeVariablesAndAreNot:
         assert explain_column(column)["variable"] == expected
 
     def test_nitrate_plus_nitrite_still_maps(self):
-        """Nitrite ALONE is excluded; nitrate+nitrite is code 8 with header 17."""
+        """Nitrite alone is excluded; nitrate+nitrite is code 8 with header 17."""
         assert match_variable("Nitrate + Nitrite (umol/kg)") == 8
         assert explain_column("Nitrate + Nitrite (umol/kg)") is None
 
@@ -58,7 +48,6 @@ class TestNamesThatLookLikeVariablesAndAreNot:
         "Max Depth (m)", "Sensor Depth", "Depth to bottom",
     ])
     def test_bottom_depth_is_not_the_depth_axis(self, column):
-        """'depth' inside 'bottom_depth' matched the axis, flattening every level to it."""
         assert match_variable(column) is None
 
     def test_the_real_depth_axis_still_resolves(self):
@@ -66,7 +55,6 @@ class TestNamesThatLookLikeVariablesAndAreNot:
             assert match_variable(column) == 0
 
     def test_air_temperature_is_not_water_temperature(self):
-        """The fallback picks the longest match, and code 1's 'temp' beat 'air_temperature'."""
         assert match_variable("Air Temp (deg C)") == 26
         assert match_variable("Dry Bulb (C)") == 26
 
@@ -96,8 +84,7 @@ class TestTheUnitIsKeptNotJustUsed:
         ("Temperature (IPTS-68)", "IPTS-68"),
     ])
     def test_a_scale_is_recognised_and_is_not_a_unit(self, column, scale):
-        """The scale is variable specific second header 3, not a unit. Recording it as one
-        would be wrong; dropping it loses the only statement of which standard applies."""
+        """A scale is variable-specific header 3, not a unit."""
         assert extract_scale(column) == scale
         assert extract_unit(column) != scale
 
@@ -133,7 +120,7 @@ class TestCastMetadata:
         assert got["4"] == "University of Alaska Fairbanks"
 
     def test_an_identifier_is_not_coerced_to_a_number(self, frame):
-        """'0287423' must stay a string: as a float it becomes a different accession."""
+        """'0287423' must stay a string to keep its leading zero."""
         meta = map_metadata(HEADER, list(frame.columns), frame)
         assert meta["secondary_headers"]["1"]["value"] == "0287423"
 
@@ -143,8 +130,7 @@ class TestCastMetadata:
         assert meta["metadata_columns"][0]["column"] == "Bottom Depth (m)"
 
     def test_a_varying_metadata_column_records_no_single_value(self):
-        """A secondary header describes the whole cast. Collapsing a varying column to one
-        number would be a fabrication, so the value is withheld and the reason stated."""
+        """A secondary header describes the whole cast, so a varying column gives no value."""
         df = pd.DataFrame({"Depth (m)": [0, 10], "Bottom Depth (m)": [2500, 2650]})
         meta = map_metadata("", list(df.columns), df)
         entry = meta["secondary_headers"]["10"]
@@ -155,7 +141,7 @@ class TestCastMetadata:
         meta = map_metadata(HEADER, list(frame.columns), frame)
         assert meta["secondary_headers"]["29"]["code_table"]["csv"].endswith(
             "s_29_probe_type.csv")
-        # Bottom depth is metres, not a code. No entry is the right answer, not a gap.
+        # Bottom depth is in metres, not a code.
         assert meta["secondary_headers"]["10"]["is_coded"] is False
 
 
@@ -168,7 +154,7 @@ class TestPerVariableMetadata:
         assert headers["3"]["value"] == "ITS-90"      # scale
 
     def test_nitrate_nitrite_sets_header_17(self, frame):
-        """How WOD records the combination. Without it the two are indistinguishable."""
+        """Header 17 is how WOD marks the combined measurement."""
         meta = map_metadata(HEADER, list(frame.columns), frame)
         headers = meta["variable_specific_headers"]["Nitrate + Nitrite (umol/kg)"]["headers"]
         assert headers["17"]["value"] == 1
@@ -200,7 +186,7 @@ class TestOriginatorFlags:
     def test_flags_present_implies_secondary_header_96(self, frame):
         meta = map_metadata(HEADER, list(frame.columns), frame)
         assert "96" in meta["secondary_headers"]
-        assert meta["secondary_headers"]["96"]["value"] is None      # the SET is unknown
+        assert meta["secondary_headers"]["96"]["value"] is None      # the flag set is unknown
         assert "NOT WOD Table 12" in meta["secondary_headers"]["96"]["note"]
 
 
@@ -212,7 +198,7 @@ class TestCodeTableLinks:
         assert links["links"]["secondary_header"]["29"]["csv"].startswith("https://")
 
     def test_a_field_with_no_code_list_returns_none(self):
-        """None is an answer: bottom depth is metres, not a code."""
+        """Bottom depth is in metres, not a code."""
         assert code_table_link("secondary_header", 10) is None
 
     def test_hubs_include_the_originator_flag_sets(self):
@@ -249,8 +235,7 @@ class TestMetadataReachesTheOutput:
             attrs = {a: ds.getncattr(a) for a in ds.ncattrs()}
             assert attrs["originator_cruise_id"] == "EX24-01"
             assert "secondary_header_3_platform_code" not in attrs
-            # Probe type is coded. 'T-7' was not looked up (no list offline), so it is kept
-            # beside the field as text -- never written INTO it as if it were a code.
+            # 'T-7' was not looked up offline, so it is kept as text beside the coded field.
             assert "secondary_header_29_probe_type" not in attrs
             assert attrs["secondary_header_29_probe_type_originator_text"] == "T-7"
             assert "not looked up" in attrs["secondary_header_29_probe_type_code_lookup"]
@@ -269,8 +254,7 @@ class TestMetadataReachesTheOutput:
             assert "t090C" in t.getncattr("originator_column_name")
 
     def test_originator_flags_are_carried_verbatim(self, output):
-        """Not translated. An originator's 1 may mean good where WOD's 1 means a failed
-        range check, so the values keep their own variable and their own scale."""
+        """Originator flag scales differ from WOD's, so values are not translated."""
         with nc.Dataset(output["outputs"][0]) as ds:
             flags = ds.variables["temperature_qc_originator"]
             assert [int(x) for x in flags[:]] == [1, 1, 3]
@@ -278,7 +262,7 @@ class TestMetadataReachesTheOutput:
             assert flags.source_column == "Temperature_QC"
 
     def test_wod_qc_is_off_by_default(self, output):
-        """QC is applied downstream; a flag written here is one more thing to reconcile."""
+        """WOD QC is applied downstream."""
         with nc.Dataset(output["outputs"][0]) as ds:
             assert "temperature_qc" not in ds.variables
 
@@ -316,13 +300,7 @@ class TestExcludedFoldersStillCarryMetadata:
 
 # ------------------------------------------ the WOD-export delimited header block
 class TestDelimitedHeaderBlock:
-    """`key,variable,value,code-system,description` -- what WOD's own CSV export writes.
-
-    Read with the `key: value` rule the value stops at the first comma and captures a
-    fragment of the LABEL. On accession 0146739 that produced three headers, all three
-    wrong -- Platform came back as the call sign out of a parenthetical, Accession Number as
-    the word "Number" -- and every per-variable key was missed, with nothing to show it.
-    """
+    """WOD's own CSV export header: `key,variable,value,code-system,description`."""
 
     BLOCK = (
         "CAST                        ,,               ,,\n"
@@ -351,7 +329,7 @@ class TestDelimitedHeaderBlock:
         assert meta["secondary_headers"]["10"]["value"] == 36.0
 
     def test_a_published_code_is_flagged_as_one(self, meta):
-        """'464.' is already a WOD code. Saying so stops a reader treating it as a name."""
+        """'464.' is already a WOD code, not a name."""
         probe = meta["secondary_headers"]["29"]
         assert probe["value_is_already_a_code"] is True
         assert "WOD code" in probe["code_system"]
@@ -370,13 +348,12 @@ class TestDelimitedHeaderBlock:
         assert blank and blank[0]["value"] is None
 
     def test_unplaced_keys_are_never_silent(self, meta):
-        """The whole point: a key with no WOD home has to be visible, not absent."""
+        """A key with no WOD field is listed as unresolved."""
         keys = {u["key"] for u in meta["unresolved"]}
         assert "Country" in keys
         assert all(u["note"] for u in meta["unresolved"])
 
     def test_the_cruise_id_is_character_data_not_a_rival_platform(self, meta):
-        """It used to collide with Platform for header 3 and lose. It was never a platform."""
         assert meta["secondary_headers"]["3"]["value"] == "5423."
         assert meta["character_data"]["originator_cruise_id"]["value"] == "kah1104"
         assert not [u for u in meta["unresolved"] if u["key"] == "Originators Cruise ID"]

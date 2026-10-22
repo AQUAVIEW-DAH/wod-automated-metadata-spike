@@ -1,9 +1,6 @@
-"""Format sniffing, multi-format reading, and deciding a file's dataset without being told.
+"""Format sniffing, multi-format reading, and classifying a file's dataset from its content.
 
-`dataset_type` used to be an argument. These tests pin the behaviour that replaced it: a
-file is identified from its own path, header, columns and depth spacing, and a file that
-cannot become a WOD profile is skipped with a stated reason rather than failing four
-phases later or, worse, being written as a plausible wrong profile.
+Files that cannot become a WOD profile are skipped with a stated reason.
 """
 import numpy as np
 import pytest
@@ -96,8 +93,7 @@ class TestSniffReadsBytesNotExtensions:
 
         junk = tmp_path / "cast.dat"
         junk.write_text("this file should have been a cast and is not\n")
-        # Unreadable but NOT a document: the caller must fail rather than skip it, or a
-        # real cast in an unrecognised layout vanishes from a run without a word.
+        # Unreadable but not a document, so the caller fails instead of silently skipping it.
         assert not sniff_format(str(junk))["is_document"]
 
     def test_fixed_width_columns_are_found(self, tmp_path):
@@ -118,7 +114,7 @@ class TestReadAnyProducesTheSameShapeForEveryFormat:
         assert casts[0]["df"].shape == (4, 3)
 
     def test_units_are_folded_into_the_column_name(self, argo_file):
-        """Unit detection reads the raw column name and nothing else, so it must be there."""
+        """Unit detection reads only the raw column name."""
         casts, _ = read_any(str(argo_file))
         assert "TEMP (degree_Celsius)" in casts[0]["df"].columns
 
@@ -203,7 +199,7 @@ class TestClassifyDataset:
         assert "Table 7a" in plankton["exclusion"]["route"]
 
     def test_a_conductivity_column_does_not_exclude_a_ctd_cast(self):
-        """The column is dropped and reported. Excluding the file loses temperature too."""
+        """The column is dropped and reported; the rest of the cast is kept."""
         result = classify_dataset(
             path="1-ctd/cast_01.csv",
             columns=["Depth (m)", "Temperature (deg C)", "Salinity (PSU)",
@@ -252,8 +248,7 @@ class TestProcessAccessionWithoutBeingToldTheDataset:
                                 raw_dir=str(tmp_path / "raw"), run_id="t_auto_1",
                                 resume=False)
         assert res["dataset_types"], "no file was classified"
-        # XBT is a WOD dataset in its own right (Table 2), so it stays XBT. Only XCTD/STD
-        # route by resolution.
+        # XBT is its own WOD dataset; only XCTD/STD route by resolution.
         assert set(res["dataset_types"]) == {"CTD", "XBT"}
         assert len(res["outputs"]) == 2
 
@@ -304,7 +299,7 @@ class TestProcessAccessionWithoutBeingToldTheDataset:
 
 
 class TestTheInputIsDiagnosedWhenItIsNotADirectory:
-    """A metadata landing page is not an accession. Crawled, it is a valid empty page."""
+    """A metadata landing page URL is reported as such, not as an empty accession."""
 
     LANDING = ("https://www.ncei.noaa.gov/access/metadata/landing-page/bin/iso"
                "?id=gov.noaa.nodc:146739")
@@ -318,7 +313,6 @@ class TestTheInputIsDiagnosedWhenItIsNotADirectory:
         assert accession_number("data/raw/some-folder") is None
 
     def test_a_landing_page_is_reported_as_the_wrong_kind_of_url(self):
-        """Previously: status 'empty', 'no files found; check the URL' -- a typo hunt."""
         from wod_etl.discovery.list_remote_directory import _diagnose_empty
 
         res = _diagnose_empty(self.LANDING)
@@ -372,7 +366,7 @@ class TestCrossFileShapeIsDetected:
         assert not classify_accession(str(acc))["cross_file_shapes"]
 
     def test_a_single_level_file_is_readable_at_all(self, tmp_path):
-        """It sniffed as prose, so it never reached the shape check."""
+        """A one-row CSV is data, not prose."""
         p = tmp_path / "lvl.csv"
         p.write_text("Depth (m),Temperature (deg C)\n0,15.1\n")
         result = sniff_format(str(p))
@@ -382,7 +376,7 @@ class TestCrossFileShapeIsDetected:
 
 # ------------------------------------------------ scored exclusions, per-file triage
 class TestExclusionsAreScoredNotOrdered:
-    """First-match-wins labelled fish catch as plankton because the plankton rule came first."""
+    """Every matching exclusion rule is scored; rule order does not decide the label."""
 
     def test_camel_case_file_names_are_read(self):
         """`\\btrawl\\b` cannot match inside 'TrawlInfo'."""
@@ -451,7 +445,7 @@ class TestSidecarsAndLongFormat:
 class TestPerFileTriage:
     @pytest.fixture
     def acc(self, tmp_path):
-        """One NCEI 0-data folder holding everything, as NCEI archives a submission."""
+        """An NCEI-style accession with every file in one 0-data folder."""
         root = tmp_path / "0303928"
         (root / "about").mkdir(parents=True)
         (root / "data" / "0-data").mkdir(parents=True)
@@ -503,8 +497,7 @@ class TestPerFileTriage:
 
 
 class TestBinaryFilesAreOpenedNotAskedAbout:
-    """A binary file has no text head. Triage must look inside it, or it asks a person what
-    every NetCDF file and every picture in the accession is."""
+    """Triage opens binary files (NetCDF, images) instead of asking a reviewer about them."""
 
     @staticmethod
     def _triage(root):
@@ -514,13 +507,11 @@ class TestBinaryFilesAreOpenedNotAskedAbout:
         from helpers import write_mooring_nc
 
         write_mooring_nc(tmp_path / "18bs8a_s39_0051m.cf.nc")
-        # An ADCP's own thermistor beside its roll and heading: plain "degrees" is not a
-        # position, so the record does not "move".
+        # An ADCP thermistor with a heading in plain "degrees", which is not a position.
         write_mooring_nc(tmp_path / "18bsp8a_wcp_scal.cf.nc", instrument="RDI ADCP",
                          variables=(("T_20", "TEMPERATURE (C)", "C"),
                                     ("Hdg_1215", "INST Heading", "degrees")))
-        # A level of the mooring's MRB profiles, combined with its other instruments by a
-        # mooring recipe: staged, not left out.
+        # Each file is one level of the mooring's MRB profiles, so it is staged.
         for name, f in self._triage(tmp_path).items():
             assert f["action"] == "stage", (name, f["reason"])
             assert (f["dataset"], f["include"]) == ("MRB", True)
@@ -569,7 +560,7 @@ class TestBinaryFilesAreOpenedNotAskedAbout:
         assert f["exclusion"] == "underway record along a track" and "SUR" in f["why"]
 
     def test_a_glider_is_not_an_underway_record(self, tmp_path):
-        """Moving, with its depth changing along the path: its dives are profiles."""
+        """Its depth changes along the track, so its dives are profiles."""
         self._track(tmp_path / "glider.nc", ("PRES", "dbar", np.abs(np.sin(np.arange(48))) * 500))
         f = self._triage(tmp_path)["glider.nc"]
         assert f["time_series"] is None and f["exclusion"] != "underway record along a track"
@@ -588,7 +579,7 @@ class TestBinaryFilesAreOpenedNotAskedAbout:
 
 
 class TestDryRunReadsLocalFiles:
-    """It classified by file NAME, so a staged folder of CTD casts came back dataset null."""
+    """Dry runs classify local files from their contents, not only their names."""
 
     def test_a_staged_cast_is_classified_from_its_header(self, tmp_path):
         d = tmp_path / "staged"
@@ -724,3 +715,45 @@ class TestTriageSaysWhatEachFileIsAndWhy:
             "The submitter provided the following profile information:\nName: E. Eidam\n")
         f = self._triage(tmp_path)["H1CMAX-report.txt"]
         assert f["action"] == "document" and f["data"] == "NCEI submission report"
+
+
+class TestAProfileGridNetCDFWithLongNames:
+    """Profile x depth arrays (DPTH, PRES) with CF long names and fill set as `FillValue`."""
+
+    @pytest.fixture
+    def grid(self, tmp_path):
+        import netCDF4
+
+        path = tmp_path / "acc" / "ctddata.nc"
+        path.parent.mkdir()
+        with netCDF4.Dataset(path, "w") as ds:
+            ds.createDimension("PROFILE", 2)
+            ds.createDimension("DEPTH", 50)
+            for name, dims, units, long in (
+                    ("TIME", ("PROFILE",), "days since 1950-01-01T00:00:00", "time"),
+                    ("LATITUDE", ("PROFILE",), "degrees_north", "latitude"),
+                    ("LONGITUDE", ("PROFILE",), "degrees_east", "longitude"),
+                    ("DPTH", ("DEPTH",), "meters", "sea_water_depth sea surface=0"),
+                    ("PRES", ("PROFILE", "DEPTH"), "decibar = 10000 pascals",
+                     "sea_water_pressure sea surface=0"),
+                    ("TEMP", ("PROFILE", "DEPTH"), "Celsius degree", "sea temperature")):
+                v = ds.createVariable(name, "f8", dims)
+                v.units, v.long_name = units, long
+                v.setncattr("FillValue", 9999.99)
+            ds["TIME"][:] = [26240.5, 26241.5]
+            ds["LATITUDE"][:], ds["LONGITUDE"][:] = [8.5, 9.0], [-48.5, -48.0]
+            ds["DPTH"][:] = np.arange(50.0)
+            ds["PRES"][:] = np.tile(np.arange(50.0), (2, 1))
+            temp = np.tile(25 - np.arange(50.0) / 10, (2, 1))
+            temp[:, 40:] = 9999.99
+            ds["TEMP"][:] = temp
+        return path
+
+    def test_it_is_classified_as_ctd_not_surface(self, grid):
+        f = classify_accession(str(grid.parent))["files"][0]
+        assert f["dataset"] == "CTD"
+
+    def test_its_nonstandard_fill_reads_as_missing(self, grid):
+        casts, _ = read_any(str(grid))
+        temp = casts[0]["df"]["TEMP (Celsius degree)"]
+        assert temp.max() < 30 and int(temp.notna().sum()) == 40

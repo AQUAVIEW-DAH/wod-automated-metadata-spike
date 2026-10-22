@@ -117,8 +117,7 @@ class TestLandingPageResolution:
 
     def test_the_metadata_catalogue_is_asked_first_and_answers_when_the_page_does_not(
             self, fake_ncei, monkeypatch):
-        """NCEI's landing page renders on request and can time out for minutes; the ISO
-        record from the catalogue names the same archive bundle in under a second."""
+        """The landing page can time out; the catalogue's ISO record names the same bundle."""
         real = lrd_module.get_with_retries
 
         def landing_down(url, **kw):

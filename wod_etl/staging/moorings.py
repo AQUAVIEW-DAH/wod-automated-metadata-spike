@@ -1,11 +1,5 @@
-"""A mooring's instruments as WOD MRB profiles: one a day, each instrument's daily mean at its
-depth.
-
-In WOD a moored buoy's profile is "a discrete set of concurrent measurements from the
-instruments at different depths attached to the buoy" (manual p.17), and moored records are
-kept as daily averages -- 15-minute records were "re-converted as daily averages" in 2021
-(p.14, note 6). An accession usually holds a mooring as one file per instrument, each a time
-series at one depth, so a profile is assembled across files:
+"""Build WOD MRB profiles from a mooring's per-instrument files: one profile a day, each
+instrument's daily mean at its depth (manual p.17; p.14, note 6).
 
     from wod_etl.staging import read_instrument, mooring_days, mooring_profiles
 
@@ -14,25 +8,7 @@ series at one depth, so a profile is assembled across files:
     built = mooring_profiles(instruments, days, {"RBRsolo_SN1.nc": 10.0,
                                                  "SBE37_SN2.nc": "pressure"}, latitude=56.84)
 
-What the files say decides, and what they do not say leaves an instrument out:
-
-- **Depth.** An instrument that records pressure is placed by it, day by day (UNESCO 1983 at
-  the mooring's latitude). One that does not is placed by the depth its file states, the
-  depth in its file name, or the mooring's description (`mooring_layout`: a stated depth, or
-  a position along the line fixed by the pressure of an instrument on the same line).
-  Nothing else places it: a level at a guessed depth is worse than no level.
-- **The deployment.** Loggers record air before they go in and after they come out. Only
-  samples within the deployment are averaged; `wet_window` finds when an instrument that
-  records pressure was under water, and `deployment` combines them. A mooring none of whose
-  instruments records pressure is taken as its record without its first and last day --
-  the days a logger may have spent on deck.
-- **A day.** A variable makes a daily mean only for a day whose hours it covers for at least
-  `min_day_fraction` -- a mean of part of a day is biased by the tide and the sun -- counted
-  in hours, so a change of sampling rate does not read as a gap.
-- **The originator's flags.** A value its flag calls bad (bad, fail, missing...) is not
-  averaged; flags whose meanings are not stated are not applied, and that is said.
-
-Records are read in chunks: a logger's tens of millions of samples take seconds.
+Instruments without pressure or a known depth are left out rather than placed at a guess.
 """
 import math
 import re
@@ -105,8 +81,8 @@ def _words(*texts) -> str:
 
 
 def _time(ds):
-    """(time variable name, seconds per unit, epoch seconds of its reference), or None. A
-    calendar other than the standard one is refused: its days are not the sun's."""
+    """(time variable name, seconds per unit, epoch seconds of its reference), or None.
+    Non-standard calendars are refused."""
     import pandas as pd
 
     for name, v in ds.variables.items():
@@ -126,8 +102,7 @@ def _time(ds):
 def _coordinate(ds, axis: str) -> Optional[float]:
     """The instrument's latitude or longitude: a variable (scalar, or one value along a
     length-1 dimension) or a global attribute, west and south negative."""
-    # 'degrees' alone is a heading's unit, not 'degree' + 's'outh: a one-letter side needs
-    # its underscore.
+    # A one-letter side needs an underscore, so 'degrees' (a heading) is not read as south.
     sides = (r"_?(?:north|south)|_[ns]" if axis == "latitude" else r"_?(?:east|west)|_[ew]")
     for name, v in ds.variables.items():
         units = str(getattr(v, "units", "")).lower().replace(" ", "")
@@ -135,7 +110,8 @@ def _coordinate(ds, axis: str) -> Optional[float]:
         if not (std == axis or re.fullmatch(rf"degrees?(?:{sides})", units)) or v.size != 1:
             continue
         value = float(np.ma.filled(np.ma.asarray(v[...], dtype=float), np.nan).ravel()[0])
-        if math.isfinite(value):
+        # An undeclared fill (-9999, 1e35) is no position.
+        if math.isfinite(value) and abs(value) <= (90 if axis == "latitude" else 360):
             return -abs(value) if re.search(r"(?:west|south|_[ws])$", units) else value
     text = _attr(ds, (axis, axis[:3], f"geospatial_{axis[:3]}_min"))
     return parse_coordinate(text) if text else None
@@ -286,8 +262,8 @@ def read_instrument(path) -> Dict[str, Any]:
                         value = float(np.ma.filled(np.ma.asarray(v[...], dtype=float),
                                                    np.nan).ravel()[0])
                         units = str(getattr(v, "units", "")).strip().lower()
-                        if not math.isfinite(value):
-                            continue
+                        if not math.isfinite(value) or value <= -999 or value > 12000:
+                            continue                    # an undeclared fill, not a depth
                         if units in _PRESSURE_DBAR:
                             lat = out["latitude"] if out["latitude"] is not None else 45.0
                             out["depth"] = round(pressure_to_depth(
@@ -352,8 +328,7 @@ def in_water(path, info: Dict[str, Any]) -> Dict[str, Any]:
         cut = tuple(slice(None, None, step) if i == 0 else 0 for i in range(v.ndim))
         sample = np.ma.filled(np.ma.asarray(v[cut], dtype="float64"), np.nan).ravel()
         sample = sample * entry["factor"] - entry["offset"]
-        # Its pressure under water: of the readings above the half-decibar air never reaches,
-        # so a logger that spent most of its record on deck is still read right.
+        # Median of readings above 0.5 dbar, so time spent on deck is ignored.
         under = sample[np.isfinite(sample) & (sample > 0.5)]
         if under.size == 0:
             return none
@@ -370,10 +345,9 @@ def in_water(path, info: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def deployment(windows: Sequence[Optional[Sequence[float]]]) -> Dict[str, Any]:
-    """When a mooring was in the water, from its pressure instruments' wet windows: from the
-    first in to the last out -- one that stopped early does not shorten it. `{"window",
-    "how"}`: how is "pressure", "none" (no instrument records pressure) or "apart" (their
-    windows do not overlap: two deployments, which are two moorings)."""
+    """A mooring's time in the water: first in to last out of its pressure instruments' wet
+    windows. `{"window", "how"}`: how is "pressure", "none" (no pressure instrument) or
+    "apart" (windows do not overlap: two deployments)."""
     wins = [list(w) for w in windows if w]
     if not wins:
         return {"window": None, "how": "none"}
@@ -382,7 +356,7 @@ def deployment(windows: Sequence[Optional[Sequence[float]]]) -> Dict[str, Any]:
     return {"window": [min(w[0] for w in wins), max(w[1] for w in wins)], "how": "pressure"}
 
 
-# A `platform` value that names a kind of platform, not one: not a mooring's id.
+# A generic `platform` value, not a mooring id.
 _GENERIC_PLATFORM = re.compile(r"^(?:moor\w*|buoy|surface buoy|subsurface\w*|fixed\w*|"
                                r"station|platform|unknown|none|n/?a|-)(?:\s+\w+)?$", re.I)
 
@@ -394,18 +368,29 @@ def mooring_id(info: Dict[str, Any]) -> str:
 
 
 def group_moorings(entries: Sequence[Dict[str, Any]]) -> List[Tuple[str, List[Dict[str, Any]]]]:
-    """(label, entries) per mooring, for triage entries (`{"path", "mooring"}`): by the
-    mooring id the files name, wherever they are; else by folder and position -- two
-    moorings in one folder are 0.01 degree or more apart. A group whose records do not
-    overlap in time is two deployments, and is split, each labelled by its first day."""
+    """(label, entries) per mooring for triage entries (`{"path", "mooring"}`): by the
+    mooring id the files name, else by folder and position (0.01 degree). A group whose
+    records do not overlap in time is split per deployment, labelled by its first day."""
     by_id: Dict[str, List[Dict[str, Any]]] = {}
     by_place: List[Tuple[str, Optional[Tuple[float, float]], List[Dict[str, Any]]]] = []
+    loose = []
     for f in sorted(entries, key=lambda m: m["path"]):
-        info = f["mooring"]
-        mid = mooring_id(info)
+        mid = mooring_id(f["mooring"])
         if mid:
             by_id.setdefault(mid, []).append(f)
-            continue
+        else:
+            loose.append(f)
+    # A file naming no mooring joins the mooring id its file name starts with.
+    key = lambda text: re.sub(r"[^a-z0-9]", "", str(text).lower())
+    for f in list(loose):
+        name = key(f["path"].rsplit("/", 1)[-1])
+        mid = next((m for m in sorted(by_id, key=len, reverse=True)
+                    if len(key(m)) >= 4 and name.startswith(key(m))), None)
+        if mid:
+            by_id[mid].append(f)
+            loose.remove(f)
+    for f in loose:
+        info = f["mooring"]
         folder = f["path"].rsplit("/", 1)[0] if "/" in f["path"] else ""
         pos = ((info["latitude"], info["longitude"]) if info.get("latitude") is not None
                and info.get("longitude") is not None else None)
@@ -468,9 +453,8 @@ def daily_means(path, info: Dict[str, Any], window: Optional[Sequence[float]] = 
                 ) -> Dict[int, Dict[str, Any]]:
     """{day number (days since 1970-01-01, UTC): {"samples", "means": {code: mean},
     "coverage": {code: fraction of the day's hours it has a value in}}} for one instrument,
-    from the samples within `window` (epoch seconds). Hours, not samples, so a change of
-    sampling rate is not a gap; an instrument sampling less often than hourly counts its own
-    steps."""
+    from the samples within `window` (epoch seconds). Coverage counts hours (or the
+    instrument's own step if longer), so a change of sampling rate is not a gap."""
     import netCDF4
 
     entries = info["variables"]

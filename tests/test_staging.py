@@ -106,7 +106,7 @@ class TestCleanSentinels:
         assert counts["CDOM :: ***NA"] == 2
 
     def test_below_detection_is_counted_not_substituted(self):
-        """*DL is real information, but WOD has no flag for it. It must not be invented."""
+        """WOD has no below-detection flag, so the value is blanked and counted."""
         out, counts = clean_sentinels([["*DL"]], ["NO3"])
         assert out == [[""]]
         assert counts["NO3 :: *DL"] == 1
@@ -139,9 +139,7 @@ class TestGroupRows:
 
 
 class TestFoldUnitRow:
-    """Originators put the variable on one row and its unit on the next. Unit detection
-    reads the full column name and nothing else, so a units row left in place means every
-    value is silently taken as already-standard."""
+    """Fold a units row into the column names, where unit detection looks for it."""
 
     def test_folds_units_into_names(self):
         cols = ["time (UTC)", "latitude", "water temperature", "chlorophyll"]
@@ -151,7 +149,7 @@ class TestFoldUnitRow:
             "water temperature (degree C)", "chlorophyll (ppb)"]
 
     def test_makes_a_conversion_detectable(self):
-        """The whole point: before folding, mg/L is invisible."""
+        """Before folding, the mg/L unit is invisible."""
         from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion
         assert _detect_unit_conversion("DO", 3) == "none"
         folded = fold_unit_row(["DO"], ["mg/L"])[0]
@@ -211,7 +209,7 @@ class TestCombineOnKey:
         assert rows == [["0", "3.2", "320"]]
 
     def test_disjoint_keys_are_visible_in_the_report(self):
-        """The failure worth catching: a join that 'worked' but shares nothing."""
+        """A join that shares no keys must show in the report."""
         _, rows, info = combine_on_key([
             (["Depth (m)", "Temp"], [["0", "3.2"]]),
             (["Depth (m)", "Oxygen"], [["999", "320"]]),
@@ -236,7 +234,7 @@ class TestCombineOnKey:
 
 class TestWriteStagedCast:
     def test_round_trips_through_phase_one(self, tmp_path):
-        """The point of staging: what it writes must parse as a positioned cast."""
+        """Staged output must parse as a positioned cast."""
         from wod_etl.discovery import fetch_and_peek_file, profile_raw_data
         from wod_etl.mapping import generate_field_mapping, query_wod_spec
 
@@ -268,8 +266,7 @@ class TestWriteStagedCast:
 
 
 class TestCompactTimeFields:
-    """A four-digit HHMM used to parse under '%H%M%S', which reads 2102 as 21:00:02
-    rather than failing. Silent minute corruption on one of the commonest time forms."""
+    """A four-digit time is HHMM (2102 is 21:02), not HHMMSS."""
 
     def test_hhmm_in_a_separate_column(self):
         assert parse_timestamp("20230303", "2102") == dt.datetime(2023, 3, 3, 21, 2)
@@ -289,9 +286,7 @@ class TestCompactTimeFields:
 
 
 class TestReadTableDelimiters:
-    """read_table was csv.reader with the excel dialect, so it was comma-only. A folder of
-    tab-separated one-level-per-file casts came back as one column per row, which reads
-    downstream as a file holding no measurements rather than as the wrong delimiter."""
+    """read_table defaults to commas and sniffs other delimiters when asked."""
 
     def test_comma_is_still_the_default(self, tmp_path):
         p = tmp_path / "c.csv"
@@ -310,7 +305,7 @@ class TestReadTableDelimiters:
         assert rows == [["0", "12.1"], ["10", "11.4"]]
 
     def test_a_tab_file_read_as_csv_collapses_to_one_column(self, tmp_path):
-        """The failure this exists to prevent, pinned so the default cannot drift."""
+        """Pins the comma default."""
         p = tmp_path / "c.dat"
         p.write_text("Depth (m)\tTemp (deg C)\n0\t12.1\n10\t11.4\n")
         cols, _, _ = read_table(p)                      # default comma
@@ -318,9 +313,7 @@ class TestReadTableDelimiters:
 
 
 class TestCombineOnKeyReportsRowsItOverwrites:
-    """A key repeated WITHIN one table overwrote the earlier row and incremented
-    `matched_existing_keys` at the same time -- so the metric that exists to catch a bad
-    join was inflated by the data loss it should have reported."""
+    """A key repeated within one table counts as a duplicate, not as a match."""
 
     def test_a_within_table_duplicate_is_counted_separately(self):
         t1 = (["Depth", "Temp"], [["0", "12.1"], ["0", "12.4"], ["10", "11.0"]])
@@ -340,8 +333,7 @@ class TestCombineOnKeyReportsRowsItOverwrites:
         assert info["per_table"][1]["duplicate_keys_within_table"] == 0
 
     def test_overlap_against_distinct_keys_not_rows(self):
-        """matched/rows read as healthy on a file that overwrites itself; the fix is to
-        divide by distinct_keys, which this makes possible."""
+        """Rows overstate overlap when a table overwrites itself."""
         t1 = (["Depth", "Temp"], [["0", "1"], ["0", "2"], ["0", "3"]])
         t2 = (["Depth", "Sal"], [["0", "34.1"]])
         _, _, info = combine_on_key([t1, t2], key="Depth")

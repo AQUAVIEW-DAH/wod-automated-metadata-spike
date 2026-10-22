@@ -1,16 +1,14 @@
-"""Turn a failure into something a person can act on: what failed, why, and how to fix it.
+"""Turn failures into actionable problems: what failed, why, and how to fix it.
 
-Most of the "why" already exists where the failure happens -- a listing's `hint`, a file's
-`skip_reason`, a verification finding's `action`. This adds the half that only the pipeline
-knows: which key in decisions.toml settles it, or which command to run next.
+Adds what only the pipeline knows: the decisions.toml key that settles it, or the next command.
 """
 import re
 from typing import Any, Dict, Optional
 
-# Per-file stages whose failure will not change on a retry: the bytes are the same, so is the
-# answer. These become a decision for the person instead of a retry loop.
+# Per-file stages whose failure a retry will not change; they need a decision, not a retry.
 DETERMINISTIC_FILE_STAGES = {"sniff_format", "read_any", "mapping", "classify_dataset",
                              "generate_netcdf_ragged", "validate_intermediate_netcdf",
+                             "map_haul", "write_taxa_netcdf", "validate_taxa_netcdf",
                              "unexpected"}
 
 
@@ -65,7 +63,7 @@ def for_file_failure(key: str, stage: str, error: str, staged: bool) -> Dict[str
                + leave_out)
     elif stage in ("sniff_format", "read_any"):
         how = ("It does not read as any table this package knows. If it holds data, find out "
-               "what wrote it (see .claude/skills/wod-etl/reading-unknown-files.md) and stage "
+               "what wrote it (see knowledge/reading_unknown_files.md) and stage "
                "it with a script recipe. " + leave_out)
     elif staged:
         how = ("A recipe wrote this staged file: fix the recipe in decisions.toml (units, "
@@ -78,8 +76,7 @@ def for_file_failure(key: str, stage: str, error: str, staged: bool) -> Dict[str
 
 
 def for_wod_file_failure(name: str, sources, stage: str, error: str) -> Dict[str, Any]:
-    """A WOD file (one dataset, one year) that could not be written from its source files'
-    casts, each of which was written and validated on its own."""
+    """A WOD file (one dataset, one year) that failed although each source file wrote alone."""
     shown = ", ".join(sources[:5]) + (f" and {len(sources) - 5} more" if len(sources) > 5
                                       else "")
     return problem("process", f"{name} could not be written", f"{stage}: {error}",
@@ -87,6 +84,36 @@ def for_wod_file_failure(name: str, sources, stage: str, error: str) -> Dict[str
                    f"which is a bug in wod_etl -- the detail is in run.log. Report it. To write "
                    f"the rest, leave one of its source files out (include = false) and confirm "
                    f"again: {shown}.")
+
+
+def for_haul_failure(key: str, stage: str, error: Any) -> Dict[str, Any]:
+    """A staged haul (or a year's Taxa-Record file) that could not be written."""
+    error = "; ".join(error) if isinstance(error, list) else str(error)
+    return problem("process", f"haul {key} could not be written", f"{stage}: {error}",
+                   "The other hauls were written. Fix the source rows, or set include = false "
+                   "on the source file, then confirm again.", file=key)
+
+
+def taxa_notes(taxa: Dict[str, Any]) -> list:
+    """Non-blocking notes about the Taxa-Records written."""
+    notes = []
+    note = lambda what, why, how: notes.append(problem("process", what, why, how,
+                                                       blocking=False, kind="warning"))
+    if taxa.get("taxa_list_unavailable"):
+        note("WOD's taxa list could not be read, so taxa are written by name only",
+             "the list is fetched from the WOD website",
+             "Confirm again online with --from process to resolve them.")
+    unresolved = taxa.get("unresolved_taxa") or {}
+    if unresolved and not taxa.get("taxa_list_unavailable"):
+        shown = ", ".join(list(unresolved)[:8]) + (" ..." if len(unresolved) > 8 else "")
+        note(f"{len(unresolved)} taxon name(s) not in WOD's taxa list: kept by name", shown,
+             "Nothing to do; check the spelling if one looks wrong.")
+    higher = taxa.get("taxa_resolved_at_higher_rank") or {}
+    if higher:
+        note(f"{len(higher)} taxon name(s) resolved one rank up", ", ".join(list(higher)[:8]),
+             "Nothing to do; the original name is kept.")
+    # Missing Biological Header fields are already reported at review time.
+    return notes
 
 
 def for_finding(finding: Dict[str, Any]) -> Dict[str, Any]:

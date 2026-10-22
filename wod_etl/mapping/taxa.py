@@ -1,21 +1,8 @@
-"""Map one staged haul to WOD's Taxa-Record codes: taxa, life stage, sex, collection fields.
+"""Map a staged haul to WOD Taxa-Record codes: taxa, life stage, sex, collection fields.
 
-The mapping step for biological data (plankton counts, biomass), as `generate_field_mapping`
-is for a profile. `map_haul` takes a haul read by `wod_etl.staging.read_staged_haul` and
-resolves every coded value; the writer is `wod_etl.writers.write_taxa_netcdf`.
-
-WOD identifies a taxon by its Taxa-Record variable number (Table 7a field 1): an ITIS
-Taxonomic Serial Number, or a negative WOD code for groups ITIS cannot represent. Its own
-list of the ones it uses -- `t_1_taxa_list.csv`, ~5000 names with their ITIS number and
-Plankton Grouping Code -- is what a name is resolved against, through the same code-list
-machinery as every other coded field (wod_etl/reference/code_lists.py).
-
-    resolve_taxon("Acartia danae")   # matched, 86086, PGC 4212010
-    resolve_taxon("Acartia spp.")    # matched at genus as written: 86084
-    resolve_taxon("Auxis type-1")    # no 'Auxis type-1' in the list: genus Auxis, flagged
-
-A name resolved at a higher rank than written is never silent: `status` says
-`matched_higher_rank` and `note` says what was dropped. The originator's name is always kept.
+Taxon names are resolved against WOD's taxa list (Table 7a field 1: an ITIS number or a
+negative WOD code). A name resolved at a higher rank is flagged `matched_higher_rank`; the
+originator's name is always kept.
 """
 import re
 from typing import Any, Dict, Optional
@@ -24,7 +11,7 @@ from wod_etl.mapping.generate_field_mapping import parse_header_block
 from wod_etl.mapping.map_metadata import map_metadata
 from wod_etl.reference.code_lists import describe_lookup, lookup_code
 
-# Words that mean "this genus, species not determined" -- the name IS the genus.
+# Suffixes meaning "species not determined": the name is the genus.
 _GENUS_ONLY = re.compile(r"\s+(?:spp?|sp|cf|aff|indet|n\.?\s*sp)\.?\s*$", re.I)
 _MISSING = {"", "na", "n/a", "nan", "none", "-", "--", "unknown", "?"}
 
@@ -71,10 +58,8 @@ def resolve_taxon(name: Any) -> Dict[str, Any]:
 def _higher_rank_candidates(query: str):
     """The name to fall back to when the full name is not in the list.
 
-    'Thunnus obesus' -> 'Thunnus': a species epithet is lower-case, so the genus is the
-    first word. But 'Mysis of Decapoda' is the MYSIS STAGE of a decapod, not the mysid genus
-    Mysis, and 'Zoea of Decapoda' likewise -- when a later word is capitalised, that word is
-    the taxon and the first is a description. Parenthesised qualifiers are ignored.
+    Usually the genus (first word). If a later word is capitalised ('Zoea of Decapoda'), that
+    word is the taxon. Parenthesised qualifiers are ignored.
     """
     words = re.sub(r"\(.*?\)", " ", query).split()
     if len(words) < 2:
@@ -89,8 +74,7 @@ def resolve_taxa_coded(field_id: int, value: Any) -> Dict[str, Any]:
     """A Table 7a coded qualifier -- life stage (5), sex (6), present (7)... -- or None."""
     text = _clean(value)
     if not text:
-        # Same keys as a looked-up result: callers read `summary` and `label` unconditionally,
-        # and a life-stage cell of 'NA' or '-' lands here.
+        # Same keys as a looked-up result; callers read them unconditionally.
         return {"status": "no_value", "code": None, "originator_text": None, "label": None,
                 "summary": f"no value ({str(value).strip()!r} reads as missing)"}
     r = lookup_code("taxa_variable", field_id, text)
@@ -114,9 +98,8 @@ _CODED_RECORD_FIELDS = (5, 6, 7, 8, 9, 16, 17, 26)
 def map_haul(staged: Dict[str, Any]) -> Dict[str, Any]:
     """One staged haul as the writer needs it: contract, biological header, records.
 
-    `staged` is what `read_staged_haul` returns. The contract carries the same keys a
-    profile's does -- secondary headers with code lookups, character data, coordinates,
-    notes, sources -- so the writers share their helpers.
+    `staged` comes from `read_staged_haul`. The contract has the same keys as a profile's,
+    so the writers share helpers.
     """
     parsed = parse_header_block(staged["header_text"])
     meta = map_metadata(staged["header_text"], columns=[])

@@ -1,4 +1,4 @@
-"""Phase 2: Schema & Code Translation skills."""
+"""Phase 2: schema and code translation -- columns and metadata to WOD codes."""
 
 from .query_wod_spec import (query_wod_spec, match_variable, explain_column,
                              extract_unit, extract_scale, resolve_column,

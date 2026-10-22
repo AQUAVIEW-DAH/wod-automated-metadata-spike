@@ -1,20 +1,7 @@
-"""`wod-etl web`: the two-step workflow in a browser, for one person on their own machine.
+"""`wod-etl web`: run and confirm accessions from a local browser page.
 
-    uv run wod-etl web            # http://127.0.0.1:8000
-
-One page: the accession to run at the top with Run and Confirm, the stages across it, the
-accession's files on the left with what each holds and the decision on it, decisions.toml
-in the middle to review and save, and the WOD files written on the right. A run started here
-and one started in a terminal read and write the same `data/runs/<accession>/`.
-
-Each Run and Confirm is the `wod-etl` command run as a child process, its output kept as the
-page's activity log: the pipeline runs on that process's main thread -- HDF5 prints a page of
-diagnostics for every file created on any other -- and a crash in a data library ends the
-command, not the page. One command runs at a time, to keep the page simple; the
-per-accession `.lock` keeps a terminal run and this one apart.
-
-Local only: there is no login, and it reads and writes the data folders. It binds to
-127.0.0.1 unless told otherwise.
+Each command runs as a child `wod-etl` process, one at a time, so a crash cannot take down
+the server. Runs share `data/runs/<accession>/` with the terminal. There is no login.
 """
 import datetime as dt
 import os
@@ -37,8 +24,9 @@ from wod_etl.orchestration import pipeline
 from wod_etl.orchestration import run_manifest
 from wod_etl.orchestration.pipeline import (CONFIRM_STAGES, RUN_STAGES, STAGES, Workspace,
                                             load_state)
+from wod_etl.writers import is_output_file_name, is_taxa_file_name
 
-UI_DIR = Path(__file__).with_name("web_ui")
+UI_DIR = Path(__file__).with_name("static")
 # An accession names folders: nothing that could climb out of them.
 _ACCESSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
@@ -65,12 +53,14 @@ def _busy() -> Optional[Dict[str, Any]]:
 
 def _command_line(command: str, *args: str) -> List[str]:
     """The `wod-etl` command a job runs, as a process of its own."""
-    return [sys.executable, "-m", "wod_etl.orchestration.cli", command, *args]
+    return [sys.executable, "-m", "wod_etl", command, *args]
 
 
 def _start(accession: str, command: str, argv: List[str]):
-    """Run `argv` as a child process in the background, if nothing else is running; its
-    output, line by line, is the job's activity."""
+    """Start `argv` as a background child process unless a job is running.
+
+    Its output lines become the job's activity log.
+    """
     global _job
     with _job_lock:
         running = _busy()
@@ -187,8 +177,7 @@ def _report_stage(ws: Workspace, name: str, job) -> Dict[str, Any]:
 
 @app.get("/api/files/{accession}")
 def files(accession: str):
-    """The accession's files, under the heading their decision puts them: what each holds,
-    whether it goes in, and which decisions.toml entry says so."""
+    """The accession's files grouped by decision section, each with its decision."""
     ws = _workspace(accession)
     state = load_state(ws)
     run = pipeline.Run(ws, state.get("input") or "", state, lambda _: None)
@@ -210,6 +199,8 @@ def files(accession: str):
             # A mooring's logger: where wod-etl places it, and how.
             "depth": mooring.get("depth") if mooring.get("placed_by") else None,
             "depth_note": mooring.get("depth_note"),
+            # A plankton table wod-etl can write as Taxa-Records (not one it proposes out).
+            "taxa": bool(f.get("taxa")) and not f["taxa"].get("missing"),
             "size": path.stat().st_size if path.is_file() else None})
     headings = dict(dec.SECTIONS)
     return {"accession": accession, "root": str(root), "decisions_error": error,
@@ -229,8 +220,7 @@ def get_decisions(accession: str):
 @app.put("/api/decisions/{accession}")
 def put_decisions(accession: str, text: str = Body(..., embed=True),
                   mtime: Optional[int] = Body(None, embed=True)):
-    """Save the reviewed decisions -- only valid TOML, never over a newer file, and not while
-    a command is running (a run adds entries to it)."""
+    """Save reviewed decisions: valid TOML only, not over a newer file, not during a command."""
     ws = _workspace(accession)
     p = ws.decisions_path
     if _busy():
@@ -257,14 +247,26 @@ def outputs(accession: str):
     process = (state.get("stages", {}).get("process") or {}).get("outputs") or {}
     verify = (state.get("stages", {}).get("verify") or {}).get("outputs") or {}
     about = {f.get("name"): f for f in process.get("files") or []}
+    taxa = {f.get("name"): f for f in process.get("taxa_files") or []}
     out = []
     for p in pipeline.wod_files(ws):
+        if p.name in taxa or is_taxa_file_name(p.name, accession):
+            f = taxa.get(p.name, {})
+            out.append({"name": p.name, "size": p.stat().st_size, "kind": "taxa",
+                        "dataset": "OSD", "year": f.get("year"), "hauls": f.get("hauls"),
+                        "records": f.get("records"), "resolved": f.get("resolved"),
+                        "higher_rank": f.get("higher_rank"), "by_name": f.get("by_name"),
+                        "sources": f.get("sources") or []})
+            continue
         f = about.get(p.name, {})
-        out.append({"name": p.name, "size": p.stat().st_size, "dataset": f.get("dataset"),
-                    "year": f.get("year"), "casts": f.get("casts"),
+        out.append({"name": p.name, "size": p.stat().st_size, "kind": "profiles",
+                    "dataset": f.get("dataset"), "year": f.get("year"), "casts": f.get("casts"),
                     "observations": f.get("observations"),
                     "sources": [s.get("key") for s in f.get("sources") or []]})
+    notes = process.get("taxa") or {}
     return {"accession": accession, "folder": str(ws.processed_dir), "files": out,
+            "taxa_not_stated": list(notes.get("missing_biological_fields") or {}) or None,
+            "taxa_list_unavailable": bool(notes.get("taxa_list_unavailable")),
             "verified": verify.get("output_verified"),
             "finding_counts": verify.get("finding_counts"),
             "written_at": (state.get("stages", {}).get("process") or {}).get("finished_at"),
@@ -274,10 +276,8 @@ def outputs(accession: str):
 @app.get("/api/outputs/{accession}/{name}")
 def download(accession: str, name: str):
     ws = _workspace(accession)
-    from wod_etl.writers import is_wod_file_name
-
     path = ws.processed_dir / name
-    if not is_wod_file_name(name, accession) or not path.is_file():
+    if not is_output_file_name(name, accession) or not path.is_file():
         raise HTTPException(404, f"no WOD file {name!r} for {accession}")
     return FileResponse(path, media_type="application/x-netcdf", filename=name)
 

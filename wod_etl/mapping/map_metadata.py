@@ -1,28 +1,7 @@
-"""Map everything in a file that is NOT a measurement: cast metadata, per-variable metadata,
-and the originator's own quality flags.
+"""Map a file's non-measurement content to WOD fields.
 
-`generate_field_mapping` decides what each *measurement* column is. This decides what
-everything else is. Without it, a file's bottom depth, probe type, ship, wind speed,
-sampling gear, measurement scale, originator units and originator flags are all dropped --
-they map to no Table 3a code, so they land in `unmapped_columns` and vanish. WOD has fields
-for every one of them.
-
-Four namespaces, and they are separate (see knowledge/cast_structure.md):
-
-    Table 4a  secondary headers            describe the CAST      -> s_<id>_<name>
-    Table 5a  variable specific headers    describe ONE VARIABLE  -> v_<id>_<name>
-    Table 6a  biological headers           plankton collection    -> b_<id>_<name>
-    Table 7a  taxa variables               plankton observations  -> t_<id>_<name>
-
-Only the first two are produced here; the plankton pair needs a record model this pipeline
-does not write (knowledge/plankton_biomass.md).
-
-    from wod_etl.mapping import map_metadata
-    meta = map_metadata(header_text=hdr, columns=list(df.columns), df=df)
-
-Metadata arrives three ways and all three are handled: as `Key: value` lines in a header
-block, as a whole column that is constant down the cast (a `Bottom Depth` column), and as
-part of a measurement column's own name (`[ITS-90, deg C]` carries a scale and a unit).
+Cast metadata (Table 4a), per-variable metadata (Table 5a), character data and originator
+flags, read from header lines, constant columns and measurement column names.
 """
 import re
 from typing import Any, Dict, List, Optional
@@ -39,19 +18,12 @@ from wod_etl.reference import (code_table_link, variable_specific_headers,
 _NUM = r"[-+]?\d+(?:\.\d+)?"
 
 # ------------------------------------------------------------- Table 4a
-# Cast metadata. The key is the secondary header ID; the value is what its key looks like in
-# a header line or a column name. Far more than the pipeline used to recognise, because
-# every one of these appears in real submissions and every one was previously dropped.
-#
-# Ordered dict semantics matter: the first pattern that matches a line claims it, so more
-# specific keys come before the ones they contain ('sea surface temperature' before
-# 'temperature', 'wave height' before 'height').
+# Cast metadata: secondary header ID -> key pattern. The first match claims a line, so
+# specific keys come first ('sea surface temperature' before 'temperature').
 SECONDARY_HEADER_PATTERNS: Dict[int, str] = {
     1:  r"(?:accession(?:[_\s]*(?:no|num|number))?|nodc[_\s]*accession|ncei[_\s]*accession)",
     2:  r"(?:project|programme|program|expedition)",
-    # NOT 'cruise'. A cruise identifier (STOCS85A, kah1104, SHU1505) names a voyage, not a
-    # vessel, and header 3 is a coded vessel. It belongs to the character data section --
-    # see CHARACTER_DATA_PATTERNS.
+    # Not 'cruise': a cruise code names a voyage, not a vessel (see CHARACTER_DATA_PATTERNS).
     3:  r"(?:platform|ship(?:[_\s]*name)?|vessel|callsign|call[_\s]*sign)",
     4:  r"(?:institut(?:e|ion)|agency|laborator(?:y|ies)|originator[_\s]*institution|data[_\s]*cent(?:er|re))",
     5:  r"(?:cast(?:[_\s]*(?:no|num|number|id))?|tow[_\s]*(?:no|num|number)|profile[_\s]*(?:no|number|id)|haul[_\s]*(?:no|number))",
@@ -116,8 +88,7 @@ SECONDARY_HEADER_PATTERNS: Dict[int, str] = {
 }
 
 # ------------------------------------------------- character data (p.30)
-# The originator's own identifiers that are not secondary headers: the cruise code and the
-# principal investigator. Manual p.30, "Character data and principal investigator".
+# Originator identifiers that are not secondary headers: cruise code and PI (manual p.30).
 CHARACTER_DATA_PATTERNS: Dict[str, str] = {
     "originator_cruise_id": r"(?:originator'?s?[_\s]*)?cruise(?:[_\s]*(?:id|code|name|no|"
                             r"num|number))?",
@@ -126,30 +97,24 @@ CHARACTER_DATA_PATTERNS: Dict[str, str] = {
                               r"chief[_\s]*scientist|creator[_\s]*name)",
 }
 
-# Keys in a staged header that are not metadata to place: coordinates are parsed by
-# generate_field_mapping, and Source lines are provenance it collects.
+# Staged-header keys that generate_field_mapping handles (coordinates, time, sources).
 _NOT_METADATA_KEY = re.compile(
     r"^(?:lat|latitude|lon|long|longitude|date|time|time[_\s]*zone|tz|datetime|year|month|"
     r"day|hour|minute|source(?:[_\s]*file)?s?|history)$", re.IGNORECASE)
 
-# Keys that describe a Sea-Bird .cnv file's own layout and processing, which read_any rewrites
-# as `Key: value` lines: column definitions, spans, the fill value, each SBE Data Processing
-# module's settings. They are not originator metadata, and reported as unresolved they
-# buried the few keys that are under a dozen notes saying a pattern was missing.
+# Sea-Bird .cnv layout and processing keys (rewritten by read_any): not originator metadata.
 _INSTRUMENT_FILE_KEY = re.compile(
     r"^(?:nquan|nvalues|units|name\s*\d+|span\s*\d+|interval|start_time|bad_flag|file_type|"
     r"sensor\s*\d+|filename|software\s+version|system\s+upload\s+time|"
     r"(?:datcnv|filter|alignctd|celltm|loopedit|derive|binavg|wildedit|sectionx|strip|"
     r"split|bottlesum|w_filter|seasave|translate)_\w+)$", re.IGNORECASE)
 
-# Secondary headers whose value is a number, not an identifier or a code. Everything else
-# stays a string: an accession, a station or a WMO number is an identifier, and '0287423'
-# must not become 287423.
+# Secondary headers whose value is a number; identifiers stay strings ('0287423').
 NUMERIC_SECONDARY_HEADERS = {8, 10, 11, 15, 17, 20, 22, 23, 24, 25, 28, 30, 31, 36, 41, 45,
                              46, 47, 48, 49, 87, 88}
 
 # ------------------------------------------------------------- Table 5a
-# Per-variable metadata. These attach to ONE measurement, not to the cast.
+# Per-variable metadata, attached to one measurement rather than the cast.
 VARIABLE_HEADER_PATTERNS: Dict[int, str] = {
     3:  r"(?:scale)",
     5:  r"(?:instrument|sensor(?:[_\s]*(?:type|model))?|analy[sz]er)",
@@ -166,9 +131,7 @@ VARIABLE_HEADER_PATTERNS: Dict[int, str] = {
     24: r"(?:\bmode\b|data[_\s]*mode|delayed[_\s]*mode)",
 }
 
-# A column whose name says it flags another column. Group 'var' is the variable it flags.
-# WOD keeps originator flags as-is (secondary header 96) rather than translating them: they
-# are on the submitter's scale, not WOD's, and mapping one onto Table 12 invents meaning.
+# A column that flags another column; group 'var' is the flagged variable.
 _FLAG_SUFFIX = re.compile(
     r"^(?P<var>.+?)[\s_\-]*(?:qc|q_?c|qf|quality(?:[\s_]*(?:flag|control))?|flags?|"
     r"qualit[ye]|qual)$", re.IGNORECASE)
@@ -196,15 +159,9 @@ def map_metadata(
 ) -> Dict[str, Any]:
     """Every non-measurement fact in a file, placed in the WOD field that holds it.
 
-    header_text   -- the file's `Key: value` header block
-    columns       -- the data column names
-    df            -- the data itself; needed to read a metadata COLUMN's value and to tell a
-                     constant column (metadata) from a varying one (a measurement)
-    dataset_code  -- the resolved WOD dataset, recorded for context
-
-    Returns secondary_headers, variable_specific_headers, metadata_columns,
-    originator_flags, and unresolved -- everything that looked like metadata and was not
-    placed, which is what to read when something has gone missing.
+    `df` is needed to read metadata column values and tell constant columns from measurements.
+    Returns secondary_headers, variable_specific_headers, metadata_columns, originator_flags,
+    character_data and unresolved (metadata that could not be placed).
     """
     columns = [str(c) for c in (columns or [])]
     out: Dict[str, Any] = {
@@ -229,32 +186,19 @@ def map_metadata(
 
 
 # ------------------------------------------------------------ header block
-# A metadata block writes `key = value` in one of two shapes, and only the first was ever
-# parsed. The second is what WOD's own CSV export uses, and what several originators copy:
+# Delimited metadata lines, as in WOD's CSV export:
 #
-#     Platform     ,,           5423.,OCL code,KAHAROA (R/V; call sign ZM7552; built 1981),
 #     Bottom depth ,,              36,meters,,
 #     Instrument   ,Temperature,  464.,WOD code,CTD: SBE 37-IM MicroCAT,
-#     uncalibrated ,Salinity,       1.,,,
 #
-# Column 0 is the key, column 2 the value, and the rest a unit or code system plus a
-# description. **Column 1 is the variable the key applies to**, and that is what makes the
-# layout worth parsing properly: empty means the key describes the CAST (Table 4a), named
-# means it describes ONE VARIABLE (Table 5a) and says which.
-#
-# Read with the `key[:=\s]+value` rule instead, the value stops at the first comma and
-# captures a fragment of the LABEL -- 'Platform' yielded 'ZM7552' out of the parenthetical
-# description, 'Accession Number' yielded the word 'Number'. Three headers, all three wrong,
-# and every per-variable key missed, with no sign anything was off.
+# Column 0 is the key, column 2 the value, then a unit or code system and a description.
+# Column 1 names the variable: empty for cast metadata (Table 4a), set for Table 5a.
 _DELIMITED_HEADER = re.compile(r"^\s*([^,\t]{2,48}?)\s*[,\t]\s*([^,\t]{0,48}?)\s*[,\t](.*)$")
 
-# 'NODC code', 'OCL code', 'WOD code' in the field after the value say the value is ALREADY a
-# code in a published list -- worth recording, because it means no lookup is needed and no
-# code should be invented for it.
+# A code system after the value ('OCL code') means the value is already a code.
 _CODE_SYSTEM = re.compile(r"\b(NODC|OCL|WOD|WMO|ISO|NCEI)\s*code\b", re.IGNORECASE)
 
-# Keys that are coordinates or time. They are parsed elsewhere and would otherwise flood
-# `unresolved` with things that are not missing at all.
+# Coordinate and time keys, parsed elsewhere.
 _COORDINATE_KEY = re.compile(
     r"^(lat|latitude|lon|long|longitude|year|month|day|hour|minute|second|date|time|"
     r"datetime|julian|yearday|depth|pressure)\b", re.IGNORECASE)
@@ -278,31 +222,26 @@ def _from_header_block(header_text: str, out: Dict[str, Any]) -> None:
 
         placed_keys, spans = set(), []
         for sec_id, key_pat in SECONDARY_HEADER_PATTERNS.items():
-            # The key must start the line or follow a delimiter or a column gap -- never sit
-            # mid-sentence, where any English use of 'cast' or 'station' would match. The
-            # value runs to the end of the line, a delimiter, or a 2+ space column gap.
+            # The key starts the line or follows a delimiter or column gap, never mid-sentence.
+            # The value runs to the end of the line, a delimiter, or a 2+ space gap.
             m = re.search(rf"(?:^|[,;|]|\s{{2,}})\s*#?\s*({key_pat})\b(\s*[:=]\s*|\s+)"
                           rf"([^\s,;|][^,;|]*?)(?=\s{{2,}}|[,;|]|$)", line, re.IGNORECASE)
             if not m:
                 continue
             key, value = m.group(1).strip(), m.group(3).strip().strip("\"'")
-            # 'Weather observer: K.' is not header 26 'Weather' = 'observer: K.'. A key joined
-            # to its value by a bare space is only that when the value holds no separator
-            # of its own; otherwise the real key is longer than the pattern matched.
+            # A space-joined value holding ':' or '=' means a longer key ('Weather observer:').
             if not re.search(r"[:=]", m.group(2)) and re.search(r"[:=]", value):
                 continue
             if _NOT_METADATA_KEY.match(key) or _character_data_key(key):
                 continue
-            # One key, one header: 'Cast duration: 30' must not also be read as a cast
-            # number 'duration: 30' by the shorter pattern that matches its first word.
+            # One key, one header: 'Cast duration' must not also match 'cast'.
             if any(a <= m.start(1) < b or m.start(1) <= a < m.end(1) for a, b in spans):
                 continue
             spans.append((m.start(1), m.end(3)))
             placed_keys.add(_norm_key(key))
             held = out["secondary_headers"].get(str(sec_id))
             if held is not None:
-                # A second key claiming a header that is already held used to vanish here
-                # without a word. It is recorded, like every other key that is not placed.
+                # A conflicting second key for a held header is recorded as unresolved.
                 if held.get("value") != _coerce(value, sec_id):
                     out["unresolved"].append({
                         "key": key, "value": value, "variable": None,
@@ -322,13 +261,9 @@ def _from_header_block(header_text: str, out: Dict[str, Any]) -> None:
         _from_key_value_line(line, placed_keys, out)
 
 
-# `Key: value` as a staged header writes it, possibly several per line separated by a
-# column gap. Only a colon or equals sign counts here: the pattern pass above also accepts a
-# bare space, which is right for a KNOWN key and far too loose for an unknown one.
-# A value runs to the next `Key:` (after a delimiter or a column gap), a `;` or `|`, or the
-# end of the line. A comma ends it only before another key: `LAT: 61.9, LON: -172.2` is two
-# pairs, but `title: CTD profiles from LeConte Bay, Alaska, August 2016` is one -- cut at its
-# first comma, the title and every citation lost the rest of themselves.
+# `Key: value` pairs, possibly several per line; unknown keys need ':' or '='. A value ends
+# at the next key, `;`, `|` or end of line. A comma ends it only before another key:
+# `LAT: 61.9, LON: -172.2` is two pairs, a title containing commas is one.
 _KEY_VALUE = re.compile(
     r"(?:^|[,;|]|\s{2,})\s*#?\s*([A-Za-z][A-Za-z0-9 _.'/()&-]{0,47}?)\s*[:=]\s*"
     r"(.*?)\s*(?=(?:\s{2,}|[,;|]\s*)[A-Za-z][A-Za-z0-9 _.'/()&-]{0,47}?\s*[:=]|[;|]|$)")
@@ -346,16 +281,11 @@ def _character_data_key(key: str) -> Optional[str]:
 
 
 def _from_key_value_line(line: str, placed_keys, out: Dict[str, Any]) -> None:
-    """Every `Key: value` on a line that the secondary-header pass did not place.
+    """Place each `Key: value` on a line that the secondary-header pass did not place.
 
-    Before this, a header line whose key matched no Table 4a pattern disappeared: no
-    secondary header, no entry in `unresolved`, nothing. A staged `# Instrument: SBE ...`
-    and `# Cruise: SHU1505` both went that way. Now each lands somewhere a reader will see:
-    the character data, a per-variable header for every measured variable, or
-    `unresolved`.
+    Each goes to character data, a cast-level variable header, or `unresolved`.
     """
-    # A station's position line places its `Depth:` as the bottom depth (header 10, read by
-    # generate_field_mapping) -- not a key without a WOD field.
+    # On a station position line, `Depth:` is the bottom depth (generate_field_mapping).
     position_line = bool(re.search(r"\blat(?:itude)?\s*[:=]", line, re.IGNORECASE)
                          and re.search(r"\blon(?:g(?:itude)?)?\s*[:=]", line, re.IGNORECASE))
     for m in _KEY_VALUE.finditer(line):
@@ -382,9 +312,7 @@ def _from_key_value_line(line: str, placed_keys, out: Dict[str, Any]) -> None:
         var_id = next((vid for vid, pat in VARIABLE_HEADER_PATTERNS.items()
                        if _key_matches(key, pat)), None)
         if var_id is not None:
-            # Said once for the whole cast -- '# Instrument: SBE 911plus' -- so it applies to
-            # every measured variable. A per-variable value, where one differs, belongs in
-            # the delimited form that names the variable in column 1.
+            # Stated once for the cast, so it applies to every measured variable.
             out["cast_level_variable_headers"].setdefault(str(var_id), {
                 "name": (variable_specific_headers().get(var_id) or {}).get("name", key),
                 "value": value, "originator_key": key, "evidence": evidence,
@@ -423,14 +351,11 @@ def _apply_cast_level_variable_headers(columns: List[str], out: Dict[str, Any]) 
 def _delimited_pair(line: str):
     """A `key,variable,value,...` line as a dict, or None if the line is not one.
 
-    Needs at least three columns. A bare `key,value` is refused: a table's column header row
-    has that shape too, and reading `Depth,Temp,Sal` as a metadata pair is worse than missing
-    the key.
+    Needs at least three columns: a bare `key,value` could be a table's column header row.
     """
     if _BLOCK_MARKER.match(line):
         return None
-    # `title: CTD profiles from LeConte Bay, Alaska, August 2016` is one key and its value,
-    # commas and all -- read as `key,variable,value` it became title = 'August 2016'.
+    # `key: a, b, c` is one key and value, commas and all.
     if re.match(r"^\s*#?\s*[A-Za-z][\w .()/-]{0,47}?\s*[:=]\s*\S", line) and \
             line.find(":") < line.find(","):
         return None
@@ -442,18 +367,13 @@ def _delimited_pair(line: str):
         return None
 
     rest = [f.strip() for f in m.group(3).split(",")]
-    # The value is column 2, not "the next non-empty column". Scanning forward past an empty
-    # value slot picks up the code-system label instead: `Accession Number ,, ,NODC code,,`
-    # has no accession number in it, and reported one reading 'NODC code'.
+    # The value is column 2 even when empty; scanning forward would pick up the code system.
     value = rest[0] if rest else ""
     if not value:
         return {"key": key, "variable": m.group(2).strip() or None, "value": None,
                 "unit": None, "code_system": None, "description": None, "blank": True}
 
-    # The two columns after the value are, in this export's order, a unit OR a code system,
-    # then a description. Deciding per field on length instead put a short description in the
-    # unit slot: 'CTD: SBE 37-IM MicroCAT' is 23 characters and became the unit of a probe
-    # type, which has no unit at all.
+    # After the value: a unit or code system, then a description.
     tail = [f for f in rest[1:] if f]
     code_system = unit = description = None
     if tail:
@@ -471,11 +391,7 @@ def _delimited_pair(line: str):
 
 
 def _key_matches(key: str, pattern: str) -> bool:
-    """Does an isolated metadata key name this header?
-
-    A search, not a full match: the key is already isolated to its own column, so there is no
-    prose for a loose match to catch, and 'Originators Station ID' has to reach header 7.
-    """
+    """Whether an isolated metadata key names this header (a search, not a full match)."""
     return bool(re.search(rf"\b{pattern}\b", key.replace("_", " "), re.IGNORECASE))
 
 
@@ -532,9 +448,7 @@ def _place_pair(pair, line, names, out) -> None:
         if pair["description"]:
             entry["description"] = pair["description"]
         if pair["code_system"]:
-            # The value is already a code in a published list. Saying so stops a reader
-            # treating '464.' as a free-text probe name, or looking up a code that is the
-            # answer already.
+            # The value is already a published code; no lookup needed.
             entry["code_system"] = pair["code_system"]
             entry["value_is_already_a_code"] = True
 
@@ -542,9 +456,8 @@ def _place_pair(pair, line, names, out) -> None:
         if held is None:
             out["secondary_headers"][str(sec_id)] = entry
             return
-        # Two keys claim one header. Prefer the one whose value is a published code: for
-        # header 3, 'Originators Cruise ID = kah1104' and 'Platform = 5423. (OCL code)' both
-        # match, and WOD's platform code is the second. The loser is recorded, never dropped.
+        # Two keys claim one header: prefer a published code, else the first seen. The other
+        # is recorded as unresolved.
         winner, loser = ((entry, held) if entry.get("value_is_already_a_code")
                          and not held.get("value_is_already_a_code") else (held, entry))
         out["secondary_headers"][str(sec_id)] = winner
@@ -586,12 +499,9 @@ def _coerce(value: str, sec_id: int):
 
 # ---------------------------------------------------------------- columns
 def _from_columns(columns: List[str], df, out: Dict[str, Any]) -> None:
-    """A whole column can BE a secondary header: `Bottom Depth (m)` is header 10.
+    """Map columns that are secondary headers (`Bottom Depth (m)` is header 10).
 
-    The test is that the column carries no WOD variable code and its name matches a
-    secondary-header key. Its value is taken only when it is constant down the cast -- a
-    varying 'bottom depth' along an underway track is a per-level measurement WOD has no
-    place for, and collapsing it to one number would be a fabrication.
+    A value is recorded only when the column is constant down the cast.
     """
     names = wod_secondary_headers()
     for col in columns:
@@ -618,8 +528,7 @@ def _from_columns(columns: List[str], df, out: Dict[str, Any]) -> None:
                     f"secondary header describes the whole cast; keep the column in the "
                     f"staged copy and split the file per cast if the variation is between "
                     f"casts rather than within one.")
-            # An existing header-block value wins: it was stated about the cast, while a
-            # column value is inferred from the data.
+            # A header-block value wins over one inferred from a column.
             existing = out["secondary_headers"].get(str(sec_id))
             if existing and existing.get("value") not in (None, ""):
                 entry["superseded_by"] = existing["source"]
@@ -652,11 +561,9 @@ def _column_value(df, col):
 
 # ------------------------------------------------------ measurement names
 def _from_column_names(columns: List[str], out: Dict[str, Any]) -> None:
-    """A measurement column's own name carries per-variable metadata.
+    """Recover per-variable metadata from measurement column names.
 
-    `t090C: Temperature [ITS-90, deg C]` states a scale (variable specific header 3) and the
-    originator's unit (header 8). Both are dropped by name normalisation -- which is correct
-    for MATCHING and wrong for recording, so they are recovered here.
+    `Temperature [ITS-90, deg C]` gives a scale (header 3) and the originator's unit (header 8).
     """
     variables = wod_variables()
     for col in columns:
@@ -672,8 +579,7 @@ def _from_column_names(columns: List[str], out: Dict[str, Any]) -> None:
         if scale:
             headers["3"] = {"name": "Scale", "value": scale,
                             "source": f"column name '{col}'"}
-        # Table 5a header 17: a nitrate column that is really nitrate + nitrite. This is how
-        # WOD records the combination, and without it the two are indistinguishable.
+        # Table 5a header 17: a nitrate column that is really nitrate + nitrite.
         if code == 8 and re.search(r"nitrite", str(col), re.IGNORECASE):
             headers["17"] = {"name": "Contains nitrite", "value": 1,
                              "source": f"column name '{col}'",
@@ -692,16 +598,11 @@ def _from_column_names(columns: List[str], out: Dict[str, Any]) -> None:
 def _find_originator_flags(columns: List[str], out: Dict[str, Any]) -> None:
     """Pair each originator quality-flag column with the variable it flags.
 
-    Kept verbatim, never translated. The submitter's scale is not WOD Table 12 -- an
-    originator's '1' may mean good where WOD's 1 means a failed range check -- so mapping one
-    onto the other invents meaning. WOD's own answer is secondary header 96, which names the
-    flag SET so a reader can look the scheme up:
-    https://www.ncei.noaa.gov/access/world-ocean-database/CODES/s_96_origflagset.html
+    Flags are kept verbatim, not translated to Table 12; secondary header 96 names the
+    flag set.
     """
     by_norm = {normalize_name(c): c for c in columns}
-    # A flag column names its variable plainly ('Temperature_QC') while the measurement
-    # column may be an instrument export ('t090C: Temperature [ITS-90, deg C]'), so a
-    # name-to-name match misses. Matching on the resolved WOD code instead pairs them.
+    # Also pair on the resolved WOD code, since flag and measurement names often differ.
     by_code = {}
     for c in columns:
         code = match_variable(c)
@@ -749,11 +650,7 @@ def _find_originator_flags(columns: List[str], out: Dict[str, Any]) -> None:
 
 # ------------------------------------------------------------ code tables
 def _attach_code_tables(out: Dict[str, Any]) -> None:
-    """Add the published code list to every field that has one.
-
-    A coded metadata value is unusable without its code list, and the manual publishes those
-    online rather than in the PDF -- so the link is the answer, not a convenience.
-    """
+    """Add the published code list link to every coded field."""
     for sid, entry in out["secondary_headers"].items():
         link = code_table_link("secondary_header", int(sid))
         if link:
@@ -773,12 +670,10 @@ def _attach_code_tables(out: Dict[str, Any]) -> None:
 
 
 def _resolve_codes(out: Dict[str, Any]) -> None:
-    """Look every coded value up in its published list, and say what was found.
+    """Look up every coded value in its published list.
 
-    A coded field is written as a code only when its value is one: a number already, or text
-    that names exactly one entry. Anything else keeps the originator's text, and
-    `code_lookup` says why -- ambiguous, no entry, list unavailable -- so the writer can put
-    the text beside the field rather than in it.
+    A value becomes a code only if it is a number or names exactly one entry; otherwise the
+    originator's text is kept and `code_lookup` says why.
     """
     from wod_etl.reference.code_lists import lookup_code
 
@@ -805,21 +700,3 @@ def _apply_lookup(entry: Dict[str, Any], result: Dict[str, Any]) -> None:
     if result.get("status") == "matched":
         entry["originator_value"] = entry["value"]
         entry["value"] = result["code"]
-
-
-if __name__ == "__main__":
-    import json
-
-    import pandas as pd
-
-    frame = pd.DataFrame({
-        "Depth (m)": [0, 10, 25],
-        "t090C: Temperature [ITS-90, deg C]": [15.8, 15.4, 14.1],
-        "Temperature_QC": [1, 1, 3],
-        "Nitrate + Nitrite (umol/kg)": [0.2, 0.4, 1.1],
-        "Bottom Depth (m)": [2500, 2500, 2500],
-        "Conductivity (S/m)": [4.41, 4.38, 4.27],
-    })
-    header = ("CRUISE: STOCS85A\nSTATION: 001\nPROBE TYPE: T-7\n"
-              "WIND SPEED: 12.5\nWATER SAMPLER: Niskin\nACCESSION: 0287423")
-    print(json.dumps(map_metadata(header, list(frame.columns), frame, "CTD"), indent=2))
