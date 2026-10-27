@@ -125,6 +125,8 @@ in `table_12_qc_flags.json`.
 - Alkalinity and DIC stay per volume: µmol/kg for them is a unit to convert, not the standard.
 - Equal to the standard, so left alone: chlorophyll in mg/m³, air pressure in hPa,
   oxygen and nutrients already in µmol/kg. Fluorescence in RFU or volts is not a concentration.
+- Chlorophyll in mg/l is × 1000. In a molar unit it is not written: Table 3b gives no molar
+  mass to convert it to µg/l.
 - The originator's unit goes in variable header 8 (`v_8_orig_units`) only when it differs
   from the standard; a depth unit other than metres goes in secondary header 95.
 - Unit text is compared after folding typographic forms (`µmol kg−1`, `μmol/kg`).

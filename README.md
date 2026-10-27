@@ -147,4 +147,5 @@ it with `WOD_PROJECT_ROOT`.
 | WOD QC | Off by default (`WOD_RUN_QC=1` turns it on). The originator's flags are always kept verbatim. |
 | Below-detection values | Become missing (Table 12 has no flag for them). The count is reported. |
 | `seawater_density` | Per-volume values are converted with WOD's constant 1025 kg/m³ (manual p.15), not the sample's own density. Every file that uses it says so. |
+| Nutrients in mass units | Phosphate, silicate and nitrate in mg/l are not converted: they are written as given under µmol/kg, with the originator's unit recorded. Range checks do not catch it. Chlorophyll in a molar unit is not written (no molar mass in Table 3b). |
 | Web page | No cancel button and no accession-id field. Use `--accession-id` in a terminal. |

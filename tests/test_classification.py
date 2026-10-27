@@ -264,6 +264,24 @@ class TestProcessAccessionWithoutBeingToldTheDataset:
                                 resume=False)
         assert any("Conductivity" in k for k in res["unstorable_columns_dropped"])
 
+    def test_molar_chlorophyll_is_reported_and_not_written(self, tmp_path):
+        acc = tmp_path / "acc"
+        acc.mkdir()
+        (acc / "1-ctd_cast.csv").write_text(
+            "# Latitude: 34.25\n# Longitude: -120.5\n# Date: 2024-03-04\n"
+            "Depth (m),Temperature (deg C),Chlorophyll (umol/l)\n"
+            "0,15.1,0.002\n1,15.0,0.003\n2,14.9,0.001\n")
+        [f] = classify_accession(str(acc))["files"]
+        assert f["data"] == "CTD profiles: temperature"
+        assert "not written: chlorophyll (a molar unit" in f["why"]
+        res = process_accession(str(acc), output_dir=str(tmp_path / "out"),
+                                raw_dir=str(tmp_path / "raw"), run_id="t_chl",
+                                resume=False)
+        assert any("Chlorophyll (umol/l)" in k for k in res["unstorable_columns_dropped"])
+        [nc] = res["outputs"]
+        with netCDF4.Dataset(nc) as ds:
+            assert "chlorophyll" not in ds.variables
+
     def test_an_explicit_dataset_type_still_wins(self, mixed, tmp_path):
         res = process_accession(str(mixed), dataset_type="XBT",
                                 output_dir=str(tmp_path / "out"),

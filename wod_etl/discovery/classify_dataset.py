@@ -620,8 +620,10 @@ def _summary(entry, verdict, exclusion, fmt, bundle, instrument: str = "") -> Di
         unstorable = {str(u.get("variable", "")).replace("_", " ")
                       for u in verdict.get("unstorable_columns") or [] if u.get("variable")}
         names = _variable_names(columns)
-        stored = [n for n in _variable_names(columns, dataset) if n not in copied]
-        others = [n for n in names if n not in stored and n not in copied]
+        writable = _variable_names(columns, dataset, writable=True)
+        refused = [n for n in _variable_names(columns, dataset) if n not in writable]
+        stored = [n for n in writable if n not in copied]
+        others = [n for n in names if n not in stored and n not in copied and n not in refused]
         sources = [_evidence_source(e) for e in verdict.get("evidence") or []][:2]
         # What decided the dataset, then what is not written and why. A file with nothing
         # to write is proposed out.
@@ -632,6 +634,9 @@ def _summary(entry, verdict, exclusion, fmt, bundle, instrument: str = "") -> Di
                          f"(not stored in {dataset})")
         if unstorable:
             notes.append(f"not written: {_and(sorted(unstorable))} (no WOD code)")
+        if refused:
+            notes.append(f"not written: {_and(n.lower() for n in refused)} (a molar unit; "
+                         f"WOD stores it by mass and the manual gives no conversion)")
         notes += [f"its {c['copy'].lower()} is computed from {c['of']} by a probe with no "
                   f"conductivity cell: left out (drop)" if c.get("computed") else
                   f"its {c['copy'].lower()} equals its {c['of'].lower()} at every level "
@@ -1102,10 +1107,12 @@ def _and(words) -> str:
     return " and ".join(words) if len(words) < 3 else ", ".join(words[:-1]) + " and " + words[-1]
 
 
-def _variable_names(columns, dataset: Optional[str] = None) -> List[str]:
+def _variable_names(columns, dataset: Optional[str] = None,
+                    writable: bool = False) -> List[str]:
     """Table 3a names of the measurements in `columns`, in order and once each; with `dataset`,
-    only those it stores."""
+    only those it stores; with `writable`, not those in a unit that cannot be converted."""
     try:
+        from wod_etl.mapping.generate_field_mapping import molar_to_mass
         from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE, match_variable
         from wod_etl.reference import wod_variables
     except ImportError:
@@ -1114,6 +1121,8 @@ def _variable_names(columns, dataset: Optional[str] = None) -> List[str]:
     for c in columns:
         code = match_variable(c)
         if code is None or code == DEPTH_SENTINEL_CODE or code in _LOCATING_CODES:
+            continue
+        if writable and molar_to_mass(str(c), code):
             continue
         entry = table.get(code) or {}
         name = entry.get("name") or f"code {code}"

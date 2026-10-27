@@ -125,6 +125,11 @@ def convert_units_and_types(
                                         "p.19 (Lide, 1992); then " + SEAWATER_DENSITY_PROVENANCE})
             density_used = True
 
+        elif conversion == "mg_per_l_to_ug_per_l":
+            df_clean[col] = df_clean[col] * 1000.0
+            entry.update({"from": "mg/l", "to": "ug/l", "constant": 1000.0,
+                          "provenance": "exact definition"})
+
         elif conversion == "feet_to_meters":
             df_clean[col] = df_clean[col] * FEET_TO_METERS
             entry.update({"from": "feet", "to": "meters", "constant": FEET_TO_METERS,

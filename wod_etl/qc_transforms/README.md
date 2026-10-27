@@ -53,6 +53,7 @@ Applies each column mapping's `conversion_needed`, and coerces every mapped colu
 | `molar_rescale` | prefix rescale, then ÷ or × density if the basis changes | Table 3a target unit + assumed density |
 | `ml_per_l_to_umol_per_kg` | × 1000/22.3916, then ÷ density | Table 3b p.19, molar volume of O₂ |
 | `mg_per_l_to_umol_per_kg` | × 1000 / M(O₂), then ÷ density | Table 3b p.19, atomic weights |
+| `mg_per_l_to_ug_per_l` | × 1000 (chlorophyll) | exact definition |
 | `none` | numeric coercion only | — |
 
 `molar_rescale` reads `conversion_from` and `conversion_to` from the mapping entry, covering
@@ -76,8 +77,8 @@ attributes:
   reported (manual p.15); the output records it whenever used. `seawater_density_kg_m3=`
   overrides it.
 - **Per-volume variables.** Chlorophyll (11), alkalinity (17) and DIC (21) are per-volume in
-  Table 3a, so alkalinity or DIC stated per mass is converted with the density. Chlorophyll's
-  standard is not molar, and a molar chlorophyll unit is not converted.
+  Table 3a, so alkalinity or DIC stated per mass is converted with the density. Chlorophyll is
+  stored by mass (µg/l), so a molar chlorophyll column is refused at mapping and not written.
 - An `iso_date` column is added when the contract has year/month/day.
 
 ---

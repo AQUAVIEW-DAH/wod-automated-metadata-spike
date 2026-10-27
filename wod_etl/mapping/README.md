@@ -313,7 +313,7 @@ into `comment` and `source_files_raw`. A fluorometer column mapped to code 11 ca
 | Field | What it means |
 | --- | --- |
 | `unmapped_columns` | Not written to the output. An expected column here means a missing alias, unless it is also in `dropped_columns` (refused on purpose). |
-| `dropped_columns` | Columns WOD has no code for, each with the reason and what to do instead. Do not alias these. |
+| `dropped_columns` | Columns not written (no WOD code, not stored in the dataset, or a unit with no conversion), each with the reason and what to do instead. Do not alias these. |
 | `missing_required_coordinates` | Any of `latitude`, `longitude`, `time`, `depth`. The file will fail Phase 4 validation. |
 | `ready_for_transform` | `false` when the mapping is empty or coordinates are missing. |
 | `warnings` | Unresolved dataset, two columns claiming one WOD code, a variable not stored in this dataset. |
@@ -362,7 +362,8 @@ whole-word alias, so `Air_Temperature` is code 26, not `temp`.
 | `ft`, `feet`, `foot` | `feet_to_meters` | depth axis only |
 | `fathom`, `fm` | `fathoms_to_meters` | depth axis only |
 | `ml/l` | `ml_per_l_to_umol_per_kg` | code 3 (oxygen) only |
-| `mg/l` | `mg_per_l_to_umol_per_kg` | code 3 (oxygen) only |
+| `mg/l` | `mg_per_l_to_umol_per_kg` | code 3 (oxygen) |
+| `mg/l` | `mg_per_l_to_ug_per_l` | code 11 (chlorophyll) |
 | any molar unit | `molar_rescale` | see below |
 
 **Molar units.** `molar_rescale` carries `conversion_from` and `conversion_to` (`"umol/kg"`,
@@ -375,11 +376,13 @@ Table 3a standard unit:
 | 3, 4, 6, 8 — oxygen, nutrients | µmol/kg | already standard | × 1000 ÷ density |
 | 17, 21 — alkalinity, DIC | mmol/l | × density ÷ 1000 | already standard |
 | 34, 38, 39 — He, Ar, Ne | nmol/kg | × 1000 | — |
-| 11 — chlorophyll | µg/l (not molar) | left alone | left alone |
+| 11 — chlorophyll | µg/l (not molar) | refused, not written | refused, not written |
 
 Units must be in the column name: a units row below the header, or units stated only in a
 readme, are not seen, so fold them into the name during [staging](../staging/README.md).
 `mg m⁻³` for chlorophyll (= µg/l) and `hPa` for air pressure (= mbar) need no conversion.
+Chlorophyll in a molar unit is not written: the manual gives no molar mass to convert it to
+µg/l, so it goes to `dropped_columns` (`kind = "unit_not_convertible"`).
 
 ### Header parsing
 

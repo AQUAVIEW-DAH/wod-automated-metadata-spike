@@ -43,6 +43,8 @@ _MOLAR_UNIT_PATTERNS = [
 MOLAR_PREFIX_SCALE = {"mmol": 1e-3, "umol": 1e-6, "nmol": 1e-9}
 
 _MOLAR_ABBREV = re.compile(r"(mmol|umol|nmol)\s*/\s*(l|kg)")
+# A Table 3a standard unit that is a mass concentration (chlorophyll, ug/l).
+_MASS_ABBREV = re.compile(r"^[mun]?g\s*/\s*(?:l|kg)$")
 
 # Header key patterns by Table 4a secondary header ID.
 _HEADER_PATTERNS = {
@@ -176,6 +178,18 @@ def generate_field_mapping(
             unmapped_cols.append(col)
             continue
 
+        if molar_to_mass(col, code):
+            dropped.append({
+                "column": col, "variable": f"{var['name']} in a molar unit",
+                "kind": "unit_not_convertible",
+                "reason": f"Table 3a stores {var['name']} in {var['unit_abbrev']}, and the "
+                          f"manual gives no molar mass to convert it with, so the "
+                          f"molar-to-mass conversion is refused.",
+                "route": "Not written. If the submitter gives it in a mass unit (ug/l, "
+                         "mg/m3), stage that column instead."})
+            unmapped_cols.append(col)
+            continue
+
         if code in seen_codes:
             warnings.append(
                 f"Column '{col}' maps to WOD code {code} ({var['name']}), already claimed by "
@@ -300,27 +314,39 @@ def parse_header_block(raw_header_text: str) -> Dict[str, Any]:
     return _parse_header_block(raw_header_text)
 
 
+def _molar_source(raw_col_name: str):
+    """The `(prefix, basis)` of a molar unit in a raw column name, or None."""
+    name = canonical_unit_text(raw_col_name).lower()
+    return next(((prefix, basis) for prefix, basis, pattern in _MOLAR_UNIT_PATTERNS
+                 if re.search(pattern, name)), None)
+
+
+def _standard_abbrev(wod_code: int) -> str:
+    variable = wod_variables().get(wod_code) or {}
+    return str(variable.get("unit_abbrev", "")).lower().replace("\u00b5", "u")
+
+
 def molar_units(raw_col_name: str, wod_code: int):
     """(source, target) molar units, each `(prefix, basis)` like `("umol", "mass")`, or None.
 
     The target is the variable's Table 3a standard unit.
     """
-    name = canonical_unit_text(raw_col_name).lower()
-    source = None
-    for prefix, basis, pattern in _MOLAR_UNIT_PATTERNS:
-        if re.search(pattern, name):
-            source = (prefix, basis)
-            break
+    source = _molar_source(raw_col_name)
     if source is None:
         return None
-
-    variable = wod_variables().get(wod_code) or {}
-    abbrev = str(variable.get("unit_abbrev", "")).lower().replace("\u00b5", "u")
-    m = _MOLAR_ABBREV.search(abbrev)
+    m = _MOLAR_ABBREV.search(_standard_abbrev(wod_code))
     if not m:
-        # The standard unit is not molar (chlorophyll is ug/l): leave the values alone.
         return None
     return source, (m.group(1), "volume" if m.group(2) == "l" else "mass")
+
+
+def molar_to_mass(raw_col_name: str, wod_code: int) -> bool:
+    """Whether a column in a molar unit maps to a variable stored by mass (chlorophyll, ug/l).
+
+    The manual gives no molar mass to convert with (Table 3b), so the column is not written.
+    """
+    return (bool(_MASS_ABBREV.match(_standard_abbrev(wod_code)))
+            and _molar_source(raw_col_name) is not None)
 
 
 def _detect_unit_conversion(raw_col_name: str, wod_code: int) -> str:
@@ -332,7 +358,10 @@ def _detect_unit_conversion(raw_col_name: str, wod_code: int) -> str:
                 return "ml_per_l_to_umol_per_kg" if wod_code == 3 else "none"
 
             if label == "mg_per_l_to_umol_per_kg":
-                return "mg_per_l_to_umol_per_kg" if wod_code == 3 else "none"
+                if wod_code == 3:
+                    return label
+                # A mass standard (chlorophyll, ug/l) is the same quantity in another prefix.
+                return "mg_per_l_to_ug_per_l" if _standard_abbrev(wod_code) == "ug/l" else "none"
 
             if label in ("feet_to_meters", "fathoms_to_meters"):
                 return label if wod_code == DEPTH_SENTINEL_CODE else "none"

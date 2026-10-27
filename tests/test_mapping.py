@@ -271,6 +271,12 @@ class TestUnitTraps:
         # 10.4545 mg/l / 31.9988 g/mol -> 326.7 umol/l -> /1.025 -> 318.7 umol/kg
         assert out["DO[mg/L]"].iloc[0] == pytest.approx(318.7, abs=0.5)
 
+    @pytest.mark.parametrize("col", ["Chlorophyll (mg/l)", "Chlorophyll a [mg/L]",
+                                     "Chl (mg l-1)"])
+    def test_mg_per_litre_chlorophyll_is_rescaled_to_ug_per_litre(self, col):
+        from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion
+        assert _detect_unit_conversion(col, 11) == "mg_per_l_to_ug_per_l"
+
     def test_mg_per_cubic_metre_is_not_read_as_mg_per_litre(self):
         """'mg m-3' is the chlorophyll unit and is identical to the ug/l standard."""
         from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion
@@ -434,15 +440,38 @@ class TestMolarPrefixIsNotConflated:
         assert self._conv("Helium (nmol/kg)", 34) == "none"
         assert molar_units("Helium (nmol/l)", 34) == (("nmol", "volume"), ("nmol", "mass"))
 
-    def test_a_molar_source_on_a_non_molar_variable_is_left_alone(self):
-        """Chlorophyll's standard unit is ug/l, so a molar source is not rescaled."""
-        assert self._conv("Chlorophyll (µmol/l)", 11) == "none"
+    def test_molar_chlorophyll_is_refused_not_written(self):
+        """Chlorophyll is stored in ug/l, and the manual gives no molar mass to convert with."""
+        profile = {"columns": ["Depth (m)", "Chlorophyll (µmol/l)"],
+                   "raw_header_block": "LAT: 1.0\nLON: 2.0\nDATE: 2023-01-01"}
+        contract = generate_field_mapping(profile, query_wod_spec("OSD", profile["columns"], 10.0))
+        assert 11 not in {m["wod_code"] for m in contract["column_mapping"]}
+        [d] = [d for d in contract["dropped_columns"] if d["column"] == "Chlorophyll (µmol/l)"]
+        assert d["kind"] == "unit_not_convertible" and "molar-to-mass" in d["reason"]
+        assert any("Chlorophyll (µmol/l)" in w for w in contract["warnings"])
+
+    def test_a_mass_unit_column_beside_a_molar_one_is_written(self):
+        profile = {"columns": ["Depth (m)", "Chlorophyll (umol/l)", "Chlorophyll (ug/l)"],
+                   "raw_header_block": "LAT: 1.0\nLON: 2.0\nDATE: 2023-01-01"}
+        contract = generate_field_mapping(profile, query_wod_spec("OSD", profile["columns"], 10.0))
+        assert [m["raw_column"] for m in contract["column_mapping"]
+                if m["wod_code"] == 11] == ["Chlorophyll (ug/l)"]
+
+    @pytest.mark.parametrize("col,code,refused", [
+        ("Chlorophyll (nmol/l)", 11, True), ("Chlorophyll (mg m-3)", 11, False),
+        ("Chlorophyll (ug/l)", 11, False), ("Oxygen (umol/l)", 3, False),
+        ("CFC-11 (pmol/kg)", 40, False), ("Helium (nmol/kg)", 34, False)])
+    def test_only_a_molar_unit_on_a_mass_standard_is_refused(self, col, code, refused):
+        from wod_etl.mapping.generate_field_mapping import molar_to_mass
+        assert molar_to_mass(col, code) is refused
 
     @pytest.mark.parametrize("col,code,value,expected", [
         ("Alkalinity (mmol/l)", 17, 2.3, 2.3),           # already standard
         ("DIC (µmol/kg)", 21, 2100.0, 2.1525),           # umol/kg -> mmol/l
         ("Oxygen (mmol/l)", 3, 0.28, 273.1707),          # mmol/l -> umol/kg
         ("Nitrate (umol/l)", 8, 25.0, 24.3902),          # umol/l -> umol/kg
+        ("Chlorophyll (mg/l)", 11, 0.0018, 1.8),         # mg/l -> ug/l
+        ("Chlorophyll (mg m-3)", 11, 1.8, 1.8),          # mg/m3 is ug/l
     ])
     def test_the_arithmetic_lands_on_the_table_3a_unit(self, col, code, value, expected):
         profile = {"columns": ["Depth (m)", col],

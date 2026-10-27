@@ -793,12 +793,13 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
             {"column": m["raw_column"], "kind": "dropped_by_decision",
              "variable": f"{m['wod_name']}, left out by decisions.toml",
              "reason": "the review said not to write it (drop)"} for m in removed)
-    # Every column not written: no WOD code, not in the dataset (Table 3a), or unrecognised.
+    # Every column not written: no WOD code, not in the dataset (Table 3a), a unit with no
+    # conversion, or unrecognised.
     explained = {d["column"] for d in contract.get("dropped_columns") or []} | {
         u["column"] for u in verdict.get("unstorable_columns") or []}
     verdict["unstorable_columns"] = list(verdict.get("unstorable_columns") or []) + [
         d for d in contract.get("dropped_columns") or []
-        if d.get("kind") in ("not_in_dataset", "dropped_by_decision")
+        if d.get("kind") in ("not_in_dataset", "unit_not_convertible", "dropped_by_decision")
     ] + [{"column": c, "variable": "not recognised as a WOD variable", "kind": "unrecognised",
           "reason": "no Table 3a variable matches its name"}
          for c in contract.get("unmapped_columns") or [] if c not in explained]
