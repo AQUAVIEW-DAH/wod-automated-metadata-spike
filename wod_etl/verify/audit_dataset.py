@@ -1,11 +1,11 @@
-"""Audit what a processed dataset actually mapped, dropped and flagged.
+"""Audit what a processed dataset mapped, dropped and flagged.
 
 Recomputes the mapping contract for each staged file and reads back every written NetCDF.
 
     from wod_etl.verify import audit_dataset
     report = audit_dataset("data/staging/<accession>/2-CTD", "CTD", "data/processed/2-CTD")
 
-Print `report["text"]` for a readable summary, or use the structured fields.
+`report["text"]` is a readable summary.
 """
 import collections
 import glob
@@ -164,7 +164,7 @@ def _render(r: Dict[str, Any]) -> str:
         more = len(r["staged_without_casts"]) - 5
         L.append(f"  {len(r['staged_without_casts'])} staged file(s) produced no cast: {shown}"
                  + (f", ... (+{more} more)" if more > 0 else "")
-                 + " -- see MISSING COORDINATES and CONTRACT ERRORS below")
+                 + " (see MISSING COORDINATES and CONTRACT ERRORS below)")
     L.append("  mapped:")
     for k, v in sorted(r["mapped_columns"].items()):
         L.append(f"      {v:5d}x  {k}")
@@ -174,7 +174,7 @@ def _render(r: Dict[str, Any]) -> str:
     if not r["unmapped_columns"]:
         L.append("      (none)")
     if r["missing_coordinates"]:
-        L.append(f"  MISSING COORDINATES -- these files cannot pass validation and will "
+        L.append(f"  MISSING COORDINATES: these files cannot pass validation and will "
                  f"write no NetCDF. Supply the missing values from a station list or the "
                  f"readme via Phase 0 staging (wod_etl/staging/):")
         for k, n in sorted(r["missing_coordinates"].items()):

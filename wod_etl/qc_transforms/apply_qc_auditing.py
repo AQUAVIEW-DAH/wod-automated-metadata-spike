@@ -61,11 +61,8 @@ _verify_flag_constants()
 
 
 def range_at_depth(wod_code: int, depth_m: float) -> Optional[Tuple[float, float]]:
-    """Acceptable (min, max) for a variable at a depth, using the manual's lookup rule.
-
-    A depth between two listed levels takes the nearest listed level; if equidistant, the
-    shallower one. The deepest listed level covers everything below it.
-    """
+    """Acceptable (min, max) for a variable at a depth: the nearest listed level (the shallower
+    on a tie), with the deepest covering everything below, per the manual."""
     levels = _range_levels().get(wod_code)
     if not levels:
         return None
@@ -196,8 +193,7 @@ def apply_qc_auditing(
 
             if has_grad and depth_col:
                 lim = gradient_limits(code, z if z is not None else 0.0)
-                # Both neighbours are checked, so a level can fail gradient and inversion
-                # together (flag 5).
+                # Both neighbours are checked, so a level can fail both checks (flag 5).
                 for j in (i - 1, i + 1):
                     if j < 0 or j >= n:
                         continue

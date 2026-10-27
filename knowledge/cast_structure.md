@@ -13,16 +13,15 @@ last two identify the measurements themselves.
 | 6 | Taxa-specific and biomass data | Plankton weights, volumes, concentrations, whole-sample or per taxon | Appendices 5–6 |
 | 7 | Measured variables | Temperature, salinity, oxygen, nutrients, tracers, pressure vs depth | Table 3a, p.18 |
 
-The appendices in the last column are pages of links, not tables. Each WOD table defines
-metadata fields; the values they take are code lists published online, linked from the manual
-through PDF annotations that a text extraction loses. All 62 are extracted into
-`wod_code_tables/code_table_links.json`; reach one with `code_table_link("secondary_header", 29)`.
-The appendix itself adds nothing the link does not.
+The appendices in the last column are pages of links, not tables: a field's values are a code
+list published online, linked through PDF annotations that a text extraction loses. All 62 are
+extracted into `wod_code_tables/code_table_links.json`; reach one with
+`code_table_link("secondary_header", 29)`.
 
 ## Five numbering systems, and how to tell them apart
 
-The manual reuses small integers across unrelated tables, which is the most common source of
-error. The prefixes used in the appendices tell them apart:
+The manual reuses small integers across unrelated tables, a common source of error. The
+appendices' prefixes tell them apart:
 
 | Prefix | Section | Example |
 | --- | --- | --- |
@@ -81,12 +80,10 @@ For PI assignment, plankton is variable 14 (all plankton), −5002 (zooplankton)
 (phytoplankton), p.30. These are not Table 3a codes; Table 3a has no plankton variable.
 
 The profile path writes Table 3a profiles only and never forces plankton onto a level.
-Plankton has its own record shape, written by `write_staged_haul`, `map_haul`,
-`write_taxa_netcdf` and `validate_taxa_netcdf` (driven by
-`wod_etl.orchestration.process_taxa`) into the Biological Header and Taxa-Records, using the
-extracted Tables 6a/6b and 7a/7b. [`plankton_biomass.md`](plankton_biomass.md) covers the
-Taxa-Record model, the Table 8 code ranges, the Plankton Grouping Code, and what the plankton
-path does and does not do.
+Plankton has its own path into the Biological Header and Taxa-Records, using the extracted
+Tables 6a/6b and 7a/7b. [`plankton_biomass.md`](plankton_biomass.md) covers the Taxa-Record
+model, the Table 8 code ranges, the Plankton Grouping Code, and what that path does and does
+not do.
 
 ## Primary header notes
 

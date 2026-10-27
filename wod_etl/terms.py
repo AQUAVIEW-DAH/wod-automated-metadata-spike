@@ -1,7 +1,4 @@
-"""Translate Japanese column-name terms to English, for matching only.
-
-The original column name is kept everywhere else.
-"""
+"""Translate Japanese column-name terms to English, for matching only."""
 import re
 
 # Longest first, so 塩分濃度 is replaced before 塩分.

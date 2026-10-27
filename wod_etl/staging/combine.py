@@ -1,9 +1,6 @@
 """Combine one cast's levels split over several files into one cast per station and date.
 
 Casts from different tables with the same station, date and position are merged by depth.
-
-    from wod_etl.staging.combine import combine_files
-    casts, info = combine_files([path_a, path_b])
 """
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -100,7 +97,7 @@ def merge_levels(frames: List[pd.DataFrame]) -> pd.DataFrame:
 
 
 def combine_files(paths) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """[{"station", "date", "latitude", "longitude", "time", "df", "sources", "header_block"}]
+    """[{"station", "date", "latitude", "longitude", "time", "df", "sources", "columns_from"}]
     in the first file's order, and info naming the casts only one file has."""
     tables = [(str(p), keyed_casts(p)) for p in paths]
     order = list(dict.fromkeys(k for _, t in tables for k in t))

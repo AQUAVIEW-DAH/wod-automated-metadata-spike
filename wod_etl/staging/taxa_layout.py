@@ -4,8 +4,7 @@
 
 Each measurement column becomes its own Taxa-Record. Table 7a selects the smaller unit by sign,
 so a value in mg is written negative. UNIT (field 20) is what a column is per (`m3` for
-'ind/m3'), or `sample` when unstated. `describe_taxa_table` returns the column roles; its
-`missing` says why a table cannot be written.
+'ind/m3'), or `sample` when unstated.
 """
 import re
 from pathlib import Path

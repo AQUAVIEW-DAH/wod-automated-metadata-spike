@@ -12,7 +12,6 @@ def fetch_and_peek_file(file_url_or_path: str, num_bytes: int = 8192) -> Dict[st
             chunk = f.read(num_bytes)
         return _format_peek_response(file_url_or_path, chunk)
 
-    # Remote HTTP file with Range request
     headers = {
         "Range": f"bytes=0-{num_bytes - 1}",
         "User-Agent": USER_AGENT
@@ -30,10 +29,7 @@ def fetch_and_peek_file(file_url_or_path: str, num_bytes: int = 8192) -> Dict[st
 
 
 def _decode_peek(chunk: bytes):
-    """Decode a truncated read, treating a failure in the last three bytes as truncation.
-
-    A mid-character cut must not push the file to latin-1, which garbles units like 'umol/l'.
-    """
+    """Decode a truncated read, so a character cut at the end does not force a latin-1 fallback."""
     for enc in TEXT_ENCODINGS:
         # Report plain 'utf-8' unless a BOM is present, so labels compare across files.
         label = "utf-8" if enc == "utf-8-sig" and not chunk.startswith(b"\xef\xbb\xbf") else enc

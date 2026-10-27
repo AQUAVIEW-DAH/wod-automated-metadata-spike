@@ -35,8 +35,7 @@ def _long(var):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """Pipeline folders under tmp_path and a small accession: one direct cast, and two
-    long-format variables for three stations with their station list."""
+    """An accession of one direct cast and two long-format variables with their station list."""
     from wod_etl import config
 
     for name in ("RAW_DIR", "STAGING_DIR", "PROCESSED_DIR"):
@@ -293,7 +292,7 @@ class TestFailuresSayWhatToDo:
         assert r["exit_code"] == EXIT_FAILED
         failed = [p for p in r["problems"] if p.get("file") == "data/ctd/broken.csv"]
         assert failed and "include = false" in failed[0]["how_to_fix"]
-        assert "ctd/cast_direct.csv" in _sources(ws)        # the rest were written
+        assert "ctd/cast_direct.csv" in _sources(ws)
         assert r["stages"]["verify"]["status"] == "done"
         _set(ws, "data/ctd/broken.csv", include=False)
         assert confirm_pipeline(ACC)["exit_code"] == EXIT_OK
@@ -434,7 +433,7 @@ class TestOtherRecipeKinds:
                                            + "".join(f"{z},{20 - z / 10}\n" for z in range(15)))
         run_pipeline(str(env))
         ws = Workspace(ACC)
-        # Unlocatable casts need a script recipe; a per_file recipe is no longer read.
+        # Unlocatable casts need a script recipe; a per_file recipe is not read.
         _set(ws, "data/casts/*", include=False)
         with open(ws.decisions_path, "a") as fh:
             fh.write('\n[profiles.casts]\nkind = "per_file"\n'
@@ -442,7 +441,7 @@ class TestOtherRecipeKinds:
                      'station_list = "data/0-data/X1_StationInfo.csv"\n')
         r = confirm_pipeline(ACC)
         assert r["exit_code"] == EXIT_OK, r["problems"]
-        assert any("[profiles.casts] is no longer read" in p["what"] for p in r["problems"])
+        assert any("[profiles.casts] is not read" in p["what"] for p in r["problems"])
         assert not {"casts/1.csv", "casts/2.csv"} & set(_sources(ws))
 
     def test_script_recipe_is_the_escape_hatch(self, env, tmp_path):

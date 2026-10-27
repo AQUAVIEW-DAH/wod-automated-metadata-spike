@@ -8,7 +8,7 @@
     35,
     36
   ],
-  "note": "A FIFTH namespace, and the one that carries plankton biomass. These are the fields of a Taxa-Record, not of a depth level. A Taxa-Record is one taxonomic description over one depth RANGE (upper/lower depth), not a value at one depth -- which is why plankton cannot be written through the profile path in this repository. Nothing here is a Table 3a variable code.",
+  "note": "The fields of a Taxa-Record: one taxonomic description over one depth range, written apart from the depth-level profile variables. Not Table 3a codes.",
   "taxa_record_structure": {
     "definition": "The typical plankton cast stores taxon-specific and/or biomass data as individual sets of unique observations called Taxa-Records. Each holds a taxonomic description, the depth range of the observation (upper and lower depth), the original measurement (abundance, biomass or volume) and every qualifier needed to represent it (life stage, sex, size).",
     "granularity": "One Taxa-Record per unique combination of taxonomic description, depth range and measurement type. Taxa differing only in life stage or sex code are different taxonomic descriptions and get separate records: Calanus eggs, juveniles, adult male and adult female are four records.",
@@ -20,8 +20,8 @@
     ],
     "cardinality": "One cast may hold many Taxa-Records; each Taxa-Record may carry any of the fields below."
   },
-  "unit_convention": "'UNIT' in a field name means the ORIGINATOR'S unit, given by code 20 (Appendix 3.4). Several fields switch unit on the SIGN of the value -- a negative value is not missing data, it selects the smaller unit. See per-field descriptions for codes 11, 12, 13, 14, 15, 18, 25.",
-  "appendix_column": "'App' is the manual appendix holding that field's code list (Appendices 3.4, 5.1-5.11, 6). Those code lists live in the WOD online code tables, not in this repository.",
+  "unit_convention": "'UNIT' is the originator's unit, given by code 20 (Appendix 3.4). For codes 11, 12, 13, 14, 15, 18 and 25 the sign of a value selects the unit: a negative value is not missing data.",
+  "appendix_column": "'App' is the manual appendix naming the field's code list (Appendices 3.4, 5.1-5.11, 6); the lists are online.",
   "taxa_variables": {
     "1": {
       "name": "Variable number",

@@ -1,7 +1,6 @@
 """List an open HTTP directory index (Apache/NGINX) or a local folder.
 
-Parses the size and last-modified text beside each link and never follows links that leave
-the starting directory.
+Never follows links that leave the starting directory.
 """
 import logging
 import os
@@ -35,12 +34,9 @@ def list_remote_directory(
 ) -> Dict[str, Any]:
     """List the contents of a local folder, a local archive, or an open HTTP directory index.
 
-    Before listing:
-
-    * an NCEI landing page, `/archive/accession/<n>` URL or bare accession number is resolved
-      to its data directory (recorded under `resolved_from`);
-    * a versioned accession directory (`1.1/`, `2.2/`) is narrowed to the latest version;
-    * a local `.tar`, `.tar.gz`, `.tgz` or `.zip` is extracted under `data/raw/`.
+    An NCEI landing page, accession URL or bare number is first resolved to its data directory
+    (`resolved_from`). A versioned accession is narrowed to its latest version (`2.2/`), and a
+    local archive is extracted under `data/raw/`.
     """
     if os.path.isfile(url_or_path) and _is_archive(url_or_path):
         return _list_archive(url_or_path, recursive, filter_extension)
@@ -150,8 +146,8 @@ def accession_number(text: str):
     return None
 
 
-# A folder named as NCEI writes an accession (seven digits, zero-padded: 0062621) or an
-# archive of one. A bare 5-6 digit folder is too often a date (201511) to count.
+# A folder named as NCEI writes an accession (seven digits, zero-padded) or an archive of one.
+# A bare 5-6 digit folder is too often a date (201511) to count.
 _ACCESSION_COMPONENT = re.compile(
     r"^(?:0(\d{6})|0*(\d{5,7})\.(?:tar\.gz|tgz|tar\.bz2|tar|zip))$", re.IGNORECASE)
 
@@ -159,9 +155,8 @@ _ACCESSION_COMPONENT = re.compile(
 def accession_for(text_or_path) -> Optional[str]:
     """The accession id as NCEI writes it (seven digits, zero-padded), or None.
 
-    Accepts a landing page, an accession or archive URL, a bare number, a tarball name, or a
-    local path such as `data/staging/0303928/...`. Unlike `accession_number`, it keeps the
-    padding and reads paths, so use it to key files and folders.
+    Unlike `accession_number`, it keeps the padding and also reads archive names and local
+    paths, so it can key files and folders.
     """
     text = str(text_or_path or "").strip()
     if not text:
@@ -185,8 +180,8 @@ def _is_accession_reference(text: str) -> bool:
                 or _BARE_ACCESSION.match(str(text)))
 
 
-# The archive path in an ISO record or landing page, e.g. .../archive/arc0238/0303535/.
-# The HTTPS data directory is the same path under /data/oceans/.
+# The archive path (`/archive/arc<NNNN>/<accession>/`) in an ISO record or landing page. The
+# HTTPS data directory is the same path under /data/oceans/.
 _ARCHIVE_PATH = re.compile(r"/archive/(arc\d{4})/(\d{5,7})/?", re.IGNORECASE)
 LANDING_PAGE_URL = ("https://www.ncei.noaa.gov/access/metadata/landing-page/bin/iso"
                     "?id=gov.noaa.nodc:{number}")
@@ -200,8 +195,7 @@ def resolve_accession_url(text: str) -> Dict[str, Any]:
     """The HTTPS data directory for an accession, from its landing page, URL or number.
 
     Returns `{"url", "accession_number", "arc", "landing_page", "resolved_from"}`, or a dict
-    with `error` and `hint`. The archive bundle (`arc0238`) is read from the ISO record,
-    falling back to the landing page's static HTML.
+    with `error` and `hint`. The bundle (`arc0238`) is read from the ISO record or landing page.
     """
     number = accession_number(text)
     if number is None:
@@ -269,8 +263,7 @@ def _is_archive(path: str) -> bool:
 def _list_archive(path: str, recursive: bool, filter_extension: Optional[str]) -> Dict[str, Any]:
     """Extract a downloaded accession archive under data/raw/ and list what it holds.
 
-    Extracts once; later calls list the existing folder. Members that would land outside the
-    target are refused.
+    Extracts once; later calls list the existing folder. Members outside the target are refused.
     """
     import shutil
     import tarfile
@@ -334,9 +327,9 @@ def _diagnose_empty(url_or_path: str) -> Dict[str, Any]:
         "error": "not an accession data directory: this is an NCEI metadata landing page or "
                  "a bare accession number, so there are no files to list.",
         "accession_number": number,
-        "hint": f"Open {where} and take the data directory URL from it, then point "
-                f"process_accession at that. NCEI renders the file listing client-side, so "
-                f"the directory URL cannot be derived from the accession number -- it lives "
+        "hint": f"Open {where}, take the data directory URL from it and pass that "
+                f"instead. NCEI renders the file listing client-side, so "
+                f"the directory URL cannot be derived from the accession number: it lives "
                 f"under /data/oceans/archive/arc<NNNN>/{number or '<accession>'}/ and only "
                 f"that page says which arc bundle. If the files are already downloaded, "
                 f"point at the local folder instead.",
@@ -350,10 +343,7 @@ def _normalize(url: str) -> str:
 
 
 def _is_descendant(base: str, candidate: str) -> bool:
-    """True only if candidate sits below base.
-
-    Rejects parent-directory links, which NCEI writes as absolute paths rather than '../'.
-    """
+    """True only if candidate sits below base; NCEI writes parent links as absolute paths."""
     b, c = urlparse(base), urlparse(candidate)
     if (b.scheme, b.netloc) != (c.scheme, c.netloc):
         return False

@@ -7,8 +7,7 @@ from typing import Dict, Any, Optional, Tuple, List
 
 import pandas as pd
 
-# Missing-value sentinels. Only codes no real measurement can collide with: '-9', '-99' or
-# '9999' would silently turn real values into NaN.
+# Missing-value sentinels; '-9', '-99' and '9999' are left out because they can be real values.
 DEFAULT_NA_VALUES = [
     "", " ", "-", "--", "NA", "N/A", "NaN", "nan", "null", "NULL",
     "-999", "-9999", "-99999", "-999.9", "-9999.9", "-99.999", "-1e34", "1e35",
@@ -18,10 +17,7 @@ _COMMENT_PREFIXES = ("#", "%", "*", "//", ";", "!")
 
 
 def _strip_interior_comments(lines):
-    """Drop whole-line comments below the header, which would otherwise parse as rows.
-
-    Only '#' and '//' count as markers: '*' and '%' begin sentinels such as '**NS'.
-    """
+    """Drop '#' and '//' lines below the header; '*' and '%' may start a sentinel such as '**NS'."""
     if not lines:
         return lines, 0
     head, rest = lines[:1], lines[1:]

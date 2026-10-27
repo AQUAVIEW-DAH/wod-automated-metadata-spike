@@ -1,8 +1,7 @@
 """Write CF-compliant contiguous ragged array NetCDF files.
 
-All profile variables share one observation dimension (`z_obs`), with `z_row_size` giving
-each cast's count (CF Discrete Sampling Geometry). Variable names are CF-safe identifiers;
-the WOD name is kept in `long_name`.
+All profile variables share one observation dimension (`z_obs`); `z_row_size` gives each
+cast's count. Variable names are CF-safe; the WOD name is kept in `long_name`.
 """
 import os
 import re
@@ -15,6 +14,7 @@ import pandas as pd
 from wod_etl.config import (CF_CONVENTIONS, NETCDF_FILL_VALUE, QC_FILL_VALUE, TOOL_NAME,
                             WOD_VERSION)
 from wod_etl.time_zones import utc_offset_hours
+from wod_etl.reference.code_lists import is_standard_unit
 from wod_etl.reference.load_tables import flag_meanings_attr, flag_values_attr
 from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE
 
@@ -31,7 +31,6 @@ _DEPTH_FLAG_MEANINGS = flag_meanings_attr("depth")
 
 
 # Table 3a units as UDUNITS strings for CF `units`; Table 3a's wording goes in `wod_units`.
-# No conversion happens here.
 CF_UNITS = {
     "Degrees Celsius": "degree_C", "Dimensionless": "1", "Micromole kilogram-1": "umol kg-1",
     "Microgram liter-1": "ug L-1", "Millimole liter-1": "mmol L-1", "Micro atmosphere": "uatm",
@@ -56,8 +55,7 @@ CF_STANDARD_NAMES = {
 }
 
 
-# Units of the secondary headers that are measurements, for CF: Table 4a names them in the
-# header's title ("Bottom depth (meters)").
+# Units of measured secondary headers, from their Table 4a titles ("Bottom depth (meters)").
 _HEADER_UNITS = {10: "m"}
 
 
@@ -65,7 +63,6 @@ def cf_safe_name(name: str) -> str:
     """Turn a WOD variable name into a valid CF/NetCDF identifier.
 
     'Nitrate and Nitrate + Nitrite' -> 'nitrate_and_nitrate_nitrite'
-    'Dissolved inorganic carbon'    -> 'dissolved_inorganic_carbon'
     """
     s = re.sub(r"[^A-Za-z0-9]+", "_", str(name)).strip("_").lower()
     s = re.sub(r"_+", "_", s)
@@ -133,8 +130,7 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
         tv[:] = times["time"]
         _describe_time(tv, times)
 
-        # Date and time of day are separate, as in WOD's files, so a cast with no clock time
-        # gets a fill `GMT_time` rather than an implied midnight.
+        # Separate date and time of day, as in WOD, so a date-only cast has no implied midnight.
         dv = ds.createVariable("date", "i4", (CAST_DIM,), fill_value=np.int32(-2147483647))
         dv.long_name = "cast date, YYYYMMDD (UTC when the time of day is known)"
         dv[:] = np.array(times["date"], dtype="i4")
@@ -148,8 +144,8 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
         idv = ds.createVariable("cast_id", str, (CAST_DIM,))
         idv.cf_role = "profile_id"
         idv.long_name = "cast identifier"
-        idv.comment = ("accession, originator's cruise, cast or station, and date -- unique "
-                       "within this file; verify_output checks it across a run")
+        idv.comment = ("accession, originator's cruise, cast or station, and date; unique "
+                       "within this file, and checked across a run by verify_output")
         for i, cid in enumerate(_cast_ids(casts)):
             idv[i] = cid
         # Ids shared by casts of different source files, recorded for verify_output.
@@ -217,17 +213,16 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
                 q[:] = flags
                 ancillary.append(qname)
 
-            # The originator's flags, verbatim in their own variable: they are not Table 12
-            # flags, so they carry no WOD flag_values/flag_meanings.
+            # Originator flags, verbatim: not Table 12 flags, so no WOD flag_values/flag_meanings.
             orig, orig_sources, schemes = _concat_originator_flags(casts, total_obs, var)
             if orig is not None:
                 oname = f"{name}_qc_originator"
                 o = ds.createVariable(oname, "f4", (OBS_DIM,), fill_value=NETCDF_FILL_VALUE)
                 o.long_name = (f"originator's quality flag for {var['wod_name']}, "
                                f"as submitted")
-                o.comment = ("Values are the ORIGINATOR's, on the originator's scale. They "
-                             "are not WOD Table 12 flags and must not be read as such. WOD "
-                             "records which flag set was used as secondary header 96.")
+                o.comment = ("Values are the originator's, on the originator's scale; they "
+                             "are not WOD Table 12 flags. WOD records which flag set was "
+                             "used as secondary header 96.")
                 o.wod_secondary_header = np.int32(96)
                 o.code_table = (
                     "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/"
@@ -243,7 +238,6 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
             shared, varying = _variable_metadata(casts, var)
             for attr, value in shared.items():
                 v.setncattr(attr, value)
-            # Attributes that differ between casts are written per cast.
             per_cast = [_per_cast_text(ds, f"{name}_{attr}", values,
                                        f"{var['wod_name']}: {attr.replace('_', ' ')}")
                         for attr, values in varying.items()]
@@ -344,10 +338,8 @@ def _concat_flags(casts, total_obs, var=None, depth=False) -> Optional[np.ndarra
 
 
 def _concat_originator_flags(casts, total, var):
-    """The originator's flag column for one variable across casts, with each cast's flag
-    column name and stated scheme (None for a cast without flags). Float, since originator
-    flags are not always integers.
-    """
+    """One variable's originator flags across casts, plus each cast's flag column and stated
+    scheme (None where a cast has none). Float, as originator flags may be decimal."""
     out = np.full(total, np.nan, dtype=float)
     at, found = 0, False
     sources: List[Optional[str]] = []
@@ -412,15 +404,15 @@ def _per_cast_text(ds, name: str, values: List[str], long_name: str) -> str:
 
 
 def _cast_variable_metadata(mapping: Dict[str, Any]) -> Dict[str, Any]:
-    """One cast's Table 5a variable specific headers for one variable, as attributes.
-
-    Includes the originator's unit and measurement scale whenever known.
-    """
+    """One cast's Table 5a variable specific headers for one variable, as attributes,
+    including the originator's unit and scale when known."""
     attrs: Dict[str, Any] = {}
     headers = mapping.get("variable_specific_headers") or {}
     if mapping.get("originator_unit"):
         attrs["originator_units"] = str(mapping["originator_unit"])
-        if "8" not in headers:
+        # Header 8 records a unit converted from; WOD's own unit needs none.
+        if "8" not in headers and not is_standard_unit(mapping["originator_unit"],
+                                                       mapping.get("wod_code")):
             attrs["wod_variable_specific_header_8"] = str(mapping["originator_unit"])
     if mapping.get("originator_scale"):
         attrs["measurement_scale"] = str(mapping["originator_scale"])
@@ -527,8 +519,8 @@ def _describe_time(tv, times) -> None:
         parts.append(f"{no_date} of {n} cast(s) have no usable date; their time is fill")
     if date_only:
         parts.append(f"{date_only} of {n} cast(s) have a date but no time of day: their time "
-                     f"is 00:00 of that date by convention and GMT_time is fill. Do not read "
-                     f"it as midnight")
+                     f"is 00:00 of that date by convention, not an observed midnight, and "
+                     f"GMT_time is fill")
     converted = sum(times["converted"])
     if converted:
         parts.append(("" if converted == n else f"{converted} of {n} cast(s): ")
@@ -554,17 +546,14 @@ def _write_time_zones(ds, casts, times) -> None:
         n = len(zones)
         ds.setncattr("time_zone_note",
                      ("" if len(unconverted) == n else f"{len(unconverted)} of {n} cast(s): ")
-                     + "the source date/time is not UTC and was NOT converted -- either no "
-                     "time of day was stated, or the zone is not a numeric offset. A local "
-                     "date may be a different UTC date.")
+                     + "the source date/time is not UTC and was not converted: no time of "
+                     "day was stated, or the zone is not a numeric offset. A local date may "
+                     "be a different UTC date.")
 
 
 def _cast_id(cast, index) -> str:
-    """A cast identifier meaningful outside this file.
-
-    Built from the accession (else the platform), the originator's cruise, the cast or
-    station (else the source file name), and the date with time of day when known.
-    """
+    """A cast id meaningful outside this file: accession (else platform), originator's cruise,
+    cast or station (else source file name), and date with time of day when known."""
     meta = _cast_secondary_headers(cast)
     contract = cast["contract"]
     value = lambda sid: str((meta.get(sid) or {}).get("originator_value")
@@ -656,11 +645,9 @@ def _write_globals(ds, casts) -> None:
     ds.Conventions = CF_CONVENTIONS
     ds.featureType = "profile"
     ds.WOD_version = WOD_VERSION
-    # WOD keeps one dataset per file; a mixed file says so, and the per-cast `dataset`
-    # variable says which cast is which.
+    # WOD keeps one dataset per file; a mixed file says so, and `dataset` says which is which.
     codes = set(_dataset_codes(casts))
     ds.wod_dataset_type = codes.pop() if len(codes) == 1 else "mixed"
-    # The path that was read; how it was read is in `source_format`.
     _shared_or_per_cast(ds, "source_file",
                         [str(c["contract"].get("source") or "unknown") for c in casts],
                         "the source file this cast was read from")
@@ -672,9 +659,9 @@ def _write_globals(ds, casts) -> None:
                          for c in casts],
                         "the accession's own files this cast was staged from")
     _write_provenance(ds, casts)
+    _write_primary_header(ds, casts)
     _write_character_data(ds, casts)
-    # CF: institution is whose data this is, not what wrote the file. Secondary header 4
-    # carries it when the originator stated it; the writer belongs in `source`.
+    # CF institution is whose data this is (secondary header 4); the writer goes in `source`.
     institution = _shared_secondary_header_value(casts, 4)
     if institution:
         ds.institution = institution
@@ -682,7 +669,6 @@ def _write_globals(ds, casts) -> None:
 
     _write_shared_secondary_headers(ds, casts)
 
-    # Unit conversions: a file attribute when every cast shares them, else per cast.
     logs = [c.get("transform_log") or {} for c in casts]
     _shared_or_per_cast(ds, "unit_conversions",
                         ["; ".join(dict.fromkeys(
@@ -693,9 +679,8 @@ def _write_globals(ds, casts) -> None:
 
 
 def _write_density(ds, logs) -> None:
-    """The seawater density a per-volume to per-mass conversion assumed, where one did: the
-    file's attribute when every cast used the same one, per cast otherwise (fill for a cast
-    that converted nothing with it)."""
+    """The seawater density used for per-volume to per-mass conversions: a file attribute when
+    every cast used the same one, else per cast (fill where none was used)."""
     used = [(float(lg["seawater_density_kg_m3"]), str(lg.get("seawater_density_provenance")
                                                        or ""))
             if lg.get("seawater_density_kg_m3") else None for lg in logs]
@@ -718,10 +703,8 @@ def _write_density(ds, logs) -> None:
 
 
 def _write_provenance(ds, casts) -> None:
-    """The staged header's notes as CF `comment`, and the run as CF `history`.
-
-    Notes every cast shares are global; the rest go to a per-cast variable.
-    """
+    """The staged header's notes as CF `comment` (per cast where they differ), and the run as
+    CF `history`."""
     import datetime as _dt
 
     per_cast = [list(c["contract"].get("provenance_notes") or []) for c in casts]
@@ -755,6 +738,17 @@ def _write_provenance(ds, casts) -> None:
                        "this cast's header keys with no WOD field, kept so they are not lost")
 
 
+def _write_primary_header(ds, casts) -> None:
+    """The country code (primary header, Appendix 1) and its name, where a source states it."""
+    entries = [(c["contract"].get("primary_header") or {}).get("country") or {} for c in casts]
+    codes = [str(e.get("value") or "") for e in entries]
+    if not any(codes):
+        return
+    _shared_or_per_cast(ds, "country", codes, "WOD country code (manual Appendix 1)")
+    _shared_or_per_cast(ds, "country_name", [str(e.get("label") or "") for e in entries],
+                        "country name (manual Appendix 1)")
+
+
 def _write_character_data(ds, casts) -> None:
     """Character data (manual p.30): originator's cruise code and principal investigator."""
     fields = sorted({f for c in casts for f in (c["contract"].get("character_data") or {})})
@@ -779,7 +773,7 @@ def _cast_secondary_headers(cast) -> Dict[str, Any]:
     return {**legacy, **full}
 
 
-# Lookup outcomes under which a coded field's value IS a code and may be written as one.
+# Lookup outcomes under which a coded value is a code and may be written as one.
 _CODE_OK = ("matched", "already_a_code")
 
 
@@ -820,10 +814,8 @@ def _is_shared(values) -> bool:
 
 
 def _shared_secondary_header_value(casts, sec_id: int):
-    """One Table 4a header's value as the originator wrote it, when every cast agrees on it.
-
-    For human-readable CF attributes such as `institution`, where a resolved code is useless.
-    """
+    """One Table 4a header's value as the originator wrote it, when every cast agrees on it;
+    for readable attributes such as `institution`."""
     per_cast = [_cast_secondary_headers(c) for c in casts]
     entries = [m.get(str(sec_id), m.get(sec_id, {})) for m in per_cast]
     values = [e.get("originator_value") or e.get("value") for e in entries]
@@ -831,10 +823,7 @@ def _shared_secondary_header_value(casts, sec_id: int):
 
 
 def _write_shared_secondary_headers(ds, casts) -> None:
-    """Write headers every cast agrees on as global attributes.
-
-    Headers that differ are written per cast by _write_varying_secondary_headers.
-    """
+    """Write headers every cast agrees on as global attributes."""
     for sec_id, _name, key, values, code_table, texts, lookups in _secondary_header_columns(casts):
         url = code_table.get("csv") or code_table.get("html") or code_table.get("pdf")
         if _is_shared(texts):
@@ -879,7 +868,6 @@ def _write_varying_secondary_headers(ds, casts) -> None:
                 ds.setncattr(f"{key}_code_table", url)
             continue
         if all(v is None or isinstance(v, (int, float)) for v in values):
-            # Missing values use the declared fill, not NaN.
             v = ds.createVariable(key, "f8", (CAST_DIM,), fill_value=NETCDF_FILL_VALUE)
             v[:] = np.ma.masked_invalid(np.array([np.nan if x is None else float(x)
                                                   for x in values], dtype=float))

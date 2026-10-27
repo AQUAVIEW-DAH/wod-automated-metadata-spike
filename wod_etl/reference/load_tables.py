@@ -18,6 +18,7 @@ TABLE_FILES = {
     "table_12_qc_flags": "table_12_qc_flags.json",
     "table_13_gradients": "table_13_gradients.json",
     "appendix_11_ranges": "appendix_11_ranges.json",
+    "appendix_1_country_codes": "appendix_1_country_codes.json",
 }
 
 
@@ -153,7 +154,8 @@ def code_table_link(namespace: str, code: int) -> Optional[Dict[str, Any]]:
     """The published code list for one metadata field, or None if it has no coded values.
 
     `namespace` is 'secondary_header' (Table 4a), 'variable_specific_header' (5a),
-    'biological_header' (6a) or 'taxa_variable' (7a). Returns e.g.
+    'biological_header' (6a), 'taxa_variable' (7a), 'primary_header' (6: country) or
+    'character_data' (3: principal investigator). Returns e.g.
     `{"field": "s_29_probe_type", "name": "Probe Type", "html": ..., "csv": ...}`.
     """
     return code_table_links()["links"].get(namespace, {}).get(str(int(code)))
@@ -180,12 +182,12 @@ def qc_flag_scales() -> Dict[str, Dict[str, Any]]:
 
 
 def observed_level_flags() -> Dict[int, str]:
-    """Table 12 section 2(b) -- the scale used for measured variables."""
+    """Table 12 section 2(b): the scale for measured variables."""
     return {int(k): v for k, v in qc_flag_scales()["observed_level"]["flags"].items()}
 
 
 def depth_flags() -> Dict[int, str]:
-    """Table 12 section 2(a) -- the scale used for the depth column."""
+    """Table 12 section 2(a): the scale for the depth column."""
     return {int(k): v for k, v in qc_flag_scales()["depth"]["flags"].items()}
 
 

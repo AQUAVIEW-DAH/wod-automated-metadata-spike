@@ -6,16 +6,11 @@ Write CF-compliant contiguous ragged array NetCDF files.
 from wod_etl.writers import write_ragged_profiles, generate_netcdf_ragged
 ```
 
-A file that fails validation is not output; report it as failed.
+A file that fails validation is not output; it is reported as failed.
 
-Validation proves structure, not correctness: a variable in the wrong unit, or a cast of all
-fill values, still validates. Two checks help:
-
-- **An all-fill `z` is an error.** It usually means the depth column did not map.
-- **An all-fill measured variable is a warning**, so an unanalysed source column is not
-  mistaken for a mapping failure.
-
-Still open a finished file and read the ranges.
+Validation checks structure, not correctness: a variable in the wrong unit still validates.
+An all-fill `z` is an error (usually an unmapped depth column); an all-fill measured variable
+is a warning, since the source column may be unanalysed.
 
 ---
 
@@ -34,9 +29,10 @@ temperature= [8.7, 8.4, 7.9,  8.1, 7.8]
 lat        = [62.1, 62.4]   ← one per cast
 ```
 
-Every measured variable and `z` share `z_obs`, which keeps depth index-aligned with each
-measurement. A per-variable dimension (`Temperature_obs`) breaks that alignment, and the
-validator treats it as an error.
+Every measured variable and `z` share `z_obs` (plain CF), with fill where a cast lacks a
+variable. WOD's own files (Appendix 12, p.114) instead give each variable its own `VAR_obs`
+dimension and `VAR_row_size` count (0 for a cast without it); converting to that layout drops
+each variable's fill-only casts. The validator rejects a file mixing the two.
 
 ---
 
@@ -70,11 +66,10 @@ from wod_etl.writers import group_by_file, wod_file_name, is_wod_file_name
 wod_file_name("CTD", 2008, "0062621")      # 'wod_ctd_2008_0062621.nc'
 ```
 
-WOD distributes one NetCDF file per dataset and year (`wod_ctd_2008.nc`; the manual
-describes the split on pp.44, 46, and the names follow NCEI's listing). Output is split the
-same way with the accession appended, so it cannot be mistaken for WOD's own files. The year
-is the cast's UTC date as written (`cast_year`); a cast with no date goes to
-`wod_<dataset>_undated_<acc>.nc`.
+WOD distributes one NetCDF file per dataset and year (`wod_ctd_2008.nc`; manual pp.44, 46;
+names from NCEI's listing). Output is split the same way with the accession appended, so it
+cannot be mistaken for WOD's own files. The year is the cast's UTC date (`cast_year`); a cast
+with no date goes to `wod_<dataset>_undated_<acc>.nc`.
 
 `group_by_file(sources, accession)` turns `[{"key", "casts"}]` (each source file's casts, as
 `write_ragged_profiles` takes them) into one entry per output file, keeping each source's
@@ -83,30 +78,28 @@ casts together and in order, and ordering sources by their first cast's time.
 `process_accession` writes each source file on its own first (so a failure belongs to that
 file), then assembles with `assemble_profiles`. Assembly replaces or removes only files whose
 names match `is_wod_file_name(name, accession)` and whose every source is one the run covers.
-Input that is not an accession is named for its folder (`folder_scope`; a folder name with
-no usable characters becomes `scope-<digest>`).
+Input that is not an accession is named for its folder (`folder_scope`).
 
 **Several sources in one file.** Values all casts share are file attributes; values that
-differ are written per cast: `source_file`, notes, headers, and variable metadata
-(`<var>_originator_column_name`, `<var>_originator_units` and other Table 5a fields, listed
-in the variable's `per_cast_attributes`), and an originator flag column's
-`<var>_qc_originator_flag_values`/`_flag_meanings` when sources' flag schemes differ.
+differ are written per cast: `source_file`, notes, headers, variable metadata (listed in the
+variable's `per_cast_attributes`), and originator flag schemes
+(`<var>_qc_originator_flag_values`/`_flag_meanings`).
 
 ### What ends up in the file
 
 | Group | Contents |
 | --- | --- |
 | Global attributes | `title`, `Conventions`, `featureType=profile`, `WOD_version`, `wod_dataset_type` (`mixed`, with a validator warning, when casts are of several datasets), `source_file` (the path read), `source_format` (how), `source`; `institution` only when the originator stated one (secondary header 4). `source_file`, `source_format` and `source_files_raw` are per-cast variables when casts came from different files |
-| Provenance | `comment` (the staged `# Note:` lines all casts share; differing ones go to a `cast_notes` variable), `history`, `source_files_raw` (the `# Source:` lines), `metadata_not_placed` (shared header keys with no WOD field; a cast's own go to `cast_metadata_not_placed`), `unit_conversions` (each once), and `seawater_density_kg_m3` + `seawater_density_provenance` when a conversion used the assumed density |
-| Character data | `originator_cruise_id`, `principal_investigator` (manual p.30); global when shared, per cast otherwise |
+| Provenance | `comment` (the staged `# Note:` lines all casts share; differing ones go to a `cast_notes` variable), `history`, `source_files_raw` (the `# Source:` lines), `metadata_not_placed` (shared header keys with no WOD field; a cast's own go to `cast_metadata_not_placed`), `unit_conversions` (each once), and `seawater_density_kg_m3` + `seawater_density_provenance` when a per-volume value was converted with a density |
+| Primary header | `country` (Appendix 1 code) and `country_name`, when the source states a country |
+| Character data | `originator_cruise_id`, `principal_investigator`, `principal_investigator_code` (manual p.30); global when shared, per cast otherwise |
 | Secondary headers | one `secondary_header_<id>_<name>` attribute per Table 4a entry, plus `<same>_code_table` where WOD publishes a code list; a coded value that is not a code goes to `<same>_originator_text` with `<same>_code_lookup` instead (below) |
 | Per cast (`casts`) | `lat`, `lon`, `time` (days since 1770-01-01), `date` (YYYYMMDD), `GMT_time` (hours, fill when not stated), `cast_id` (`cf_role=profile_id`), `z_row_size` (`sample_dimension=z_obs`), `dataset` (the WOD dataset), and any secondary header that differs between casts |
 | Per level (`z_obs`) | `z` (`positive=down`, `axis=Z`), `z_qc` when WOD QC ran, one variable per WOD code, and per variable `<var>_qc` and/or `<var>_qc_originator` |
 
 Each measured variable carries:
 
-- `units`: the UDUNITS string of its Table 3a standard unit (`degree_C`, `1`, `umol kg-1`,
-  `dbar`);
+- `units`: the UDUNITS string of its Table 3a standard unit (`degree_C`);
 - `wod_units`: Table 3a's wording (`Degrees Celsius`);
 - `standard_name` where CF has one for the quantity as WOD stores it (none for pH, whose
   scale WOD does not state);
@@ -125,12 +118,12 @@ declared:
 | `originator_units`, `wod_variable_specific_header_8` | the raw column name; header 8 is a code only when WOD's units list has exactly one match, else `_originator_text` | A conversion is auditable only against the source unit |
 | `measurement_scale`, `wod_variable_specific_header_3` | `[ITS-90]`, `(PSS-78)` | A temperature is ambiguous without its scale |
 | `originator_column_name` | the raw column name, verbatim | The link back to the source file |
-| `comment` | the mapping, e.g. a fluorometer column written as Chlorophyll | What the number actually is |
+| `comment` | the mapping, e.g. a fluorometer column written as Chlorophyll | What the number is |
 | `<header>_originator_text`, `<header>_code_lookup` | a coded Table 5a value that did not resolve | The originator's text, kept beside the field |
 | `wod_variable_specific_header_<id>` | other Table 5a fields, e.g. 17 for nitrate+nitrite | How WOD records the distinction |
 
-To add attributes, use `setncattr`, not `setattr`: netCDF4 reserves names such as `scale`,
-`mask`, `name` and `dtype` on `Variable` (hence `measurement_scale`).
+Attributes are added with `setncattr`, not `setattr`: netCDF4 reserves names such as `scale`
+and `name` on `Variable` (hence `measurement_scale`).
 
 ### Two kinds of quality flag
 
@@ -139,7 +132,7 @@ To add attributes, use `setncattr`, not `setattr`: netCDF4 reserves names such a
 | `<var>_qc` | WOD Table 12 section 2b, with `flag_values` and `flag_meanings` | WOD QC ran (`run_qc=True`) |
 | `<var>_qc_originator` | the submitter's own | the source file had a flag column |
 
-The originator array has no `flag_values`/`flag_meanings`, since its scale is not stated. It
+The originator array has `flag_values`/`flag_meanings` only when the source stated them. It
 carries `source_column`, `wod_secondary_header = 96`, and a `code_table` URL for the list of
 WOD flag sets. It is stored as float, so decimal flags are not rewritten.
 
@@ -166,7 +159,7 @@ names are converted, and the original kept in `long_name`.
 - A secondary header identified without a value (e.g. header 96 when flag columns exist but
   the set is unnamed) becomes a `<key>_status` attribute.
 - The output path is yours to choose; `process_one_file` uses `<source stem>.nc`.
-- Missing coordinates are written as NaN, not refused. Always run the validator.
+- Missing coordinates are written as NaN, not refused; the validator reports them.
 - A date without a time of day is not midnight: `time` is 00:00 of the date (CF needs a
   value), `GMT_time` is fill, and `time.comment` says how many casts are date-only. A
   numeric `time_zone` (`UTC+10`) with a time of day is converted to UTC; a named zone or a
@@ -183,19 +176,17 @@ names are converted, and the original kept in `long_name`.
 
 ## `write_taxa_netcdf(hauls, output_path)` — Taxa-Records, not profiles
 
-Plankton counts and biomass have their own layout, sharing the profile writer's helpers for
-time, cast ids, secondary headers, character data and provenance. `hauls` come from
-`wod_etl.mapping.map_haul`.
+Plankton counts and biomass have their own layout, sharing the profile writer's helpers.
+`hauls` come from `wod_etl.mapping.map_haul`.
 
 | Dimension | Variables |
 | --- | --- |
 | `casts` (one per haul) | `lat`, `lon`, `time`, `date`, `GMT_time`, `cast_id`, `taxa_row_size` (CF ragged count, `sample_dimension = "taxa_obs"`), Biological Header fields `b_<id>_<name>`, and secondary headers and character data as for a profile |
 | `taxa_obs` (one per Taxa-Record) | `t_1_variable_number` (ITIS TSN, or a negative WOD code; fill if unresolved), `taxon_name_originator` (always), `taxon_resolution`, `t_30_plankton_grouping_code`, `t_2_upper_depth`, `t_3_lower_depth`, coded qualifiers (`t_5_taxon_life_stage` + `_originator_text`), measurements (`t_10_taxon_count`...), `t_20_originator_s_unit` |
 
-A coded Biological Header field holds its code only when the list has exactly one match;
-otherwise the text goes to `_originator_text` with the reason in `_code_lookup`. The global
+Coded Biological Header fields follow the coded-field rule above. The global
 `wod_record_model` names the layout; `wod_dataset_type` is `OSD` (Table 2 puts plankton
-there). Validate with `wod_etl.verify.validate_taxa_netcdf`, not the profile validator.
+there). These files are validated by `wod_etl.verify.validate_taxa_netcdf`.
 
 ---
 

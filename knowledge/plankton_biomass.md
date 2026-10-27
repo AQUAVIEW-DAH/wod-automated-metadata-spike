@@ -1,6 +1,6 @@
 # Plankton biomass and taxonomy in WOD
 
-Plankton belongs in WOD, but not in a profile. This file describes its record model.
+Plankton belongs in WOD, but not in a profile.
 
 `wod-etl` writes plankton as Taxa-Records in four steps:
 
@@ -103,8 +103,8 @@ upper and lower depth, the station, and each measurement with its unit. Each hau
 comes from the station list beside it, or from the table's own latitude, longitude and date
 columns. The file is then proposed:
 
-- IN, as OSD Taxa-Records, when all of that is found;
-- OUT, with the reason, when it is not: for example, no station list names its stations,
+- in, as OSD Taxa-Records, when all of that is found;
+- out, with the reason, when it is not: for example, no station list names its stations,
   there is no depth range, or the unit is one WOD cannot state.
 
 `wod-etl confirm` writes one Taxa-Record per taxon, depth range and measurement, and one haul
@@ -140,15 +140,13 @@ caches them with their retrieval date:
 The record model is `wod_etl.writers.write_taxa_netcdf`: one Biological Header per haul, and
 Taxa-Records with an upper/lower depth per observation.
 
-Still missing:
+Missing:
 
 - automatic biomass coding (a Table 8 biomass code carries its unit, so a biomass record must
   be staged with its code as the taxon);
 - count matrices (staged by a script);
-- a way to give Table 6a values in `decisions.toml`;
-- every Table 6a value only the submitter has.
+- a way to give Table 6a values in `decisions.toml`.
 
 **See also:** [`cast_structure.md`](cast_structure.md) for where sections 5 and 6 sit in a WOD
-cast · [`datasets.md`](datasets.md) for why plankton is OSD ·
-[`wod_code_tables/standardization_rules.md`](wod_code_tables/standardization_rules.md) for the
-full list of what the profile path cannot carry.
+cast · [`wod_code_tables/standardization_rules.md`](wod_code_tables/standardization_rules.md)
+for the full list of what the profile path cannot carry.

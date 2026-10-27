@@ -5,9 +5,9 @@
     28,
     29
   ],
-  "note": "A THIRD namespace, separate from both Table 3a variable codes and Table 4a secondary-header IDs. A Table 4a secondary header describes the CAST; a Table 5a variable specific second header describes ONE VARIABLE within that cast, and is repeated per variable. ID 5 is 'Instrument' here, 'Cast/Tow number' in Table 4a, and 'Helium-3' in Table 3a.",
+  "note": "Per-variable metadata, repeated for each variable in a cast; its own namespace (ID 5 is Instrument here, Cast/Tow number in Table 4a).",
   "csv_field_naming": "v_<id>_<name>, e.g. v_1_accession, v_4_institute, v_5_instrument, v_6_measure_method, v_8_orig_units",
-  "appendix_column": "'App' is the manual appendix holding that header's code list; those lists live in the WOD online code tables, not in this repository. A header with no appendix carries a plain value rather than a code.",
+  "appendix_column": "'App' is the manual appendix naming the header's code list; the lists are online (code_table_links.json). No appendix means a plain value.",
   "manual_discrepancy": "ID 22 (Reported uncertainty) is described in Table 5b but is absent from the Table 5a grid on p.28. It is included here.",
   "variable_specific_headers": {
     "1": {

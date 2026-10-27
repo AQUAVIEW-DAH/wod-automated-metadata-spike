@@ -22,8 +22,8 @@
     70,
     71
   ],
-  "note": "The manual defines the metadata FIELDS (Tables 4a, 5a, 6a, 7a) but publishes the VALUE code lists online, as a link beside each entry. These are those links, taken from the PDF's own annotations -- they do not survive a text extraction, which is why the 'App' column looks like a dead end. A field absent here has no published code list: its value is a plain measurement or free text, not a code.",
-  "usage": "code_table_link('secondary_header', 29) -> the probe-type code list. Fetch the CSV rather than the HTML when you need the values: same list, parseable. wod_etl.reference.code_lists fetches and caches them with the date retrieved -- they are external and change between WOD releases, so every lookup says which copy it used.",
+  "note": "The manual defines the metadata fields (Tables 4a, 5a, 6a, 7a) and links each coded one to its value list online; the links are PDF annotations, so a text extraction loses them. primary_header and character_data are lists the text cites without a link. A field absent here takes a plain value.",
+  "usage": "code_table_link('secondary_header', 29) -> the probe-type list. wod_etl.reference.code_lists fetches the CSV and caches it with the date retrieved; lists change between WOD releases.",
   "hubs": {
     "all_wod_code_tables": "https://www.ncei.noaa.gov/access/world-ocean-database/wod-codes.html",
     "secondary_headers": "https://www.ncei.noaa.gov/access/world-ocean-database/wod-codes.html#second",
@@ -643,6 +643,31 @@
         "pdf": "http://data.nodc.noaa.gov/woa/WOD/CODES/PDF/t_28_cbv_calculation_method.pdf",
         "manual_pages": [
           71
+        ]
+      }
+    },
+    "primary_header": {
+      "6": {
+        "field": "country_list",
+        "name": "Country Code",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/country-list.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/country_list.csv",
+        "manual_pages": [
+          17,
+          39,
+          68
+        ]
+      }
+    },
+    "character_data": {
+      "3": {
+        "field": "primary_investigator_list",
+        "name": "Principal Investigator",
+        "html": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/primary-investigator-list.html",
+        "csv": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/primary_investigator_list.csv",
+        "manual_pages": [
+          30,
+          41
         ]
       }
     }

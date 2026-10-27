@@ -100,7 +100,7 @@ class TestOneCommandAtATime:
         again = c.post("/api/run", json={"source": str(acc)})
         assert again.status_code == 409 and "one command at a time" in again.json()["detail"]
         assert c.put(f"/api/decisions/{ACC}", json={"text": ""}).status_code == 409
-        for _ in range(200):                          # wait for its first output line
+        for _ in range(200):
             s = c.get(f"/api/status/{ACC}").json()
             if s["job"]["lines"]:
                 break

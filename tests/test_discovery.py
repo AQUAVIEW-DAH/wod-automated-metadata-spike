@@ -103,8 +103,6 @@ class TestProfileRawData:
 
 
 class TestLoadTabular:
-    """Load a whole tabular file using the profile from its peek."""
-
     def test_reads_full_file_with_unit_suffixed_columns(self, tmp_path):
         p = tmp_path / "cast.txt"
         p.write_text("# CRUISE: X\nLAT: 61.9 LON: -172.2\n"
@@ -262,7 +260,6 @@ class TestPeekDecoding:
 
 class TestMissingPathIsAnError:
     def test_a_nonexistent_path_does_not_become_a_phantom_cast(self):
-        """A missing path is an error, not text to parse."""
         res = split_casts("/no/such/file.csv", {"detected_delimiter": "','"})
         assert res["casts"] == []
         assert "not found" in res["error"]
@@ -274,8 +271,6 @@ class TestMissingPathIsAnError:
 
 
 class TestSubdirTraversalGuard:
-    """A nested subdir keeps its nesting, but nothing may escape the destination root."""
-
     @pytest.mark.parametrize("subdir,expected", [
         ("run_07/stationA", "run_07/stationA"),
         ("run_07", "run_07"),
@@ -293,8 +288,6 @@ class TestSubdirTraversalGuard:
 
 
 class TestReaderWarningsReachTheCaller:
-    """load_tabular's warnings surface through read_any, which the run calls."""
-
     def test_a_dropped_row_is_visible_through_read_any(self, tmp_path):
         from wod_etl.discovery import read_any, sniff_format
         p = tmp_path / "cast.csv"
@@ -305,8 +298,6 @@ class TestReaderWarningsReachTheCaller:
 
 
 class TestALocalCopyIsOnlyReusedWhileCurrent:
-    """A cached copy in raw/<run_id>/ is reused only while the source is unchanged."""
-
     def test_an_unchanged_source_is_cached(self, tmp_path):
         from wod_etl.discovery import download_file
 
@@ -332,14 +323,12 @@ class TestALocalCopyIsOnlyReusedWhileCurrent:
         assert (tmp_path / "raw" / "cast.csv").read_text().endswith("10,19\n")
 
 
-# Time units and first-cast time from a LeConte Glacier CTD file.
+# Time units and first-cast time from a real CTD file.
 LECONTE_UNITS = "seconds since 1970-01-01 00:00:00 0:00"
 T0 = 1470773808.0                                           # 2016-08-09 20:16:48 UTC
 
 
 class TestNetCDFCastsAreDatedAndPlacedByTheirOwnVariables:
-    """Each cast's date and position come from its own variables, not file attributes."""
-
     @staticmethod
     def _write(path, times, units=LECONTE_UNITS, fill=None, **attrs):
         """Casts along `profile` with a time, lat and lon each, on a shared depth axis."""

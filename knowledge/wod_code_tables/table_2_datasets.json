@@ -2,7 +2,7 @@
   "table": "Table 2. Dataset names",
   "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
   "page": 17,
-  "note": "The WOD organizes data into exactly eleven datasets. 'XCTD' is NOT a dataset name: high-resolution XCTD goes to CTD, low-resolution XCTD goes to OSD.",
+  "note": "XCTD is not a dataset: high-resolution XCTD is CTD, low-resolution XCTD is OSD (p.19).",
   "datasets": {
     "OSD": "Ocean Station Data, Low-resolution CTD/XCTD, Plankton data",
     "CTD": "High-resolution Conductivity-Temperature-Depth / XCTD data",

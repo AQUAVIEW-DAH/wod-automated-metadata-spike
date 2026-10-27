@@ -1,7 +1,4 @@
-"""Turn failures into actionable problems: what failed, why, and how to fix it.
-
-Adds what only the pipeline knows: the decisions.toml key that settles it, or the next command.
-"""
+"""Failures as problems: what failed, why, and how to fix it (a decisions.toml key or command)."""
 import re
 from typing import Any, Dict, Optional
 
@@ -23,8 +20,8 @@ def problem(stage: str, what: str, why: str, how_to_fix: str, *,
 def for_listing(listing: Dict[str, Any], source: str) -> Dict[str, Any]:
     err = str(listing.get("error") or "")
     if re.search(r"\b(429|500|502|503|504)\b|Timeout|ConnectError|timed out", err):
-        how = ("NCEI did not answer (it was retried). Rerun later -- the run continues from "
-               "here -- or download the accession and pass the local folder or tarball.")
+        how = ("NCEI did not answer (it was retried). Rerun later (the run continues from "
+               "here), or download the accession and pass the local folder or tarball.")
     elif listing.get("hint"):
         how = listing["hint"]
     else:
@@ -35,7 +32,7 @@ def for_listing(listing: Dict[str, Any], source: str) -> Dict[str, Any]:
 
 def for_download(key: str, error: str) -> Dict[str, Any]:
     return problem("fetch", f"could not download {key}", error,
-                   "A network or server error; it is retried. Rerun later -- files already "
+                   "A network or server error; it is retried. Rerun later: files already "
                    "downloaded are kept.", file=key)
 
 
@@ -48,7 +45,7 @@ def for_file_failure(key: str, stage: str, error: str, staged: bool) -> Dict[str
         return problem("process", f"could not read {key}", error,
                        "A transient error; confirm again to retry it.", file=key)
     if stage == "unexpected":
-        how = ("This is a bug in wod_etl, not in the data: the traceback is in run.log. "
+        how = ("A bug in wod_etl, not in the data: the traceback is in run.log. "
                "Report it. " + leave_out)
     elif "pivot_long" in error or "long format" in error.lower():
         how = ("It names its variables in a cell: it needs a [profiles.<name>] recipe with "
@@ -80,10 +77,9 @@ def for_wod_file_failure(name: str, sources, stage: str, error: str) -> Dict[str
     shown = ", ".join(sources[:5]) + (f" and {len(sources) - 5} more" if len(sources) > 5
                                       else "")
     return problem("process", f"{name} could not be written", f"{stage}: {error}",
-                   f"Each of its source files was written on its own; together they were not, "
-                   f"which is a bug in wod_etl -- the detail is in run.log. Report it. To write "
-                   f"the rest, leave one of its source files out (include = false) and confirm "
-                   f"again: {shown}.")
+                   f"Each source file was written on its own but not together: a bug in "
+                   f"wod_etl, detailed in run.log. Report it. To write the rest, set "
+                   f"include = false on one of its source files and confirm again: {shown}.")
 
 
 def for_haul_failure(key: str, stage: str, error: Any) -> Dict[str, Any]:
@@ -125,15 +121,14 @@ def for_finding(finding: Dict[str, Any]) -> Dict[str, Any]:
 
 def for_exception(stage: str, exc: BaseException) -> Dict[str, Any]:
     return problem(stage, f"stage '{stage}' raised {type(exc).__name__}", str(exc),
-                   "This is a bug, not a data problem: the traceback is in run.log. Fix it "
-                   "(or report it) and run the same command again -- it continues from this "
-                   "stage.")
+                   "A bug, not a data problem: the traceback is in run.log. Fix or report "
+                   "it, then run the same command again: it continues from this stage.")
 
 
 def for_decisions_syntax(error: str, stage: str = "decide") -> Dict[str, Any]:
     return problem(stage, "decisions.toml cannot be read", error,
-                   "Fix the line named above -- a missing quote or bracket is the usual cause "
-                   "-- and run the same command again.")
+                   "Fix the line named above (a missing quote or bracket is the usual cause) "
+                   "and run the same command again.")
 
 
 def for_open_item(item: Dict[str, Any], stage: str = "decide") -> Dict[str, Any]:

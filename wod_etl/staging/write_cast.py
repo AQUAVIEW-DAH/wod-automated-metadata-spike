@@ -28,17 +28,10 @@ def write_staged_cast(
 ) -> Dict[str, Any]:
     """Write a header block plus a CSV table to `output_path`.
 
-    `metadata` becomes `# Key: value` lines, mined for Table 4a secondary headers
+    `metadata` becomes `# Key: value` lines, mined for WOD metadata
     (Accession, Platform, Station, Cast, Bottom Depth, Instrument). `notes` record
     derivations not in the source (e.g. depth from pressure) and reach the NetCDF as
     `comment`; `sources` become `# Source:` lines and `source_files_raw`.
-
-        write_staged_cast(
-            out / "cast_001.csv",
-            columns=["Depth (m)", "T090C", "Sal00"], rows=levels,
-            latitude=62.16, longitude=-170.500167, date="2023-06-20", time="14:55",
-            metadata={"Station": "a01", "Bottom Depth": 47},
-            notes=["Depth computed from PrDM by UNESCO 1983 at the cast latitude"])
 
     Column names must carry their units (`Temp (deg C)`): unit detection reads only the
     name. `time_zone` states the zone of `date`/`time` when not UTC (`"UTC+10"`, `"local"`);
@@ -88,9 +81,8 @@ def write_staged_table(
 ) -> Dict[str, Any]:
     """Write a harvested table (e.g. a station list from a PDF) as CSV with its citation.
 
-    Not a cast: `process_accession` skips it. It can be read back and cross-checked with
-    `read_station_list` and `reconcile_stations`. `source` is the citation, e.g.
-    `info["source"]` from `extract_pdf_rows`.
+    Not a cast: `process_accession` skips it, and `read_station_list` reads it back. `source`
+    is the citation, e.g. `info["source"]` from `extract_pdf_rows`.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

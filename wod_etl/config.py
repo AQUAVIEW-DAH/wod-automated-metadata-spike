@@ -6,8 +6,7 @@ import os
 from pathlib import Path
 
 # ----------------------------------------------------------------- paths
-# The project root is found by walking up to workspace markers (tracked files), since an
-# installed package lives elsewhere. WOD_PROJECT_ROOT overrides; the cwd is the fallback.
+# The project root is found by its markers, as an installed package lives elsewhere.
 
 
 def _find_root() -> Path:
@@ -72,8 +71,7 @@ HTTP_RETRIES = int(os.environ.get("WOD_HTTP_RETRIES", "3"))
 HTTP_BACKOFF_SECONDS = 2.0
 
 # --------------------------------------------------------- WOD constants
-# Manual p.19: high-resolution casts have a depth increment < 2 m and belong to the CTD
-# dataset; anything coarser is low-resolution and belongs to OSD.
+# Manual p.19: a depth increment under 2 m is high-resolution (CTD); coarser is OSD.
 HIGH_RES_DEPTH_INCREMENT_M = 2.0
 
 # Manual p.54: gradient thresholds differ above and below 400 m.
@@ -82,11 +80,10 @@ GRADIENT_DEPTH_SPLIT_M = 400.0
 # Manual p.54: minimum depth difference for gradients on high-resolution instruments.
 MIN_GRADIENT_DEPTH_DIFF_M = 3.0
 
-# Not a WOD constant (Table 3b gives no seawater density). Used when in-situ density is
-# unavailable and recorded in the output metadata.
+# Density WOD assumes for per-volume to per-mass conversion when none is reported (manual p.15).
 ASSUMED_SEAWATER_DENSITY_KG_M3 = 1025.0
 SEAWATER_DENSITY_PROVENANCE = (
-    "assumed constant 1025 kg/m3; not specified by WOD Table 3b; in-situ density unavailable"
+    "constant 1025 kg/m3, as WOD uses when the sample density is not reported (manual p.15)"
 )
 
 # ---------------------------------------------------------------- output
@@ -96,9 +93,7 @@ CF_CONVENTIONS = "CF-1.8"
 WOD_VERSION = "WOD23"
 
 # ------------------------------------------------------- WOD code lists
-# Coded metadata fields use lists WOD publishes online; text becomes a code only on a unique
-# match (see wod_etl/reference/code_lists.py). Cached lists are refetched after
-# CODE_LIST_MAX_AGE_DAYS.
+# Coded fields use WOD's online code lists; text becomes a code only on a unique match.
 CODE_LIST_CACHE_DIR = _folder("WOD_CODE_LIST_CACHE_DIR",
                               DATA_DIR / "reference_cache" / "wod_code_lists")
 CODE_LOOKUP = os.environ.get("WOD_CODE_LOOKUP", "1").strip().lower() in ("1", "true", "yes", "on")
@@ -113,19 +108,15 @@ KEY_BIOLOGICAL_FIELD_IDS = (7, 4, 3, (1, 14), 10, 13)
 
 # --------------------------------------------------------- dataset routing
 # Dataset type assumed for unidentified files when the caller asks to process them anyway.
-# process_accession records which files were routed this way.
 DEFAULT_DATASET_TYPE = os.environ.get("WOD_DEFAULT_DATASET_TYPE", "OSD")
 
 # ------------------------------------------------------------------- QC
-# Run WOD observed-level QC (manual Table 12, section III). Off by default: the data centre
-# applies it downstream. Originator flag columns are always carried through verbatim.
-# Enable with WOD_RUN_QC=1 or process_accession(run_qc=True).
+# WOD observed-level QC (manual Table 12, section III). Off by default, as the data centre
+# applies it downstream; originator flags are always kept.
 RUN_WOD_QC = os.environ.get("WOD_RUN_QC", "0").strip().lower() in ("1", "true", "yes", "on")
 
 # ------------------------------------------------------- failure policy
-# How process_accession reacts to a per-file failure during an unattended run.
-#   "skip"  -- record the failure in the manifest and continue (default)
-#   "stop"  -- abort the whole run on the first failure
+# On a per-file failure, "skip" records it and continues; "stop" aborts the run.
 ON_FILE_ERROR = os.environ.get("WOD_ON_FILE_ERROR", "skip")
 
 # Abort when this fraction of files fails, which suggests a systematic problem.
@@ -153,8 +144,7 @@ NA_SENTINELS = {
     "****ND": "no data",
 }
 
-# Images, video and audio: never WOD data and often large. `wod-etl run` lists them but
-# does not download them.
+# Images, video and audio: never WOD data and often large, so listed but not downloaded.
 MEDIA_EXTENSIONS = {
     ".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v", ".mpg", ".mpeg", ".png", ".jpg", ".jpeg",
     ".gif", ".tif", ".tiff", ".bmp", ".heic", ".mp3", ".wav",

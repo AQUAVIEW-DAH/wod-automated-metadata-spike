@@ -1,7 +1,4 @@
-"""Resolving and renaming columns.
-
-A column name carries the WOD variable code, unit and scale; a rename must keep all three.
-"""
+"""Resolving and renaming columns; a rename must keep the name's WOD code, unit and scale."""
 import pytest
 
 from wod_etl.mapping import generate_field_mapping, resolve_column
@@ -141,8 +138,6 @@ class TestRenameNeverCorrupts:
 
 
 class TestRenamePreservesTheContract:
-    """A rename must not change the mapping contract generated for the file."""
-
     @pytest.mark.parametrize("columns,renames", [
         (["LAT", "LON", "Depth (m)", "T090C"], {"latitude": "Latitude"}),
         (["LAT", "LON", "Depth (m)", "T090C"], {"temperature": "Temperature (deg C)"}),
@@ -197,7 +192,6 @@ class TestSuggestColumnNames:
         assert [c["column"] for c in s["columns"]] == ["Depth", "Temp"]
 
 
-# --------------------------------------------------------------------------- helpers
 def _contract(columns):
     return generate_field_mapping({"columns": list(columns), "raw_header_block": ""},
                                   {"dataset": {"code": "CTD"}})

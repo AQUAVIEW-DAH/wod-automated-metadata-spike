@@ -11,7 +11,6 @@ from wod_etl.orchestration import process_accession
 from wod_etl.reference import code_table_hub, code_table_link, code_table_links
 
 
-# --------------------------------------------------- what a column is NOT
 class TestNamesThatLookLikeVariablesAndAreNot:
     @pytest.mark.parametrize("column", [
         "Potential Temperature (deg C)", "pot_temp", "Theta", "PTMP", "potential_temp",
@@ -59,7 +58,6 @@ class TestNamesThatLookLikeVariablesAndAreNot:
         assert match_variable("Dry Bulb (C)") == 26
 
 
-# ------------------------------------------------------ units and scales
 class TestTheUnitIsKeptNotJustUsed:
     @pytest.mark.parametrize("column,unit", [
         ("Temperature (deg C)", "deg C"),
@@ -89,7 +87,6 @@ class TestTheUnitIsKeptNotJustUsed:
         assert extract_unit(column) != scale
 
 
-# ----------------------------------------------------------- map_metadata
 @pytest.fixture
 def frame():
     return pd.DataFrame({
@@ -150,8 +147,14 @@ class TestPerVariableMetadata:
         meta = map_metadata(HEADER, list(frame.columns), frame)
         headers = meta["variable_specific_headers"][
             "t090C: Temperature [ITS-90, deg C]"]["headers"]
-        assert headers["8"]["value"] == "deg C"       # originator's units
         assert headers["3"]["value"] == "ITS-90"      # scale
+        assert "8" not in headers                     # deg C is the standard unit
+
+    def test_a_converted_unit_is_the_originator_unit(self):
+        frame = pd.DataFrame({"Depth (m)": [0, 10], "Oxygen (ml/l)": [6.1, 5.9]})
+        meta = map_metadata("", list(frame.columns), frame)
+        headers = meta["variable_specific_headers"]["Oxygen (ml/l)"]["headers"]
+        assert headers["8"]["value"] == "ml/l"
 
     def test_nitrate_nitrite_sets_header_17(self, frame):
         """Header 17 is how WOD marks the combined measurement."""
@@ -187,10 +190,9 @@ class TestOriginatorFlags:
         meta = map_metadata(HEADER, list(frame.columns), frame)
         assert "96" in meta["secondary_headers"]
         assert meta["secondary_headers"]["96"]["value"] is None      # the flag set is unknown
-        assert "NOT WOD Table 12" in meta["secondary_headers"]["96"]["note"]
+        assert "not WOD Table 12" in meta["secondary_headers"]["96"]["note"]
 
 
-# ------------------------------------------------------- code table links
 class TestCodeTableLinks:
     def test_links_come_from_the_manuals_own_hyperlinks(self):
         links = code_table_links()
@@ -205,7 +207,6 @@ class TestCodeTableLinks:
         assert "s_96_origflagset" in code_table_hub("originator_flag_sets")
 
 
-# ------------------------------------------------------------- end to end
 @pytest.fixture
 def cast_file(tmp_path):
     acc = tmp_path / "acc" / "1-ctd"
@@ -280,7 +281,6 @@ class TestMetadataReachesTheOutput:
         assert "Potential Temperature" in dropped
 
 
-# ------------------------------------------------- harvest from exclusions
 class TestExcludedFoldersStillCarryMetadata:
     def test_an_adcp_folder_says_what_to_take_from_it(self):
         from wod_etl.discovery import classify_dataset
@@ -298,7 +298,6 @@ class TestExcludedFoldersStillCarryMetadata:
         assert "secondary header 10" in verdict["exclusion"]["harvest"].lower()
 
 
-# ------------------------------------------ the WOD-export delimited header block
 class TestDelimitedHeaderBlock:
     """WOD's own CSV export header: `key,variable,value,code-system,description`."""
 
@@ -347,10 +346,12 @@ class TestDelimitedHeaderBlock:
         blank = [u for u in meta["unresolved"] if u["key"] == "Accession Number"]
         assert blank and blank[0]["value"] is None
 
-    def test_unplaced_keys_are_never_silent(self, meta):
-        """A key with no WOD field is listed as unresolved."""
-        keys = {u["key"] for u in meta["unresolved"]}
-        assert "Country" in keys
+    def test_the_country_is_the_primary_header_code(self, meta):
+        assert meta["primary_header"]["country"]["value"] == "NZ"
+
+    def test_unplaced_keys_are_never_silent(self):
+        meta = map_metadata("Ice ,,0%,,\nSurvey area ,,Arctic Ocean,,\n", [])
+        assert {u["key"] for u in meta["unresolved"]} == {"Ice", "Survey area"}
         assert all(u["note"] for u in meta["unresolved"])
 
     def test_the_cruise_id_is_character_data_not_a_rival_platform(self, meta):

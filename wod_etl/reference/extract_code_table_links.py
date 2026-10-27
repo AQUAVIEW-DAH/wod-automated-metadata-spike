@@ -13,13 +13,12 @@ from wod_etl.config import CODE_TABLES_DIR, WOD_README_PDF
 from wod_etl.reference import (biological_headers, taxa_biomass_variables,
                                variable_specific_headers, wod_secondary_headers)
 
-# The URL path encodes both the namespace and the code id, e.g.
-# .../CODES/s_29_probe_type.html -> secondary header 29.
+# The URL names the namespace and code id: .../s_29_probe_type.html is secondary header 29.
 PREFIX = {"s": "secondary_header", "v": "variable_specific_header",
           "b": "biological_header", "t": "taxa_variable"}
 CODE_URL = re.compile(r"/((?:s|v|b|t))_(\d+)_([a-zA-Z0-9_]+)\.(html|csv|pdf)$")
 
-# Links that are not per-code but are needed often enough to name.
+# Hub links, not tied to one field.
 HUBS = {
     "all_wod_code_tables": "https://www.ncei.noaa.gov/access/world-ocean-database/wod-codes.html",
     "secondary_headers": "https://www.ncei.noaa.gov/access/world-ocean-database/wod-codes.html#second",
@@ -34,6 +33,20 @@ HUBS = {
     "taxa_list_itis": "https://www.ncei.noaa.gov/access/world-ocean-database/CODES/t_1_taxa_list.html",
     "range_area_mask": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/MASKS/range_area.msk",
     "range_basin_list": "https://www.ncei.noaa.gov/data/oceans/woa/WOD/MASKS/range_basin_list.msk",
+}
+
+CSV_BASE = "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/"
+
+# Lists the manual cites without a link: the country code (Table 10a field 6) and the PI
+# code (Table 10b, type 3).
+CITED_LISTS = {
+    "primary_header": {"6": {
+        "field": "country_list", "name": "Country Code", "html": HUBS["country_codes"],
+        "csv": CSV_BASE + "country_list.csv", "manual_pages": [17, 39, 68]}},
+    "character_data": {"3": {
+        "field": "primary_investigator_list", "name": "Principal Investigator",
+        "html": HUBS["principal_investigators"],
+        "csv": CSV_BASE + "primary_investigator_list.csv", "manual_pages": [30, 41]}},
 }
 
 NAME_OF = {
@@ -91,23 +104,20 @@ def build(pdf_path: Path) -> dict:
                        "manual_pages": sorted(entry["manual_pages"])}
             for num, entry in sorted(found[namespace].items())
         }
+    links.update(CITED_LISTS)
 
     return {
         "table": "WOD online code tables, one per coded metadata field",
         "source": "Hyperlink annotations embedded in knowledge/wod_readme.pdf, extracted "
                   "with wod_etl.reference.extract_code_table_links",
         "pages": sorted(pages_seen),
-        "note": "The manual defines the metadata FIELDS (Tables 4a, 5a, 6a, 7a) but "
-                "publishes the VALUE code lists online, as a link beside each entry. These "
-                "are those links, taken from the PDF's own annotations -- they do not "
-                "survive a text extraction, which is why the 'App' column looks like a dead "
-                "end. A field absent here has no published code list: its value is a plain "
-                "measurement or free text, not a code.",
-        "usage": "code_table_link('secondary_header', 29) -> the probe-type code list. Fetch "
-                 "the CSV rather than the HTML when you need the values: same list, "
-                 "parseable. wod_etl.reference.code_lists fetches and caches them with the "
-                 "date retrieved -- they are external and change between WOD releases, so "
-                 "every lookup says which copy it used.",
+        "note": "The manual defines the metadata fields (Tables 4a, 5a, 6a, 7a) and links "
+                "each coded one to its value list online; the links are PDF annotations, so "
+                "a text extraction loses them. primary_header and character_data are lists "
+                "the text cites without a link. A field absent here takes a plain value.",
+        "usage": "code_table_link('secondary_header', 29) -> the probe-type list. "
+                 "wod_etl.reference.code_lists fetches the CSV and caches it with the date "
+                 "retrieved; lists change between WOD releases.",
         "hubs": HUBS,
         "links": links,
     }

@@ -1,334 +1,137 @@
-# WOD Standardization Rules
+# WOD standardization rules
 
-Extracted from the **World Ocean Database 2023 User's Manual** (`knowledge/wod_readme.pdf`,
-131 pages). Page numbers below refer to that PDF. The machine-readable tables live beside
-this file as `table_*.json`.
-
----
+From the World Ocean Database 2023 User's Manual (`knowledge/wod_readme.pdf`); page numbers
+refer to it. The machine-readable tables are the `*.json` files beside this one.
 
 ## Which table is which
 
-The manual's numbering is easy to get backwards. It is:
-
 | Table | Page | Contents |
 | --- | --- | --- |
-| **Table 2** | 17 | **Dataset names** — the eleven WOD datasets |
-| **Table 3a** | 18 | **Measured variables** — codes, standard units, which datasets carry them |
-| Table 3b | 19 | Unit conversion constants (atomic weights, molar volume of O₂) |
-| Table 4a | 23–24 | Secondary header variables (metadata codes) |
-| Table 4b | 24+ | Descriptions of the Table 4a codes |
-| Table 11 | 54 | Which variables get range checks, and which appendix holds the numbers |
-| Table 12 | 55 | Quality control flag definitions — **five separate scales** |
-| Table 13 | 56 | Maximum gradient (MGV) and inversion (MIV) factors |
-| Appendix 9 | 81 | Standard vertical levels and depths |
-| Appendix 11 | 86+ | The actual acceptable ranges, by depth and by basin |
+| Table 2 | 17 | The eleven datasets |
+| Table 3a | 18 | Measured variables: codes, standard units, datasets |
+| Table 3b | 19 | Unit constants (atomic weights, molar volume of O₂) |
+| Table 4a/4b | 23–27 | Secondary headers (cast metadata) |
+| Table 5a/5b | 28–29 | Variable-specific headers (metadata of one variable) |
+| Table 6a/6b | 30–31 | Biological headers (how a plankton sample was taken) |
+| Table 7a/7b, 8, 9 | 32–36 | Taxa-Record fields, taxa code ranges, plankton grouping |
+| Table 11 | 54 | Variables that get range checks |
+| Table 12 | 55 | QC flags: five separate scales |
+| Table 13 | 56 | Gradient (MGV) and inversion (MIV) factors |
+| Appendix 1 | 68 | Country codes |
+| Appendix 9 | 81 | Standard levels |
+| Appendix 11 | 86–113 | Acceptable ranges by depth and basin |
 
----
+Not extracted, because the pipeline does not use them: Tables 1a/1b (product volumes, cast
+counts), 4c (names of WMO code tables), 10a–c (WOD's native ASCII layout), Appendix 6 (plankton
+grouping list; WOD assigns it), 7 (WMO squares), 9 and 10 (standard levels and interpolation
+limits; no interpolation here), 13 (basins for objective analysis).
 
 ## Datasets (Table 2)
 
-Exactly **eleven**: OSD, CTD, MBT, XBT, SUR, APB, MRB, PFL, DRB, UOR, GLD.
+OSD, CTD, MBT, XBT, SUR, APB, MRB, PFL, DRB, UOR, GLD. XCTD is not a dataset: resolution decides,
+as for CTD (p.19).
 
-**`XCTD` is not a dataset name.** XCTD data is routed by resolution, and the same rule
-governs plain CTD:
-
-- Depth increment **< 2 m** → high-resolution → **CTD**
-- Depth increment **≥ 2 m** → low-resolution → **OSD**
-
-So resolution, not instrument, decides the destination dataset. An XCTD cast cannot be
-assigned to a dataset without inspecting its depth spacing.
-
----
+- Depth increment < 2 m: high resolution, CTD.
+- Depth increment ≥ 2 m: low resolution, OSD.
 
 ## Variables (Table 3a)
 
-29 codes, 1–43, non-contiguous. Standard units are mandatory — data must be converted into
-them, not merely labelled.
+29 codes between 1 and 43. Values are converted to the standard unit, not relabelled.
 
-Common ones: `1` Temperature (°C), `2` Salinity (dimensionless), `3` Oxygen (µmol/kg),
-`4` Phosphate (µmol/kg), `6` Silicate (µmol/kg), `8` Nitrate and Nitrate+Nitrite (µmol/kg),
-`9` pH, `11` Chlorophyll (µg/l), `17` Alkalinity (mmol/l), `20` pCO₂ (µatm),
-`21` Dissolved inorganic carbon (mmol/l), `24` Transmissivity (m⁻¹), `25` Pressure (dbar).
+Common ones: `1` temperature (°C), `2` salinity, `3` oxygen (µmol/kg), `4` phosphate, `6`
+silicate, `8` nitrate and nitrate+nitrite (µmol/kg), `9` pH, `11` chlorophyll (µg/l), `17`
+alkalinity (mmol/l), `20` pCO₂ (µatm), `21` DIC (mmol/l), `24` transmissivity (m⁻¹), `25`
+pressure (dbar).
 
-Two things to watch:
+- Nutrients are per mass (µmol/kg); alkalinity, DIC and chlorophyll are per volume (p.15).
+- Codes 30–32 (latitude, longitude, Julian year-day) are measured variables only in SUR, APB
+  and UOR, where each observation has its own position.
+- Depth is the vertical coordinate, not a variable; code 25 is pressure.
+- Secondary-header IDs are a separate namespace: ID 29 is Probe Type, variable 29 is Air
+  pressure.
 
-- **Nutrients are per-mass (µmol·kg⁻¹), but alkalinity and DIC are per-volume (mmol·l⁻¹).**
-  Do not convert every chemical variable to a mass basis.
-- **Codes 30, 31, 32 are Latitude, Longitude and Julian year-day *as measured variables*** —
-  used only by SUR, APB and UOR, where every observation carries its own position rather
-  than inheriting one cast position.
+## What a profile cannot carry
 
-There is no WOD variable code for depth itself. Depth is the vertical coordinate; `25` is
-Pressure, a distinct measured variable.
+Table 3a is the whole list. A file whose only measurements are outside it is not a profile.
 
-### Secondary headers are a different namespace
-
-Table 4a IDs are unrelated to Table 3a codes. ID `29` is *Probe Type*; variable code `29` is
-*Air pressure*. Keep them in separate lookups. Secondary headers appear in WOD CSV output as
-`s_<id>_<name>` (e.g. `s_1_accession`, `s_3_platform`).
-
----
-
-## What the profile path cannot carry
-
-Table 3a is the *whole* list of depth-dependent measured variables. A dataset whose only
-measurements fall outside it cannot become a WOD profile, however oceanographic it is.
-Decide this before doing any work on a file.
-
-### It belongs in WOD, but not as a profile
-
-| Data | Where it actually lives |
+| Data | Where it goes |
 | --- | --- |
-| **Plankton biomass and taxonomy** | Biological Header (§5, Tables 6a/6b, Appendix 4) plus Taxa-specific and Biomass Data records (§6, p.32). A measurement carries an **upper and lower depth**, not a level — which is what a net haul actually samples. Codes `14` (all plankton), `-5002` (zooplankton), `-5006` (phytoplankton) are **PI-assignment** codes in that section, not Table 3a variables. |
-| **Bottom depth / bathymetry soundings** | Secondary header `10`, per-cast metadata. A sounding track has coordinates and a depth axis but no measured variable, so there is nothing to put on a profile. |
+| Plankton biomass and taxa | Taxa-Records with an upper and lower depth (Tables 6a, 7a; [`../plankton_biomass.md`](../plankton_biomass.md)). Codes `14`, `-5002`, `-5006` are PI-assignment codes, not variables (p.30). |
+| Bottom depth, soundings | Secondary header 10 (Bottom Depth), cast metadata |
+| Nitrite | Excluded from the online database (p.49). Code 8 is nitrate and nitrate+nitrite. |
+| Ammonium, CDOM, turbidity, PAHs, microplastics, eDNA, currents | No WOD code |
+| Conductivity, sigma-t, sound velocity, potential temperature | No WOD code. Potential temperature is derived and is never code 1. |
+| Size-fractionated chlorophyll | Only total chlorophyll maps to code 11 |
 
-Table 2 listing "Plankton data" under OSD is what makes this confusing: the *dataset* is
-right, the *record structure* is different.
+`explain_column()` in `wod_etl.mapping` lists every such column and why.
 
-**Chlorophyll is the exception that proves the rule.** Chlorophyll-a concentration at
-discrete depths is Table 3a code `11` and is a genuine profile — a phytoplankton pigment
-dataset goes through the normal path, while a zooplankton wet-weight dataset does not.
+## Originator quality flags
 
-Tables 6a/6b and 7a/7b are now extracted — `table_6a_biological_headers.json` and
-`table_7a_taxa_biomass.json`, loadable through `wod_etl.reference` — so the record shape can
-be described precisely without opening the PDF.
-[`../plankton_biomass.md`](../plankton_biomass.md) is the full picture: the Taxa-Record
-model, the sign-selects-the-unit trap, what to report, and the plankton path
-(`wod_etl.orchestration.process_taxa`) that writes it.
+Kept verbatim in their own variable, never translated: an originator's `1` may not mean WOD's
+`1`. Secondary header 96 names the flag set (p.13, p.58).
 
-### It has no WOD home at all
+## Primary header and character data
 
-Common submission columns with no Table 3a code — all must be reported as dropped, never
-mapped to something adjacent:
+- Country (Appendix 1, p.68): two-character code, mostly ISO 3166-1 alpha-2. A ship's country
+  is its flag; a float, mooring or glider takes its operator's (p.17). `99` is unknown.
+- A cruise identifier is country code + cruise number, unique within the country. No cruise
+  information: cruise number 0 (p.17).
+- Character data: the originator's cruise and station codes, and the PI as a code from
+  `primary_investigator_list` (p.30, Table 10b).
+- Code lists online: `country_list`, `primary_investigator_list` and one per coded header
+  (`code_table_links.json`).
 
-- **Nitrite.** Deliberately excluded from the online database because the data were not
-  examined for science quality (p.49). Note that code `8` is *Nitrate and Nitrate+Nitrite*,
-  which is not the same thing.
-- **Ammonium**, **CDOM absorption**, **turbidity**, **PAHs**, **microplastics**, **eDNA**.
-  CDOM in m⁻¹ is *not* code `24` (transmissivity / beam attenuation) — different measurement.
-- **Currents** (ADCP).
-- From CTD exports: **conductivity**, **sigma-t / sigma-theta**, **sound velocity**,
-  **potential temperature**. Potential temperature is the sharpest case and must not be
-  mapped to code `1`. Theta is *derived* — in-situ temperature adjusted for adiabatic
-  compression. A cast that already carries in-situ temperature would claim code 1 twice; a
-  cast carrying only theta would silently report the wrong quantity. If theta is all there
-  is, convert it to in-situ during staging — it needs pressure and salinity — and record the
-  conversion. `explain_column()` in `wod_etl.mapping` is the single registry of these, and
-  is what `match_variable` consults to refuse a match.
-- **Bottom depth, water depth, sounding.** Not a variable at all: secondary header `10`.
-  Note that a name containing "depth" is not the depth axis — treating `Bottom Depth` as the
-  vertical coordinate sets every level of the cast to the same value.
-- **Size-fractionated** anything. There is one chlorophyll code, so only a total maps.
+## Surface data (SUR, p.37)
 
-### The originator's own quality flags
+- One cast per cruise; each observation has its own latitude, longitude and Julian year-day.
+- The primary header repeats the first observation's position and time.
+- Depth is 0 m by the dataset's definition (p.20).
+- Julian year-day 0.00 is 00:00 on 1 January of the first observation's year. The worked
+  example on p.37 implies one more; this project uses the definition and says so.
+- WOD splits a cruise of more than 24,000 observations into casts (p.17). Here, streams logged
+  on one clock are merged into one cast, and each separate track file is its own cast.
 
-A submitter's flag column is **kept and never translated**. WOD Table 12 is WOD's scale; the
-originator's is theirs, and an originator `1` may mean *good* where WOD's `1` means a failed
-range check. There is no mapping between them without knowing which scheme was used — which
-is exactly what **secondary header 96, Originator's Flags** records (p.13, p.58). Its code
-list is online: `code_table_hub("originator_flag_sets")`.
+## Quality control (pp.51–56)
 
-So: carry the values verbatim into their own array, name the source column, and record the
-flag set as unknown if the file does not state it. Report that it is unknown rather than
-assuming a common scheme.
+Every check sets a flag; nothing is deleted.
 
----
+1. Depth inversion and duplication (p.52): the second of two depths that do not increase is
+   flagged 1; if three in a row are shallower than the first, every later depth is flagged.
+   A cast recorded deepest first is reversed.
+2. Range check: by depth and by basin, up to 30 basins (Appendix 11). Outliers get flag 1.
+   Without the WOD basin masks, the union across basins is used, which is permissive.
+3. Gradients (Table 13): `(v2 - v1) / (z2 - z1)`. A decrease beyond MGV is flag 3; an
+   increase beyond MIV is flag 2. Separate factors above and below 400 m; high-resolution
+   instruments use at least 3 m of depth difference; a fall to zero beyond MGV × ZSI is flag 4.
+4. Density inversions (p.54) estimate data quality; they do not flag T and S.
+5. Interpolation to standard levels (p.56) skips flagged values. Not done here.
 
-## Surface-only data is a different shape (§7a, p.37)
-
-> "Surface-only data are treated differently than profile data. For such data, each cruise
-> is presented as a single cast with depth, latitude, longitude, and Julian year-day
-> associated with each set of measured values."
-
-So a SUR cast is a **track, not a profile**:
-
-- **One cast per cruise.** Separate underway instrument streams sampling the same clock
-  belong in one cast, not one each.
-- **Every observation carries its own position and time**, as measured variables `30`, `31`
-  and `32` — this is the only place those codes are used.
-- **The primary header repeats the first observation's** longitude, latitude and date/time.
-
-Two consequences worth knowing before staging one:
-
-- **Depth.** SUR is surface data by definition (p.20). Where no intake depth is stated,
-  0 m is the dataset's own convention rather than an invented measurement — but say so.
-- **Julian year-day is specified inconsistently.** P.37 defines year-day 0.00 as 00:00 on
-  1 January of the year of the first measurement, then gives a worked example (00:00 on
-  31 Dec 1965 → 365.00) implying a value one larger. The two cannot both hold. Pick one,
-  record the choice in the output, and flag it for confirmation.
-
-### QC depends on the kind of data, not just the variable
-
-- **Non-profile datasets get no vertical checks.** Depth duplication/inversion, excessive
-  gradient and excessive inversion all describe a vertical relationship that a surface
-  track does not have. Applied anyway, a track sitting at a constant 0 m reads as a
-  duplicate depth at every level, and therefore an inversion in every variable.
-- **Air pressure, Julian year-day, latitude and longitude** "were not quality controlled
-  beyond basic data range checks" (p.49) — they exist to identify the observation, not to
-  be audited as measurements.
-- Range checks still apply everywhere.
-
----
-
-## Quality control procedure
-
-The manual applies these in order (pp. 51–56). Every check writes an integer flag; nothing
-is deleted.
-
-### 1. Depth inversion and duplication (p. 52)
-
-A **depth inversion** is an observation shallower than the one directly before it. A **depth
-duplicate** repeats the previous depth. The *second* observation is always flagged — the
-manual explicitly does not try to evaluate which reading is right.
-
-- Second of two successive depths is shallower → flag that depth **1**
-- Three successive depths shallower than the first → flag **every** subsequent depth **1**
-  (this signals two profiles concatenated with no separating header)
-- Two successive depths equal → flag the second **1**
-- Correct depths → flag **0**
-
-Afterwards, casts submitted deepest-first are sorted so the shallowest depth comes first.
-
-### 2. Range check (pp. 52–53)
-
-Observed values are compared against acceptable ranges that vary **by depth and by ocean
-basin** — 102 standard levels across 16 basin columns (Appendix 11). Outliers get observed-
-level flag **1**.
-
-A single global min/max pair is not what the manual specifies. The widest surface bounds
-(e.g. −2.10 to 35.00 °C) will pass a 25 °C reading at 3000 m, which the depth-specific range
-would reject.
-
-### 3. Excessive vertical gradient (pp. 53–54, Table 13)
-
-```
-gradient = (v2 - v1) / (z2 - z1)
-```
-
-where 1 is the current level and 2 the next.
-
-Two **different** thresholds, in opposite directions:
-
-| Direction | Threshold | Meaning | Flag |
-| --- | --- | --- | --- |
-| Negative gradient (decrease with depth) | **MGV** — Maximum Gradient Value | excessive gradient | **3** |
-| Positive gradient (increase with depth) | **MIV** — Maximum Inversion Value | excessive inversion | **2** |
-
-MGV ≠ MIV. Temperature is the clearest case: MGV 0.700 but MIV 0.300 — a symmetric
-threshold is wrong in both directions.
-
-Additional rules:
-
-- **Separate values above and below 400 m.** Oxygen is 43.570 shallow, 32.677 deep;
-  salinity drops from 9.000 to 0.050.
-- **High-resolution instruments (HCTD, XBT) use a minimum depth difference of 3.0 m** when
-  computing the gradient, to stop tiny Δz inflating the result.
-- **Zero-sensitivity check (ZSI).** Distinguishes a true zero from a zero used as a
-  missing-value marker: if a gradient decreasing to zero exceeds `MGV × ZSI`, flag **4**.
-  Mostly relevant to historical nutrient data.
-
-### 4. Density check (p. 54)
-
-Density inversions are located on observed level data but are *not* used to flag temperature
-and salinity for subsequent QC — they estimate data quality before interpolation. Depth flag
-**2** records a density inversion.
-
-### 5. Interpolation to standard levels (p. 56)
-
-Uses a modified Reiniger and Ross (1968) scheme over the two nearest shallower and two
-nearest deeper observations. **Anything flagged as a range outlier, excessive gradient,
-inversion, or depth error is excluded from interpolation.** This is what the flags are
-ultimately for.
-
----
+Surface tracks get no vertical checks: depth duplication, gradient and inversion describe a
+profile. Air pressure, year-day, latitude and longitude get range checks only (p.49).
 
 ## Flag scales (Table 12)
 
-Five distinct scales. The same integer means different things in each — never mix them in
-one column.
+Five scales; never mix them in one column. Depth flags: 0 accepted, 1 duplicate or inversion,
+2 density inversion. Observed-level flags: 0 accepted, 1 range, 2 inversion, 3 gradient, 4
+bullseye or zero gradient, 5–9 combinations. The cast, standard-level and biological scales are
+in `table_12_qc_flags.json`.
 
-**Depth flags** (individual depth readings):
+## Units (Tables 3a, 3b)
 
-| | |
-| --- | --- |
-| 0 | accepted value |
-| 1 | duplicates or inversions in recorded depth |
-| 2 | density inversion |
+- Per-volume to per-mass uses the sample's density, or a constant 1025 kg/m³ when it is not
+  reported (p.15). The output records which.
+- Oxygen to µmol/l: ml/l × 1000 / 22.3916 (molar volume), mg/l × 1000 / 31.9988 (2 × 15.9994,
+  Table 3b); then ÷ density for µmol/kg.
+- Alkalinity and DIC stay per volume: µmol/kg for them is a unit to convert, not the standard.
+- Equal to the standard, so left alone: chlorophyll in mg/m³, air pressure in hPa,
+  oxygen and nutrients already in µmol/kg. Fluorescence in RFU or volts is not a concentration.
+- The originator's unit goes in variable header 8 (`v_8_orig_units`) only when it differs
+  from the standard; a depth unit other than metres goes in secondary header 95.
+- Unit text is compared after folding typographic forms (`µmol kg−1`, `μmol/kg`).
 
-**Observed level flags** (individual variable observations):
+## XBT (p.61)
 
-| | |
-| --- | --- |
-| 0 | accepted value |
-| 1 | range outlier |
-| 2 | failed inversion check |
-| 3 | failed gradient check |
-| 4 | "bullseye" flag and zero gradient check |
-| 5 | combined gradient and inversion checks |
-| 6 | failed range and inversion checks |
-| 7 | failed range and gradient checks |
-| 8 | failed range and questionable data checks |
-| 9 | failed range and combined gradient and inversion checks |
-
-The other three scales — entire cast, standard level, and biological (CBV, taxa code 27) —
-are in `table_12_qc_flags.json`.
-
-Note that flag `1` legitimately means *inversion* on the depth scale and *range outlier* on
-the observed-level scale. Both are correct in their own column.
-
----
-
-## Unit conversion (Table 3b)
-
-The manual supplies atomic weights and the molar volume of O₂ at STP (22.3916 l/mol), used
-for converting oxygen between volumetric and molar units.
-
-It gives **no seawater density constant**. Converting µmol/l to µmol/kg requires in-situ
-density; 1025 kg/m³ is a common stand-in when density is unavailable, but it is an
-assumption introduced by the implementer, not a WOD-specified value. Record it in the output
-metadata when used.
-
-### Traps
-
-Standard units are mandatory, so a unit that is merely *plausible* is a silent error. Four
-that bite:
-
-| Source unit | Variable | What must happen |
-| --- | --- | --- |
-| `mg/l` | Oxygen (3) | ÷ molar mass of O₂ (2 × 15.9994 g/mol), then ÷ density. Roughly a 30× error if missed. |
-| `ml/l` | Oxygen (3) | × 1000 / 22.3916, then ÷ density. |
-| `µmol/kg` | **Alkalinity (17), DIC (21)** | Still needs converting — their standard is mmol/l, **not** µmol/kg. A ~1000× labelling error if treated as already-standard. |
-| `µmol/l` | Nutrients (3, 4, 6, 8) | ÷ density to reach µmol/kg. |
-
-Units that need nothing, and must not be "corrected":
-
-- `mg m⁻³` for chlorophyll — identical to the standard µg/l.
-- `hPa` for air pressure — identical to the standard mbar.
-- `ppb` from a chlorophyll fluorometer — conventionally read as µg/l; say so rather than
-  scaling it. Fluorescence in RFU, volts or counts is **not** a concentration and is dropped:
-  the unit decides, not the name (`fluorescence_rule` in `wod_etl/mapping/query_wod_spec.py`).
-- `µmol/kg` for oxygen and nutrients — already standard.
-
-The rule underneath: **check the direction against Table 3a before converting.** Per-mass
-and per-volume both appear in the standard units, and which one applies is per-variable.
-
-### The unit may not be spelt the way you expect
-
-A header pasted out of Word or a journal PDF writes `µmol kg−1` with a true minus (U+2212),
-or `μmol/kg` with a Greek mu instead of the micro sign — both identical on screen, neither
-matching a plain-ASCII pattern. `canonical_unit_text` folds these onto one spelling before
-any matching, so the conversion is still detected; `extract_unit` keeps the originator's own
-text for variable specific second header 8. Nothing here rewrites the submitter's header.
-
----
-
-## Cruise and position conventions (p. 17)
-
-- A cruise identifier is **ISO 3166-1 country code + cruise number**. The cruise number is
-  unique only within a country code.
-- Country code is the flag of the ship; for floats, buoys and gliders it is the country of
-  the operating institute.
-- **No country information → code 99. No identifiable cruise → cruise number 0.**
-- For profiling floats, moored buoys and drifting buoys, one cruise number covers the entire
-  life of the platform. A glider deployment is one cruise.
-- In SUR, a cast and a cruise are the same thing (except 27 cruises split in two for size).
+Observed-level depths are kept as submitted. Secondary header 33 records the depth-time
+equation: 0 the original (Sippican), 1 a corrected one (Hanawa et al. 1995 or later). Header 54
+says whether a correction is needed. A probe stated as a model (`T-7`) is category XBT in
+header 29 and the model in variable header 5.

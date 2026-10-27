@@ -354,7 +354,7 @@ def stage_triage(run: Run, changed: bool) -> Dict[str, Any]:
     counts = {a: len(report.get(f"{a}_files") or []) for a in
               ("process", "stage", "sidecar", "exclude", "document", "inspect")}
     for f in report["files"]:
-        runlog.event(log, logging.INFO, f"triage {f['path']}: {f['action']} -- {f['data']}",
+        runlog.event(log, logging.INFO, f"triage {f['path']}: {f['action']} ({f['data']})",
                      kind="triage_file", path=f["path"], action=f["action"],
                      include=f["include"], dataset=f["dataset"], data=f["data"],
                      why=f["why"], reason=f["reason"], evidence=f["evidence"])
@@ -425,7 +425,7 @@ def _settle(run: Run, stage: str, propose: bool) -> Dict[str, Any]:
                                   "Nothing to do: the check is skipped.",
                                   blocking=False, kind="warning") for w in warnings]
     for c in conflicts:
-        runlog.event(log, logging.WARNING, f"station check {c['id']}: {c['what']} -- the "
+        runlog.event(log, logging.WARNING, f"station check {c['id']}: {c['what']}; the "
                                            f"station list is kept",
                      kind="station_check", id=c["id"], values=c.get("values"))
     included = len(plan["direct"]) + sum(len(r.get("files") or [])
@@ -449,7 +449,7 @@ def stage_decide(run: Run, changed: bool) -> Dict[str, Any]:
         runlog.event(log, logging.INFO,
                      f"decision {e['key']} ({e['files']} file(s)): "
                      f"{'include as ' + str(e['dataset']) if e['include'] else 'leave out'}"
-                     f" -- {e['why']}", kind="decision", key=e["key"], files=e["files"],
+                     f"; {e['why']}", kind="decision", key=e["key"], files=e["files"],
                      include=e["include"], dataset=e["dataset"], data=e["data"], why=e["why"])
     summary = (f"{out['included_files']} file(s) to include, {len(plan['left_out'])} to leave "
                f"out ({out['entries_added']} entr{'y' if out['entries_added'] == 1 else 'ies'} "
@@ -505,8 +505,7 @@ def _not_ready(run: Run) -> Optional[Dict[str, Any]]:
             and prior.get("left") == _left_behind(run, name)
         if not current and name == "triage" and prior.get("status") == "done" \
                 and fp is not None and _triages_as_reviewed(run):
-            # The code changed but triages the files as reviewed: no new review needed, and
-            # the new triage replaces the old.
+            # Changed code that triages the files as reviewed needs no new review.
             prior.update({"fingerprint": fp, "left": _left_behind(run, name)})
             prior.setdefault("outputs", {})["triage_hash"] = _hash(run.triage())
             runlog.event(log, logging.INFO, "triage: the code changed, but it triages the "
@@ -730,8 +729,7 @@ def stage_process(run: Run, changed: bool) -> Dict[str, Any]:
         n_hauls = sum(f["hauls"] for f in taxa["files"])
         summary += (f"; {n_hauls} haul(s) into {len(taxa['files'])} Taxa-Record file(s)"
                     + (f", {len(taxa['failures'])} failed" if taxa["failures"] else ""))
-    # Deterministic failures are reported and the stage is done; transient ones fail the
-    # stage so the next confirm retries them.
+    # Deterministic failures leave the stage done; transient ones fail it so confirm retries them.
     return _outcome("failed" if transient else "done", summary, outputs, problems)
 
 
@@ -763,8 +761,7 @@ def _fp_verify(run: Run) -> str:
 
 
 def stage_verify(run: Run, changed: bool) -> Dict[str, Any]:
-    """Check profile files with verify_output and Taxa-Record files with
-    validate_taxa_netcdf. The output is verified only if every file passes."""
+    """Check profile and Taxa-Record files; the output is verified only if every file passes."""
     from wod_etl.verify import validate_taxa_netcdf, verify_output
     from wod_etl.writers import is_taxa_file_name
 
@@ -886,7 +883,7 @@ def _locked(ws: Workspace, source: str, command: str, stages: tuple,
         return _refused(ws.accession, stages[0], f"cannot write the run folder {ws.run_dir}",
                         f"{type(e).__name__}: {e}",
                         "Check that the folder is writable and the disk is not full, then "
-                        "run the same command again -- it continues from where it stopped.")
+                        "run the same command again: it continues from where it stopped.")
 
 
 def _drive(ws: Workspace, source: str, command: str, stages: tuple,
@@ -943,7 +940,7 @@ def _drive(ws: Workspace, source: str, command: str, stages: tuple,
             intact = not done or prior.get("left") == _left_behind(run, name)
             if done and intact and prior.get("fingerprint") == fp and name not in forced:
                 say(f"[{i}/{total}] {name:<8} ✓ {prior.get('summary', '')} (unchanged)")
-                runlog.event(log, logging.INFO, f"stage {name}: up to date, reused -- "
+                runlog.event(log, logging.INFO, f"stage {name}: up to date, reused; "
                                                 f"{prior.get('summary', '')}",
                              kind="stage_reused", stage=name)
                 continue
@@ -988,13 +985,13 @@ def _drive(ws: Workspace, source: str, command: str, stages: tuple,
             mark = {"done": "✓", "failed": "✗", "blocked": "⏸"}.get(outcome["status"], "?")
             say(f"[{i}/{total}] {name:<8} {mark} {outcome['summary']}")
             runlog.event(log, logging.WARNING if outcome["status"] != "done" else logging.INFO,
-                         f"stage {name}: {outcome['status']} -- {outcome['summary']}",
+                         f"stage {name}: {outcome['status']}, {outcome['summary']}",
                          kind="stage_end", stage=name, status=outcome["status"],
                          problems=outcome["problems"])
             # Also write each problem to the text log, not only events.jsonl.
             for p in outcome["problems"]:
                 log.log(logging.WARNING if p.get("blocking") else logging.INFO,
-                        "  %s: %s%s -- fix: %s", "problem" if p.get("blocking") else "note",
+                        "  %s: %s%s; fix: %s", "problem" if p.get("blocking") else "note",
                         p["what"], f" ({p['why']})" if p.get("why") else "", p["how_to_fix"])
             if outcome["status"] == "failed":
                 exit_code, stopped = EXIT_FAILED, True

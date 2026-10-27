@@ -37,8 +37,6 @@ class TestPortablePackage:
 
 
 class TestEveryPackageDocumentsItself:
-    """Every package has a README."""
-
     PACKAGES = sorted(p.name for p in (ROOT / "wod_etl").iterdir()
                       if p.is_dir() and (p / "__init__.py").exists())
 
@@ -82,7 +80,7 @@ class TestReferenceDataIsPresent:
 
 
 class TestNoAgentLayer:
-    """The removed agent layer must not return. Patterns are split so this file does not match."""
+    """Patterns are split so this file does not match."""
 
     GONE = ["." + "claude/skills", "AGENTS" + ".md", "CLAUDE" + ".md", "GEMINI" + ".md"]
     TEXT = {".py", ".md", ".toml", ".txt", ".json", ".js", ".html", ".css", ".csv", ".lock",

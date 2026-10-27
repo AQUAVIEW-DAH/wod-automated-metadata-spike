@@ -1,13 +1,6 @@
 """Build WOD MRB profiles from a mooring's per-instrument files: one profile a day, each
 instrument's daily mean at its depth (manual p.17; p.14, note 6).
 
-    from wod_etl.staging import read_instrument, mooring_days, mooring_profiles
-
-    instruments = [read_instrument(p) for p in paths]           # what each file holds
-    days = mooring_days(paths, instruments, window=deployed)     # daily means while deployed
-    built = mooring_profiles(instruments, days, {"RBRsolo_SN1.nc": 10.0,
-                                                 "SBE37_SN2.nc": "pressure"}, latitude=56.84)
-
 Instruments without pressure or a known depth are left out rather than placed at a guess.
 """
 import math
@@ -118,8 +111,8 @@ def _coordinate(ds, axis: str) -> Optional[float]:
 
 
 def _flags(ds, name: str, v):
-    """(flag variable, the flag values that mean bad -- or None when its meanings are not
-    stated) for a measurement, through `ancillary_variables` or a `<name>_qc` beside it."""
+    """(flag variable, the flag values that mean bad, or None without stated meanings) for a
+    measurement, through `ancillary_variables` or a `<name>_qc` beside it."""
     candidates = str(getattr(v, "ancillary_variables", "") or "").split()
     candidates += [n for n in ds.variables
                    if n.lower() in (f"{name}_qc".lower(), f"{name}_flag".lower(),
@@ -138,15 +131,14 @@ def _flags(ds, name: str, v):
 
 
 def read_instrument(path) -> Dict[str, Any]:
-    """What one instrument's file holds, without reading its record:
+    """What one instrument's file holds, without reading its record.
 
     `{"file", "name", "model", "instrument", "serial" (as `serial_key` compares it),
-    "latitude", "longitude", "samples", "interval"
-    (typical seconds between samples), "record" ([first, last] epoch seconds), "variables":
-    [{"name", "code", "column", "units", "factor", "offset", "flag", "bad_flags"}],
-    "pressure" (variable name or None), "depth", "depth_source", "not_stored": [labels],
-    "notes": [...], "error"}`. A pressure is converted to decibars (`factor`, and `offset`
-    for the atmosphere an absolute pressure includes)."""
+    "latitude", "longitude", "samples", "interval" (typical seconds between samples),
+    "record" ([first, last] epoch seconds), "variables": [{"name", "code", "column", "units",
+    "factor", "offset", "flag", "bad_flags"}], "pressure" (variable name or None), "depth",
+    "depth_source", "not_stored": [labels], "notes": [...], "error"}`. Pressure is converted
+    to decibars by `factor`, less `offset` (the atmosphere in an absolute pressure)."""
     import netCDF4
 
     from wod_etl.mapping.query_wod_spec import match_variable
@@ -312,9 +304,8 @@ def wet_window(path, info: Dict[str, Any]) -> Optional[List[float]]:
 
 
 def in_water(path, info: Dict[str, Any]) -> Dict[str, Any]:
-    """`{"window": [first, last] epoch seconds under water (as wet_window), "pressure": its
-    usual pressure under water, dbar}` for an instrument that records pressure; Nones
-    without."""
+    """`{"window": [first, last] epoch seconds under water, "pressure": its usual pressure
+    under water, dbar}` for an instrument that records pressure; Nones without."""
     import netCDF4
 
     none = {"window": None, "pressure": None}

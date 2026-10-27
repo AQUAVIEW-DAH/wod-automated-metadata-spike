@@ -1,8 +1,4 @@
-"""Download a complete file to data/raw/.
-
-Downloads stream to a .part file renamed on completion, so an interrupted run never leaves a
-truncated file that looks finished.
-"""
+"""Download a file to data/raw/ via a .part file, so an interrupted run leaves no truncated file."""
 import hashlib
 import os
 import shutil

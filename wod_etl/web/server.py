@@ -57,10 +57,8 @@ def _command_line(command: str, *args: str) -> List[str]:
 
 
 def _start(accession: str, command: str, argv: List[str]):
-    """Start `argv` as a background child process unless a job is running.
-
-    Its output lines become the job's activity log.
-    """
+    """Start `argv` as a background child process unless a job is running. Its output lines
+    become the job's activity log."""
     global _job
     with _job_lock:
         running = _busy()
@@ -292,7 +290,7 @@ def report(accession: str):
 
 @app.get("/api/log/{accession}", response_class=PlainTextResponse)
 def log(accession: str, lines: int = Query(300, ge=1, le=5000)):
-    """The end of run.log -- the detail behind every stage, file and decision."""
+    """The end of run.log, which details every stage, file and decision."""
     p = _workspace(accession).log_path
     if not p.is_file():
         return ""

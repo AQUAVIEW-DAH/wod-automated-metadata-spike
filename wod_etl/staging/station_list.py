@@ -1,10 +1,5 @@
 """Read a sibling station list and join it to the casts it locates.
 
-    from wod_etl.staging import read_station_list, join_station_list
-
-    stations, info = read_station_list("0-data/stations.csv")
-    matched, report = join_station_list(["1", "2", "11"], stations)
-
 Neither raises; rows that are not stations and casts without a station are reported.
 """
 import collections
@@ -29,17 +24,14 @@ _ROLE_PATTERNS = {
     "year": r"^year$|^yr$",
 }
 
-# A zone named in a header: 'Date time (UTC)', 'start time (local)', 'Time [JST]'.
+# A zone named in a header: 'Date time (UTC)', 'Time [JST]'.
 _ZONE_IN_HEADER = re.compile(
     r"[\(\[]\s*(utc|gmt|ut|z|local|lt|ship'?s?\s*time|"
     + "|".join(re.escape(z) for z in ZONE_NAMES) + r")\s*[\)\]]", re.I)
 
 
 def normalise_station(value: Any) -> str:
-    """A comparable station key: 'St-01', 'stn 1', 'Station 1' and '1' are all '1'.
-
-    A non-numeric key keeps its letters, lower-cased.
-    """
+    """A comparable, lower-cased station key: 'St-01', 'stn 1' and '1' are all '1'."""
     s = str(value or "").strip().lower()
     s = re.sub(r"^(?:station|stn|st)[\s._#-]*(?:no\.?)?[\s._#-]*", "", s)
     s = re.sub(r"[\s_-]+", "", s)
@@ -103,14 +95,12 @@ def read_station_list(
     """Parse a station list into `{station_key: entry}`, in file order.
 
     `source` is a path, or `(columns, rows)` from `read_table`. Column roles are detected
-    from the header (`Station No.`, `Lat`, `Long`, `Date`, `Year`, `Time`) or named here.
-
-    Each entry holds `station` (as written), `latitude`, `longitude`, `date` (YYYY-MM-DD),
-    `time` (HH:MM, or None), `time_known`, `time_zone`, `row` and `raw` (cells as written).
+    from the header or named here. Each entry holds `station` (as written), `latitude`,
+    `longitude`, `date` (YYYY-MM-DD), `time` (HH:MM, or None), `time_known`, `time_zone`,
+    `row`, `raw` (cells as written) and `source`.
 
     `info` records the column roles, dropped rows and why, and repeated station keys. A
-    repeated key is a re-occupied station, kept as `key#2`, `key#3`; group its casts on
-    station and date.
+    repeated key is a re-occupied station, kept as `key#2`, `key#3`.
 
     `time_zone` is recorded, not converted; a zone named in a header (`Date time (UTC)`)
     takes precedence.
@@ -219,7 +209,7 @@ def read_station_list(
 
     if info["duplicates"]:
         info["note"] = ("Some station keys repeat: a station occupied more than once. Match "
-                        "casts on station AND date, not station alone.")
+                        "casts on station and date, not station alone.")
     return stations, info
 
 
@@ -250,6 +240,6 @@ def join_station_list(
         "casts_without_station": unmatched_casts,
         "stations_without_cast": unused,
         "note": (None if not (unmatched_casts or unused) else
-                 "Reconcile both lists before staging: an unmatched name on each side is "
-                 "usually the same cast spelt two ways. Never skip one silently."),
+                 "Some casts and stations did not match; an unmatched name on each side is "
+                 "usually the same cast spelt two ways."),
     }

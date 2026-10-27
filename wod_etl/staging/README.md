@@ -12,27 +12,22 @@ from wod_etl.staging import (parse_coordinate, parse_timestamp, pressure_to_dept
                              write_staged_haul, read_staged_haul)
 ```
 
-For the shapes these handle (coordinate forms, non-English headers, sentinel legends, casts
-split across files, date/time traps), see
+For the shapes these handle, see
 [`knowledge/accession_field_guide.md`](../../knowledge/accession_field_guide.md).
 
 Phases 1–4 assume a file carries its own coordinates and parses as a table. Staging writes a
-derived copy into `data/staging/` that does. `data/raw/` is never edited; the staged file
-records where each added value came from.
+derived copy that does into `data/staging/`; `data/raw/` is never edited, and the staged file
+records where each added value came from. A file with coordinates and a clean single-row
+header (most CTD and float files) needs no staging; bottle, nutrient, plankton and underway
+submissions usually do.
 
-Skip this phase when a file already has coordinates and a clean single-row header (most CTD
-and float files). Bottle, nutrient, plankton and underway submissions usually need it.
-
-These are primitives. `wod-etl` stages common shapes itself (long tables, moorings,
-plankton) using them in `orchestration/recipes.py`. Anything else needs a staging script
-(`kind = "script"` in `decisions.toml`). Either way, staging is logged to
-`data/runs/<acc>/run.log`.
+`wod-etl` stages common shapes (long tables, moorings, plankton) with these primitives in
+`orchestration/recipes.py`; anything else needs a staging script (`kind = "script"` in
+`decisions.toml`). Staging is logged to `data/runs/<acc>/run.log`.
 
 ---
 
 ## Does this file need staging?
-
-Look at the file and its siblings first.
 
 | What you see | What it means | Fix |
 | --- | --- | --- |
@@ -48,44 +43,36 @@ Look at the file and its siblings first.
 | Taxa down, stations across | A count matrix | `melt_matrix`, then `write_staged_haul` |
 | Positions only in a report table | A PDF holds the station list | `extract_pdf_rows` |
 
-Positions and dates are sometimes only in a readme PDF. Read the readmes before deciding a
-dataset cannot be staged.
-
 ---
 
 ## `read_table(path, header_row=0, encoding=None, drop_blank_rows=True, delimiter=",", comment_prefix=None)`
 
 Returns `(columns, rows, info)`. Handles what stops `load_tabular`:
 
-- **Encoding**: tries `config.TEXT_ENCODINGS` in order (e.g. cp932 for Japanese exports).
-  `info["encoding"]` says which worked.
-- **Blank rows**: files saved with `\r\r\n` have an empty row between every real one.
+- **Encoding**: tries `config.TEXT_ENCODINGS` in order (e.g. cp932); `info["encoding"]` names
+  the one used.
+- **Blank rows**: dropped; files saved with `\r\r\n` have one between every real row.
 - **Title row above the header**: `header_row` indexes the non-blank rows.
-- **Delimiter**: `","` by default. Pass `delimiter=None` to sniff it from the header (for tab-
-  or semicolon-separated files). Sniffing never picks whitespace; fixed-width files belong
-  to `read_any`.
+- **Delimiter**: `","` by default; `delimiter=None` sniffs it from the header. Sniffing never
+  picks whitespace; fixed-width files belong to `read_any`.
+- **Comment rows**: `comment_prefix="#"` drops `# ...` rows (a staged table's `# Source:`
+  lines) before the header is located.
 
 ```json
 {"encoding": "utf-8-sig", "delimiter": ",", "rows_in_file": 1019,
  "blank_rows_dropped": 510, "data_rows": 507, "duplicate_columns": []}
 ```
 
-`comment_prefix="#"` drops `# ...` rows before the header is located (as in a staged table's
-`# Source:` lines).
-
-**Check:**
-
-- `blank_rows_dropped`: a large count confirms double-spacing.
-- `duplicate_columns`: a merged header that needs decoding by hand.
-- `len(columns)`: a tab-separated file read as CSV comes back as one column and is later
-  skipped as holding no measurements.
+A large `blank_rows_dropped` means double-spacing; `duplicate_columns` is a merged header to
+decode by hand. A tab-separated file read as CSV comes back as one column and is skipped as
+holding no measurements.
 
 ---
 
 ## `clean_sentinels(rows, columns, extra=None)`
 
 Replaces the originator's missing-value codes with empty fields and returns
-`(rows, counts)` keyed `"<column> :: <code>"`. Report the counts.
+`(rows, counts)`, counts keyed `"<column> :: <code>"`.
 
 | Code | Meaning | Consequence |
 | --- | --- | --- |
@@ -94,11 +81,9 @@ Replaces the originator's missing-value codes with empty fields and returns
 | `*DL` | below detection limit | a real measurement under a stated threshold |
 | `**ND` | not detected | same |
 
-WOD Table 12 has no flag for below-detection, so `*DL` still becomes missing; report how many.
-Do not substitute the detection limit.
-
-The legend is usually in the last rows of the sheet or the readme, and differs between
-submitters. Pass other codes via `extra`.
+WOD Table 12 has no flag for below-detection, so `*DL` also becomes missing; the detection
+limit is never substituted. Legends differ between submitters (usually in the sheet's last
+rows or the readme); `extra` adds other codes.
 
 ---
 
@@ -139,35 +124,26 @@ scale (`extract_scale`). A rename that loses one still validates, so these are r
 | `Temperature [ITS-90, deg C]` → `Temperature (deg C)` | the scale | variable specific header 3 is lost |
 | `T090C` → `Theta` | the code | the column maps to nothing and is dropped |
 
-A refusal prints the fix (e.g. `use 'Temperature (deg F)'`) and applies nothing; the columns
-come back unchanged.
-
-Renames that only add information are allowed:
-
-- `col_0` → `Depth (m)`: naming a headerless column.
-- `DO` → `DO (mg/L)`: adding a unit, which makes the conversion detectable.
+A refusal names the fix (e.g. `use 'Temperature (deg F)'`) and applies nothing; the columns
+come back unchanged. Renames that only add information are allowed: naming a headerless
+column (`col_0` → `Depth (m)`) or adding a unit (`DO` → `DO (mg/L)`).
 
 `strict=False` applies a refused rename anyway and sets `applied_with_problems`. A query
 that matches no column, or a collision (two columns under one name), is always refused and
-listed in `audit["blocked"]`.
-
-Include `audit["renames"]` in your report.
+listed in `audit["blocked"]`. `audit["renames"]` records every rename, applied or refused.
 
 ### `suggest_column_names(columns, units=None)`
 
-A proposal, not applied. Per column: the WOD variable, its unit, and a suggested name where
-one is safe.
-
-- Sensor pairs (`t090C`, `t190C`) both resolve to code 1, so they are listed under
-  `collisions` with no suggestion.
-- Renaming does not change output: the NetCDF variable name comes from the WOD code.
-  Renaming is only for legibility of the staged file.
+A proposal, not applied: per column, the WOD variable, its unit and a suggested name where
+one is safe. Sensor pairs (`t090C`, `t190C`) both resolve to code 1, so they are listed under
+`collisions` with no suggestion. A rename does not change the NetCDF variable name, which
+comes from the WOD code.
 
 ---
 
 ## `combine_levels(tables)` and `combine_on_key(tables, key, key_aliases=None)`
 
-Combine a cast split across files before staging.
+Combine a cast split across files.
 
 **One file per depth:**
 
@@ -176,7 +152,7 @@ cols, rows, info = combine_levels([read_table(p)[:2] for p in sorted(files)])
 rows.sort(key=lambda r: float(r[0]))
 ```
 
-Check `info["schema_mismatches"]`: a table whose columns differ is dropped.
+A table whose columns differ is dropped and listed in `info["schema_mismatches"]`.
 
 **One file per variable:** join on depth for a profile, or on a timestamp for an underway
 track.
@@ -186,8 +162,8 @@ cols, rows, info = combine_on_key([(c1, r1), (c2, r2)], key="Depth (m)",
                                   key_aliases=["DEPTH", "depth_m"])
 ```
 
-Check `info["per_table"]` (`key_column`, `matched_existing_keys`, `distinct_keys`,
-`duplicate_keys_within_table`):
+`info["per_table"]` gives each table's `key_column`, `matched_existing_keys`, `distinct_keys`
+and `duplicate_keys_within_table`:
 
 | What you see | What it means |
 | --- | --- |
@@ -195,9 +171,19 @@ Check `info["per_table"]` (`key_column`, `matched_existing_keys`, `distinct_keys
 | `duplicate_keys_within_table` non-zero | one file repeats a key; the later row overwrites the earlier |
 | `colliding_columns` non-empty | a variable appears in more than one table; only the last value survives |
 
-- Judge overlap against `distinct_keys`, not `rows`.
-- Keys are compared as raw text (`0`, `0.0` and `00.0` differ). Normalise the key column
-  when files format depths differently.
+Overlap is judged against `distinct_keys`, not `rows`. Keys are compared as raw text (`0`,
+`0.0` and `00.0` differ); normalise them first when files format depths differently.
+
+---
+
+## `combine_tracks(paths)` (`tracks.py`)
+
+Combines surface tracks on one clock into one SUR cast each (manual pp.16, 37). Files sharing
+at least 90% of their stamps both ways merge on time; a file sharing at least 10% of its stamps
+with them joins at those stamps, and the rest of it stays a track of its own. Each track is a
+table of time, Latitude, Longitude (from the stream with the most positions, filled from the
+others) and the measurements; a name two streams share is labelled with its file.
+`clock_column` and `clock_times` find and read a track's time column (zoned stamps to UTC).
 
 ---
 
@@ -219,11 +205,11 @@ longitude, date, time and year columns (or takes them by name), parses every coo
 "date", "time", "time_known", "time_zone", "row", "raw", "source"}}` in file order.
 
 ```python
-stations, info = read_station_list(SRC / "SHU1505_StationInfo.csv")
-info["dropped"]      # footer remarks in the station column, by row -- never silent
-info["duplicates"]   # a re-occupied station: key '7#2'. Match on station AND date then.
+stations, info = read_station_list(SRC / "stations.csv")
+info["dropped"]      # footer remarks in the station column, by row
+info["duplicates"]   # a re-occupied station, keyed '7#2'
 matched, report = join_station_list(cast_keys, stations)
-report["casts_without_station"], report["stations_without_cast"]   # report BOTH sides
+report["casts_without_station"], report["stations_without_cast"]   # unmatched on each side
 ```
 
 Keys are compared through `normalise_station`, so `St-01`, `stn 1`, `Station 1` and `1`
@@ -235,7 +221,7 @@ be `(columns, rows)`, e.g. from `extract_pdf_rows`.
 ## `pivot_long(tables, keys, variable, value, *, key_aliases=None, columns=None)`
 
 Long format names the variable in a cell (`Cruise,StNo,parm,depth,value`), so the single
-`value` column maps to nothing. Pivot it, usually across one file per variable:
+`value` column maps to nothing until pivoted, often across one file per variable:
 
 ```python
 tables = [read_table(p)[:2] for p in (temp_csv, sal_csv, fluor_csv)]
@@ -243,13 +229,13 @@ cols, rows, info = pivot_long(
     tables, keys=["StNo", "depth"], variable="parm", value="value",
     key_aliases={"depth": ["dep"]},                   # the temperature file says 'dep'
     columns={"Temperature": "Temperature (deg C)", "Salinity": "Salinity (PSU)",
-             "fluorescence": "Fluorescence (ug/l)"})  # the unit goes in HERE
+             "fluorescence": "Fluorescence (ug/l)"})  # the unit goes here
 for (station,), levels in group_rows(rows, cols, ["StNo"]).items(): ...
 ```
 
-Numeric keys compare as numbers (`4.969` = `4.9690`). Read `info`: `conflicts` (one key and
-variable with two values; the first is kept, all are listed), `levels_missing_variable`, and
-`per_table` (key columns each table used).
+Numeric keys compare as numbers (`4.969` = `4.9690`). `info` lists `conflicts` (one key and
+variable with two values; the first is kept), `levels_missing_variable` and `per_table` (the
+key columns each table used).
 
 ## `melt_matrix(rows, *, header_rows, label_columns, header_names, fill_down=(), fill_across=True, thousands=",", blank="absent")`
 
@@ -265,10 +251,10 @@ sample" by default (`blank="absent"`: no row written, counted in `info["blank_ce
 ## `reconcile_stations(sources, *, position_tolerance_km=5.0)` and `check_track(stations, *, outlier_factor=1.75, bounding_box=None)`
 
 Cross-check positions and dates stated in more than one place (station list, trawl log,
-report tables).
+report tables). Neither changes data.
 
 ```python
-report = reconcile_stations({"SHU1505_StationInfo.csv": stations,
+report = reconcile_stations({"stations.csv": stations,
                              "report p.4 Table 1": table1,          # extract_pdf_rows
                              "report p.5 Table 2 (trawls)": trawls},
                             position_tolerance_km=10)
@@ -276,31 +262,29 @@ report["conflicts"]     # [{"station": "6", "field": "date", "values": {...}}, .
 check_track(stations)["flags"]   # an outlying hop, time running backwards, impossible speed
 ```
 
-- Set the tolerance for the sources: two copies of one list should agree to the arc-minute;
-  a trawl may be kilometres from its CTD station.
+- The tolerance depends on the sources: two copies of one list agree to the arc-minute; a
+  trawl may be kilometres from its CTD station.
 - `check_track` needs stations in occupation order. A hop over `outlier_factor` times the
   median often means a mistyped degree.
-- Neither changes data. Settle each conflict from a third source or with the submitter, and
-  record the choice in `notes`.
 
 ---
 
 ## `extract_pdf_rows(path, page, row_pattern, columns)` and `write_staged_table(path, columns, rows, *, source, notes=None)`
 
-Extracts table rows from a PDF report. Describe one row as a regex (one group per column)
+Extracts table rows from a PDF report. A row is a regex with one group per column, matched
 against the page text with whitespace collapsed:
 
 ```python
 cols, rows, info = extract_pdf_rows(
-    "0-data/Final.Report.U2015-015.JAPAN.pdf", page=8,
+    "0-data/cruise_report.pdf", page=8,
     row_pattern=r"(\d+) (Nov\. \d{2}, \d{4}) (\S+E) (\S+N) (\d+\.\d) (\d+)",
     columns=["Station", "Date", "Long", "Lat", "SST (deg C)", "Tow depth (m)"])
-info["source"]   # 'Final.Report.U2015-015.JAPAN.pdf, PDF page 8 (printed page 5)'
+info["source"]   # 'cruise_report.pdf, PDF page 8 (printed page 5)'
 ```
 
-`page` is the PDF's own index. Compare `info["matches"]` with the printed table; rows the
-pattern misses are not flagged. `write_staged_table` saves rows with a `# Source:` citation so
-`read_station_list` can read them back.
+`page` is the PDF's own index, not the printed page. Rows the pattern misses are not flagged,
+so `info["matches"]` is the count to compare with the printed table. `write_staged_table`
+saves rows with a `# Source:` citation so `read_station_list` can read them back.
 
 ---
 
@@ -313,16 +297,13 @@ parse_coordinate(62.16)             #   62.16
 parse_coordinate("170 30.01 W")     # -170.500167
 parse_coordinate("64-05.8454N")     #   64.097423
 parse_coordinate("62 09 36 N")      #   62.16       degrees, minutes, seconds
-parse_coordinate("142°18’E")        #  142.3        degree sign and a CURLY quote
+parse_coordinate("142°18’E")        #  142.3        degree sign and a curly quote
 parse_coordinate("N 21°00.5'")      #   21.008333   hemisphere first
 parse_coordinate(62, 9.6, "N")      #   62.16       three separate columns
 ```
 
-- Degree, minute and second marks (`°`, `′`, `’`, `'`, `″`, `"`, `deg`, `min`) are
-  separators, including the curly `’` (U+2019).
-- A hemisphere letter beats a leading minus sign.
-- Check longitude sign: when a dataset has both a station list and in-file coordinates,
-  confirm they agree.
+Degree, minute and second marks (`°`, `′`, `’`, `'`, `″`, `"`, `deg`, `min`) are separators.
+A hemisphere letter beats a leading minus sign.
 
 ---
 
@@ -330,25 +311,22 @@ parse_coordinate(62, 9.6, "N")      #   62.16       three separate columns
 
 A datetime from common spreadsheet forms: single-digit months (`2023/6/1`), a separate time
 column (`parse_timestamp("20230624", "031903")`), month names (`"Nov. 09, 2015"`,
-`"12-Nov-2015"`, `"Sept. 3 2015"`), and a year in its own column
-(`parse_timestamp("Nov. 09", year=2015)`).
+`"12-Nov-2015"`) and a year in its own column (`parse_timestamp("Nov. 09", year=2015)`).
 
 ---
 
 ## `pressure_to_depth(pressure_dbar, latitude_deg)`
 
-UNESCO 1983 (Fofonoff & Millard). WOD needs a depth axis; many CTD exports have only
-pressure. Pass the cast's own latitude.
-
-Keep the pressure column too (WOD variable 25), and record the derivation in `notes`.
+Depth in metres by UNESCO 1983 (Fofonoff & Millard) at the cast's own latitude, for exports
+that have only pressure. Pressure stays a variable of its own (WOD code 25).
 
 ---
 
 ## `read_instrument(path)`, `deployment(windows)`, `mooring_days(paths, instruments, window)` and `mooring_profiles(instruments, days, depths, latitude, min_day_fraction=0.8)`
 
-Builds WOD MRB profiles from a mooring. A moored buoy's profile is its instruments'
-concurrent readings at their depths (manual p.17), kept as daily averages (p.14). An
-accession usually holds one NetCDF file per instrument.
+Builds WOD MRB profiles from a mooring's per-instrument NetCDF files. A moored buoy's profile
+is its instruments' concurrent readings at their depths (manual p.17), kept as daily averages
+(p.14).
 
 ```python
 from wod_etl.staging import (read_instrument, wet_window, deployment, mooring_days,
@@ -387,10 +365,10 @@ built["left_out"]   # instrument-days whose variables covered too little of the 
   oxygen, chlorophyll…), matched by CF standard name first. Instrument temperature, air
   values, potential temperature, saturation and duplicate records of a variable are listed
   in `not_stored`. Non-standard calendars and files with several depths along one dimension
-  are refused with the reason. Records are read in chunks, so large loggers are fast.
+  are refused with the reason.
 
-`wod-etl` runs this from the mooring recipe triage works out (`placed` notes, per file, where
-a depth came from) and writes the staged casts as MRB.
+`wod-etl` runs this from the mooring recipe that triage builds and writes the staged casts as
+MRB; `placed` records where each file's depth came from.
 
 ### `read_layout(path)`, `find_layout(candidates, members)` and `place_instruments(layout, members)`
 
@@ -424,11 +402,9 @@ placed["placed"]["RBRsolo_SN100028.nc"]
 
 ## `group_rows(rows, columns, key_columns)`
 
-Splits a cruise-wide table into per-cast groups in file order. Group by `["Station"]`, or
-`["Station", "Date"]` when a station was occupied more than once.
-
-Footer legends often have text in the station column and form their own group. Drop groups
-whose position does not parse, and log what was dropped.
+Splits a cruise-wide table into per-cast groups in file order. Key on `["Station", "Date"]`
+when a station was occupied more than once. A footer legend with text in the station column
+forms a group of its own, whose position does not parse.
 
 ---
 
@@ -460,11 +436,9 @@ write_staged_cast(
 the zone of `date`/`time` when not UTC: a numeric offset (`UTC+10`) with a time of day is
 converted to UTC by the writer; a named zone or a date alone is recorded, not shifted.
 
-**Rules for the staged file:**
-
-1. Column names carry their units: `Temp (deg C)`, `DO (mg/L)`, `Depth (m)`.
-2. Every derived value goes in `notes` (depth from pressure, a position from a readme PDF,
-   a depth of 0 by convention, a cast matched across two files), and in your report.
+Column names carry their units (`Temp (deg C)`, `Depth (m)`). Every derived value goes in
+`notes`: depth from pressure, a position from a readme PDF, a depth of 0 by convention, a cast
+matched across two files.
 
 ---
 
@@ -489,14 +463,12 @@ ignored for matching; `taxa_record_field(name)` gives a column's field):
 | `Biomass`, `Volume`, `Wet weight`, `Dry weight`, `Carbon`, `Size min/max`, `Length`... | 4, 12, 13, 14, 25, 18/19, 22... |
 
 Unmatched columns are listed in `unmapped_columns`. `biological_header` is keyed by Table 6a
-name or id (`{"Gear code": "NORPAC Net", "Mesh size": 100, "Type of tow": "vertical tow"}`);
-a key that is not a Table 6a field becomes a note and is listed in
-`unknown_biological_fields`.
+name or id (`{"Gear code": "NORPAC Net", "Mesh size": 100}`); a key that is not a Table 6a
+field becomes a note and is listed in `unknown_biological_fields`.
 
 The return includes `missing_biological_fields`: which of gear, tow type, mesh, volume
 filtered or tow distance, preservative and count method (`config.KEY_BIOLOGICAL_FIELD_IDS`)
-the haul does not state. Report them. Without volume filtered or tow distance, a count stays
-per sample.
+the haul does not state. Without volume filtered or tow distance, a count stays per sample.
 
 The file is a `# Record type: WOD taxa-records` marker, `# Key: value` lines (`# Bio
 <field>:` for Table 6a), `LAT:`/`LON:`/`DATE:`, then a CSV. `classify_dataset` recognises
@@ -517,7 +489,7 @@ stations, info = read_station_list(SRC / "CTD_readme.csv")        # cp932 is han
 casts = {p.stem: p for p in sorted(SRC.glob("*.asc"))}
 matched, report = join_station_list(casts, stations)
 for name in report["casts_without_station"]:
-    print(f"!! {name}: no station-list entry -- not staged")      # never silent
+    print(f"!! {name}: no station-list entry -- not staged")
 for name, s in matched.items():
     cols, levels = read_instrument_export(casts[name])
     write_staged_cast(OUT / f"{name}.csv", cols, levels,
@@ -529,11 +501,10 @@ for name, s in matched.items():
                       notes=[f"position and date from {s['source']}"])
 ```
 
-- Reconcile both file lists first. A name on one side only is often the same cast spelt
-  differently; confirm by gear, columns and depth range, and record the match in `notes`.
-- Check the station list's time convention. A `Date time (UTC)` column next to a
-  `Time zone` column is ambiguous; if there is an underway GPS track, the right convention
-  puts the ship at the cast position.
+- A name on one side only is often the same cast spelt differently; gear, columns and depth
+  range confirm it, and the match goes in `notes`.
+- A `Date time (UTC)` column next to a `Time zone` column is ambiguous; an underway GPS track
+  settles it, as the right convention puts the ship at the cast position.
 
 ### B. One cruise-wide table
 
@@ -542,7 +513,7 @@ and plankton data.
 
 ```python
 cols, rows, info = read_table(path, header_row=1)             # row 0 is a title
-rows, sentinels = clean_sentinels(rows, cols)                 # report these counts
+rows, sentinels = clean_sentinels(rows, cols)
 
 idx = {c: cols.index(c) for c in cols if c}
 get = lambda r, c: (r[idx[c]].strip() if c in idx and idx[c] < len(r) else "")
@@ -560,9 +531,8 @@ for key, group in group_rows(rows, cols, ["Station", "Date"]).items():
                       metadata={"Accession": ACC, "Station": key[0]})
 ```
 
-- Group on station and date when a station was occupied more than once.
-- Sort levels by depth. Bottle sheets are often bottom-up, which trips the depth-inversion
-  check.
+Levels are sorted by depth: bottle sheets are often bottom-up, which trips the depth-inversion
+check.
 
 ### C. Long format, one file per variable, positions in a station list
 
@@ -571,10 +541,9 @@ file covering every station; positions in a station list as `142°18’E` with t
 own column.
 
 ```python
-stations, _ = read_station_list(SRC / "SHU1505_StationInfo.csv")
-tables = [read_table(SRC / f)[:2] for f in ("U2015-015_CTD_Temp.csv",
-                                             "U2015-015_CTD_Salinity.csv",
-                                             "U2015-015_CTD_fluor.csv")]
+stations, _ = read_station_list(SRC / "stations.csv")
+tables = [read_table(SRC / f)[:2] for f in ("CTD_Temp.csv", "CTD_Salinity.csv",
+                                             "CTD_fluor.csv")]
 cols, rows, info = pivot_long(tables, keys=["StNo", "depth"], variable="parm",
                               value="value", key_aliases={"depth": ["dep"]},
                               columns={"Temperature": "Temperature (deg C)",
@@ -585,23 +554,22 @@ matched, report = join_station_list([k[0] for k in groups], stations)
 for (st,), levels in groups.items():
     s = matched[st]
     levels = sorted(([r[1]] + r[2:] for r in levels), key=lambda r: float(r[0]))
-    write_staged_cast(OUT / f"SHU1505_st{int(st):02d}.csv",
+    write_staged_cast(OUT / f"{CRUISE}_st{int(st):02d}.csv",
                       ["Depth (m)"] + cols[2:], levels,
                       latitude=s["latitude"], longitude=s["longitude"], date=s["date"],
-                      metadata={"Accession": "0303928", "Cruise": "SHU1505",
-                                "Platform": "Shunyo-Maru", "Station": st,
-                                "Cast": f"SHU1505_st{int(st):02d}"},
+                      metadata={"Accession": ACC, "Cruise": CRUISE,
+                                "Platform": SHIP, "Station": st,
+                                "Cast": f"{CRUISE}_st{int(st):02d}"},
                       sources=[...], notes=[...])
 ```
 
-Then cross-check the station list with `reconcile_stations` (against a report table) and
-`check_track` before trusting it.
+The station list is then cross-checked with `reconcile_stations` and `check_track`.
 
 ---
 
 ## Conventions you may apply, and what to say about them
 
-Some values must be supplied for a file to be ingested. Each must be written into the staged
+Some values must be supplied for a file to be ingested. Each is written into the staged
 header, not applied silently.
 
 | Situation | Convention | Basis |
@@ -610,8 +578,8 @@ header, not applied silently.
 | Pressure but no depth | UNESCO 1983 conversion | standard, latitude-dependent |
 | Position only in the readme PDF | use it, cite the file | it is the originator's own statement |
 
-Never invent a coordinate, date or platform that no source states. A dataset with no
-position anywhere (data, sibling list or readme) cannot be staged; report it as such.
+No coordinate, date or platform is invented. A dataset with no position anywhere (data,
+sibling list or readme) cannot be staged.
 
 ---
 

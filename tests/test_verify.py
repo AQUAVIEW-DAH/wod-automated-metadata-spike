@@ -189,7 +189,6 @@ class TestTheRunVerifiesItsOwnOutput:
         assert res["output_verification"]["skipped"] == "verify=False"
 
     def test_no_output_is_not_a_verification_failure(self, tmp_path):
-        """Nothing written means nothing to verify, not a failure."""
         acc = tmp_path / "empty-acc" / "0-docs"
         acc.mkdir(parents=True)
         (acc / "readme.txt").write_text("Nothing but prose in this accession, no data.\n")

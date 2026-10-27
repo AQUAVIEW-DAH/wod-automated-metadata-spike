@@ -48,13 +48,12 @@ def _process(p, tmp_path, tag="t"):
     return res, nc.Dataset(res["output_path"])
 
 
-# ---------------------------------------------------------------- time of day
 class TestTimeOfDay:
     def test_a_date_without_a_time_is_not_written_as_midnight(self, tmp_path):
         _, ds = _process(_stage(tmp_path), tmp_path)
         assert ds["date"][0] == 20151109
         assert np.ma.is_masked(ds["GMT_time"][0])
-        assert "Do not read it as midnight" in ds["time"].comment
+        assert "not an observed midnight" in ds["time"].comment
         ds.close()
 
     def test_a_known_time_fills_gmt_time(self, tmp_path):
@@ -73,7 +72,7 @@ class TestTimeOfDay:
     def test_a_local_date_is_recorded_not_shifted(self, tmp_path):
         _, ds = _process(_stage(tmp_path, time_zone="local"), tmp_path)
         assert ds["date"][0] == 20151109
-        assert "NOT converted" in ds.getncattr("time_zone_note")
+        assert "was not converted" in ds.getncattr("time_zone_note")
         ds.close()
 
     @pytest.mark.parametrize("zone,hours", [("UTC", 0.0), ("UTC+10", 10.0),
@@ -93,7 +92,6 @@ class TestTimeOfDay:
         assert res["outputs_without_time"] is None
 
 
-# ------------------------------------------------------------------- cast ids
 class TestCastIds:
     def test_one_cast_files_no_longer_share_an_id(self, tmp_path):
         ids = []
@@ -125,7 +123,6 @@ class TestCastIds:
                                               "STOCS85A_drop-0013_19850612T1442"]
 
 
-# ---------------------------------------------------------- header lines
 class TestHeaderLinesAreNeverSilent:
     HEADER = ("# Accession: 0303928\n# Platform: Shunyo-Maru\n# Cruise: SHU1505\n"
               "# Station: 11\n# Instrument: SBE CTD/Rosette system\n"
@@ -161,7 +158,6 @@ class TestHeaderLinesAreNeverSilent:
         assert meta["secondary_headers"]["11"]["value"] == 30.0
 
 
-# ------------------------------------------------------------------ code lists
 class TestCodeLists:
     def test_parse_both_layouts(self):
         entries = parse_code_list(UNITS)
@@ -243,7 +239,6 @@ class TestCodedFieldsInTheOutput:
         ds.close()
 
 
-# ------------------------------------------------------------------ provenance
 class TestProvenanceReachesTheOutput:
     def test_notes_sources_and_the_real_path(self, tmp_path):
         _, ds = _process(_stage(tmp_path), tmp_path)

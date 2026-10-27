@@ -1,16 +1,13 @@
 """Read the written NetCDF back and check that its values are possible.
 
-Compares every observation against the manual's acceptable range for its variable at its
-depth (Appendix 11) and reports findings with a severity. Nothing raises: an unreadable file
-is a finding.
+Compares every observation with the manual's range for its variable and depth (Appendix 11)
+and reports findings with a severity. An unreadable file is a finding, not an exception.
 
     from wod_etl.verify import verify_output
     report = verify_output("data/processed/2-CTD")
     report["passed"], report["findings"]
 
-Ranges are the union across all ocean basins: a flagged value is outside every basin's bound,
-while an unflagged one may still be wrong. `high` means a whole variable is out of range,
-usually a unit or conversion error.
+Ranges are the union across all ocean basins, so an unflagged value may still be wrong.
 """
 import glob
 import logging
@@ -125,8 +122,7 @@ def _read_one(path, per_variable, flags, report, sample_levels, cast_ids=None) -
             _register_cast_ids(ds, Path(path).name, cast_ids)
 
         z = _numeric(ds.variables["z"]) if "z" in ds.variables else None
-        # Judge a multi-source file per source, so one source's problem cannot hide among
-        # another's good casts.
+        # Judge each source on its own, so one source's problem cannot hide among another's.
         measured = _measured(ds)
         sizes = (np.ma.filled(np.ma.asarray(ds.variables["z_row_size"][:]), 0).astype(int)
                  .ravel() if "z_row_size" in ds.variables else None)
@@ -218,8 +214,8 @@ def _register_cast_ids(ds, name: str, cast_ids: Dict[str, List[str]]) -> None:
 
 
 def _source_levels(ds) -> List[tuple]:
-    """[(source, level indices)] -- one entry per source file the casts came from, or a
-    single `("", None)` (every level) for a file of one source."""
+    """[(source, level indices)] per source file of the casts, or a single `("", None)`
+    (every level) for a file of one source."""
     n = len(ds.dimensions.get("casts", ()) or ())
     if "source_file" not in ds.variables or "z_row_size" not in ds.variables or not n:
         return [("", None)]
@@ -303,8 +299,7 @@ def _summarize(name, v, findings) -> Dict[str, Any]:
         findings.append(_finding(
             "all_fill", "medium", None, name, "every value is fill",
             "The source column existed and mapped but held nothing, or the conversion "
-            "produced NaN throughout. Honest output if the column really was empty -- say "
-            "which it was."))
+            "produced NaN throughout. Correct output if the column really was empty."))
         return out
 
     if v["n_finite"] > 1 and v["min"] == v["max"]:
@@ -335,9 +330,9 @@ def _summarize(name, v, findings) -> Dict[str, Any]:
             f"{n_nz} of {values.size} levels ({n_nz / values.size:.1%}) are below the lower "
             f"bound of 0 by at most {abs(values[near_zero].min()):g} {v['units']} (minimum "
             f"{values[near_zero].min():g}), small against the variable's own range",
-            "A sensor zero or dark offset, not impossible data. Keep the values as "
-            "submitted -- QC flags them downstream -- and say so in the report. Do not clip "
-            "them to zero: that changes the originator's numbers."))
+            "A sensor zero or dark offset, not impossible data. The values are kept as "
+            "submitted (QC flags them downstream), not clipped to zero, which would change "
+            "the originator's numbers."))
         outside = outside & ~near_zero
     n_out = int(outside.sum())
     fraction = n_out / values.size
@@ -367,7 +362,7 @@ def _summarize(name, v, findings) -> Dict[str, Any]:
     else:
         findings.append(_finding(
             "out_of_range_levels", "low", None, name, evidence,
-            "A few extreme levels, which is normal in real casts. Reportable, not alarming."))
+            "A few extreme levels, which is normal in real casts and not alarming."))
     return out
 
 
@@ -397,8 +392,8 @@ def _check_cast_ids(cast_ids: Dict[str, List[str]], findings) -> None:
         "cast_id is the CF profile_id: two casts sharing one are one cast to any tool that "
         "merges these files. If it is one cast in two source files, leave one of them out "
         "(include = false); if they are different casts, give each an accession, cruise, "
-        "cast or station and date in its staged header -- the writer builds the id from "
-        "those."))
+        "cast or station and date in its staged header (the writer builds the id from "
+        "those)."))
 
 
 def _suspect_cause(values, lo, hi) -> str:
@@ -460,7 +455,7 @@ def render(report: Dict[str, Any]) -> str:
     for name, f in report["flag_distribution"].items():
         if f["non_zero_pct"]:
             lines.append(f"  {name}: {f['non_zero_pct']}% non-zero {f['counts']}")
-    lines.append("  CAVEAT: ranges are the union across all 30 ocean basins, so they are "
+    lines.append("  Note: ranges are the union across all 30 ocean basins, so they are "
                  "more permissive than a basin-aware check. A flagged value is outside "
                  "every basin's bound; an unflagged one may still be wrong.")
     return "\n".join(lines)

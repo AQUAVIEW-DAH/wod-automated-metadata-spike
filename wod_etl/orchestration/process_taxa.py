@@ -1,7 +1,7 @@
 """Staged plankton hauls to Taxa-Record NetCDF (Biological Header plus Taxa-Records).
 
-`assemble_taxa` (used by `wod-etl confirm`) writes one file per year; `process_taxa` writes one
-file per haul. A failed haul is listed in `failures` and the rest are still written.
+`assemble_taxa` writes one file per year, `process_taxa` one file per haul. A failed haul is
+listed in `failures` and the rest are still written.
 """
 import glob
 import logging
@@ -24,8 +24,7 @@ log = logging.getLogger(__name__)
 
 
 class _Tally:
-    """Report counts for written hauls: unresolved taxa, higher-rank matches, missing
-    Biological Header fields and unmapped columns."""
+    """Report counts gathered from the written hauls."""
 
     def __init__(self):
         self.unresolved: Dict[str, int] = {}
@@ -204,5 +203,6 @@ def _process_taxa(source, output_dir) -> Dict[str, Any]:
     return {
         "status": ("empty" if not files else "complete" if not failures else "incomplete"),
         "staged_files": len(files), "outputs": outputs, "failures": failures, **summary,
-        "note": "Report the four lists: unresolved, higher rank, missing fields, unmapped.",
+        "note": "Lists: unresolved taxa, taxa resolved at a higher rank, missing biological "
+                "fields, unmapped columns.",
     }

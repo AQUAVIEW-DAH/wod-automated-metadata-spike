@@ -222,7 +222,7 @@ class TestValidation:
                                         "columns": {"T": "T (UNIT?)"}}}}
         items, plan = dec.validate(decisions, t, {}, [])
         assert not [i for i in items if i["blocking"]] and not plan["profiles"]
-        assert any("[profiles.l] is no longer read" in i["what"] for i in items)
+        assert any("[profiles.l] is not read" in i["what"] for i in items)
 
     def test_a_station_conflict_is_reported_and_the_station_list_kept(self):
         conflict = {"id": "date:6", "station": "6", "field": "date", "what": "dates differ",
@@ -232,7 +232,7 @@ class TestValidation:
         assert not [i for i in items if i["blocking"]]
         assert any("the station list is kept" in i["what"] for i in items)
         assert plan["station_overrides"]["6"] == {
-            "notes": ["dates differ -- the station list was kept"]}
+            "notes": ["dates differ; the station list was kept"]}
 
     @pytest.mark.parametrize("resolution,expected", [
         ("report", {"date": "2015-11-11"}),
@@ -290,7 +290,7 @@ class TestAFileWithItsOwnEntryDoesNotBreakItsNeighboursGroup:
                           data="current velocity", why="no velocity"))
         decided = tomllib.loads("\n".join(dec.propose(t, {})))
         keys = {dec.decision_key(decided, f"d/{n}") for n in names}
-        assert len(keys) == 1 and dec.is_pattern(keys.pop())          # one shared entry
+        assert len(keys) == 1 and dec.is_pattern(keys.pop())
         assert dec.file_decision(decided, "d/LeConte_Sept2018_CTD_ship_data.nc")["drop"] == [
             "salinity"]
         assert dec.file_decision(decided, "d/LeConte_Aug2016_ADCP_data.nc")["include"] is False

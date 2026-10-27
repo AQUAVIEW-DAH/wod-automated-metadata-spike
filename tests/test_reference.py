@@ -26,7 +26,6 @@ class TestTableLoading:
             assert load_table(name), name
 
     def test_no_table_is_orphaned(self):
-        """Every JSON in the knowledge dir must be reachable through the loader."""
         from wod_etl.config import CODE_TABLES_DIR
         on_disk = {p.name for p in CODE_TABLES_DIR.glob("*.json")}
         declared = set(TABLE_FILES.values())
@@ -83,7 +82,6 @@ class TestReferenceContent:
         assert all(x["standard_unit"] for x in v.values())
 
     def test_secondary_headers_are_a_separate_namespace(self):
-        """Header id 29 is Probe Type; variable code 29 is Air pressure."""
         assert wod_secondary_headers()[29] == "Probe Type"
         assert wod_variables()[29]["name"] == "Air pressure"
 

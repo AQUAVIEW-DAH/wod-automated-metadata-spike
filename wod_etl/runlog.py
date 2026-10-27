@@ -139,10 +139,7 @@ def accession_log(accession: str, actor: str = "library",
 
 
 def _handlers(accession: str, context: Dict[str, Any]) -> List[logging.Handler]:
-    """run.log and events.jsonl in the accession's folder, or stderr under a parent run.
-
-    Under TO_STDERR_ENV the parent run records the output, so no second invocation is logged.
-    """
+    """run.log and events.jsonl in the accession's folder, or stderr under a parent run."""
     if os.environ.get(TO_STDERR_ENV):
         h = logging.StreamHandler(sys.stderr)
         h.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
@@ -162,10 +159,8 @@ def _handlers(accession: str, context: Dict[str, Any]) -> List[logging.Handler]:
 
 def accession_log_for(source: Any, accession: Optional[str] = None, actor: str = "library",
                       arguments: Optional[Dict[str, Any]] = None, banner: bool = True):
-    """The log for the accession `source` belongs to, or a no-op.
-
-    A no-op inside an open log or when no accession can be found.
-    """
+    """The log for the accession `source` belongs to; a no-op inside an open log or when no
+    accession can be found."""
     if _ACTIVE.get() is not None:
         return nullcontext(_ACTIVE.get())
     from wod_etl.discovery.list_remote_directory import accession_for

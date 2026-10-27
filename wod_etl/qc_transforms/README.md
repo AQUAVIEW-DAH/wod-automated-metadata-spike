@@ -3,8 +3,8 @@
 Convert values to WOD standard units, then, only if asked, flag every level against the
 manual's checks.
 
-Both functions take `(DataFrame, mapping_contract)` and return `(DataFrame, summary)`. Run
-them in this order; QC thresholds assume standard units.
+Both functions take `(DataFrame, mapping_contract)` and return `(DataFrame, summary)`.
+Conversion comes first, as QC thresholds assume standard units.
 
 ```python
 from wod_etl.qc_transforms import convert_units_and_types, apply_qc_auditing
@@ -36,7 +36,7 @@ mean good where WOD's `1` means a failed range check). The flag set used is seco
 header 96. See [Phase 2](../mapping/README.md#originator-quality-flags).
 
 With QC off, `qc_summary` is `{"wod_qc": "not run", ...}` and names the originator flag
-columns kept. The validator then expects no `<var>_qc` and does not warn.
+columns kept.
 
 ---
 
@@ -56,8 +56,8 @@ Applies each column mapping's `conversion_needed`, and coerces every mapped colu
 | `none` | numeric coercion only | — |
 
 `molar_rescale` reads `conversion_from` and `conversion_to` from the mapping entry, covering
-every prefix and basis pair (`umol/kg → mmol/l` for DIC, `mmol/l → umol/kg` for oxygen,
-`nmol/l → nmol/kg` for noble gases). Without both it refuses and warns.
+every prefix and basis pair (e.g. `mmol/l → umol/kg` for oxygen). Without both it refuses and
+warns.
 
 The log records each constant and its source, which is written to the NetCDF global
 attributes:
@@ -67,33 +67,33 @@ attributes:
    {"column": "Oxygen (ml/l)", "wod_code": 3, "conversion": "ml_per_l_to_umol_per_kg",
     "from": "ml/l", "to": "umol/kg", "constant": 22.3916, "constant_units": "l/mol",
     "provenance": "molar volume of O2 at STP, WOD Table 3b p.19 (Garcia and Gordon, 1992); then ..."}],
- "warnings": ["Refused molar-to-mass conversion on 'Chlorophyll (umol/l)' (WOD code 11): ..."],
+ "warnings": ["3 value(s) in 'Salinity (PSU)' could not be parsed as numeric and became NaN."],
  "seawater_density_kg_m3": 1025.0,
- "seawater_density_provenance": "assumed constant 1025 kg/m3; not specified by WOD Table 3b; ..."}
+ "seawater_density_provenance": "constant 1025 kg/m3, as WOD uses when ... (manual p.15)"}
 ```
 
-- **Density is an assumption.** Table 3b gives no seawater density. 1025 kg/m³ is a
-  conventional stand-in, recorded in the output whenever used. Pass
-  `seawater_density_kg_m3=` if you have a real value.
+- **Density.** WOD converts with a constant 1025 kg/m³ when the sample's density is not
+  reported (manual p.15); the output records it whenever used. `seawater_density_kg_m3=`
+  overrides it.
 - **Per-volume variables.** Chlorophyll (11), alkalinity (17) and DIC (21) are per-volume in
-  Table 3a. A molar-to-mass conversion on them is skipped and reported in `warnings`.
+  Table 3a, so alkalinity or DIC stated per mass is converted with the density. Chlorophyll's
+  standard is not molar, and a molar chlorophyll unit is not converted.
 - An `iso_date` column is added when the contract has year/month/day.
 
 ---
 
 ## Which checks run depends on the kind of data
 
-- **Non-profile datasets get no vertical checks.** For `SUR`, `apply_qc_auditing` skips
-  depth duplication/inversion, excessive gradient and excessive inversion, and sets
-  `summary["vertical_checks_applied"] = False` with a note. Surface data is "treated
-  differently than profile data" (manual p.37); applied to a track at constant 0 m, the
-  profile checks would flag nearly every level.
+- **Non-profile datasets get no vertical checks.** For `SUR`, `apply_qc_auditing` skips the
+  depth, gradient and inversion checks and sets `summary["vertical_checks_applied"] = False`.
+  Surface data is "treated differently than profile data" (manual p.37); on a track at
+  constant 0 m the profile checks would flag nearly every level.
 - **Range checks only** for air pressure (29), latitude (30), longitude (31) and Julian
   year-day (32), in any dataset: they "were not quality controlled beyond basic data range
   checks" (p.49).
 - **Range checks always run.**
 
-If most levels are flagged, suspect the check before the data.
+Most levels flagged usually means a misapplied check.
 
 ---
 
@@ -138,9 +138,9 @@ with different thresholds per direction:
 | negative (decrease with depth) | MGV, maximum gradient value | 3 |
 | positive (increase with depth) | MIV, maximum inversion value | 2 |
 
-For example, temperature MGV is 0.700 and MIV 0.300. Both tighten below 400 m (deep salinity
-drops from 9.000 to 0.050). `gradient_limits(code, z)` returns the applicable set. Each
-level is checked against both neighbours, so one level can fail both (flag 5).
+For example, temperature MGV is 0.700 and MIV 0.300. Both tighten below 400 m;
+`gradient_limits(code, z)` returns the applicable set. Each level is checked against both
+neighbours, so one level can fail both (flag 5).
 
 **4. Zero-sensitivity.** A value of exactly 0 whose gradient exceeds `MGV × ZSI` is flagged 4
 (likely a zero used as missing value).
@@ -157,7 +157,7 @@ Both are from Table 12; the same integer means different things in each.
 | --- | --- |
 | 0 | accepted |
 | 1 | duplicate or inversion in recorded depth |
-| 2 | density inversion *(not currently assigned; see limitations)* |
+| 2 | density inversion *(not assigned; see limitations)* |
 
 `<var>_qc_flag` (observed level scale):
 
@@ -178,9 +178,8 @@ questionable-data review is a manual curation step.
 
 ### Interpreting a result
 
-Non-zero flags do not make output invalid. Report the distribution from `flags_assigned`;
-do not discard levels. If `notes` says no depth column was found, only surface range bounds
-were checked.
+Non-zero flags do not make output invalid. If `notes` says no depth column was found, only
+surface range bounds were checked.
 
 ---
 

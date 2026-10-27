@@ -1,7 +1,4 @@
-"""Plankton hauls as a Biological Header plus Taxa-Records: staged, mapped, written, validated.
-
-Each record keeps a depth range and the originator's name; gaps in metadata are named, not filled.
-"""
+"""Plankton hauls as a Biological Header plus Taxa-Records: staged, mapped, written, validated."""
 import numpy as np
 import pytest
 

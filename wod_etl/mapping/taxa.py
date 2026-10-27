@@ -1,8 +1,7 @@
 """Map a staged haul to WOD Taxa-Record codes: taxa, life stage, sex, collection fields.
 
-Taxon names are resolved against WOD's taxa list (Table 7a field 1: an ITIS number or a
-negative WOD code). A name resolved at a higher rank is flagged `matched_higher_rank`; the
-originator's name is always kept.
+Taxa resolve against WOD's taxa list (Table 7a field 1: an ITIS number or a negative WOD
+code), else at a higher rank (`matched_higher_rank`). The originator's name is always kept.
 """
 import re
 from typing import Any, Dict, Optional
@@ -56,11 +55,8 @@ def resolve_taxon(name: Any) -> Dict[str, Any]:
 
 
 def _higher_rank_candidates(query: str):
-    """The name to fall back to when the full name is not in the list.
-
-    Usually the genus (first word). If a later word is capitalised ('Zoea of Decapoda'), that
-    word is the taxon. Parenthesised qualifiers are ignored.
-    """
+    """The name to fall back to: a later capitalised word ('Zoea of Decapoda'), else the
+    genus. Parenthesised qualifiers are ignored."""
     words = re.sub(r"\(.*?\)", " ", query).split()
     if len(words) < 2:
         return []
@@ -71,7 +67,7 @@ def _higher_rank_candidates(query: str):
 
 
 def resolve_taxa_coded(field_id: int, value: Any) -> Dict[str, Any]:
-    """A Table 7a coded qualifier -- life stage (5), sex (6), present (7)... -- or None."""
+    """Resolve a Table 7a coded qualifier: life stage (5), sex (6), present (7)..."""
     text = _clean(value)
     if not text:
         # Same keys as a looked-up result; callers read them unconditionally.
@@ -96,10 +92,9 @@ _CODED_RECORD_FIELDS = (5, 6, 7, 8, 9, 16, 17, 26)
 
 
 def map_haul(staged: Dict[str, Any]) -> Dict[str, Any]:
-    """One staged haul as the writer needs it: contract, biological header, records.
+    """A `read_staged_haul` result as the writer needs it: contract, biological header, records.
 
-    `staged` comes from `read_staged_haul`. The contract has the same keys as a profile's,
-    so the writers share helpers.
+    The contract has a profile's keys, so the writers share helpers.
     """
     parsed = parse_header_block(staged["header_text"])
     meta = map_metadata(staged["header_text"], columns=[])

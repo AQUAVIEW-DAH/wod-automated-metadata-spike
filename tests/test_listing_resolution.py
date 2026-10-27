@@ -1,4 +1,4 @@
-"""Getting from what a person cites -- a landing page, a number, a tarball -- to the files."""
+"""Getting from what a person cites (a landing page, a number, a tarball) to the files."""
 import io
 import tarfile
 import zipfile

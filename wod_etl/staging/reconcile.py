@@ -1,16 +1,4 @@
-"""Check station positions and dates against every other source in the accession.
-
-    from wod_etl.staging import reconcile_stations, check_track
-
-    report = reconcile_stations({
-        "stations.csv": stations,                        # from read_station_list
-        "trawls.csv": trawls,
-        "cruise report p.4 Table 1": table1,             # from extract_pdf_rows
-    }, position_tolerance_km=10)
-    report["conflicts"]
-
-    track = check_track(stations)                        # in occupation order
-    track["flags"]
+"""Check station positions and dates across sources and along the cruise track.
 
 Neither changes anything; both report disagreements and which source said what.
 """
@@ -98,7 +86,7 @@ def reconcile_stations(
                     "values": {s: (v["latitude"], v["longitude"])
                                for s, v in row["sources"].items()},
                     "note": f"{spread:.1f} km apart, beyond the {position_tolerance_km} km "
-                            f"tolerance. One of these is not where the station was."})
+                            f"tolerance, so the sources cannot all be right."})
 
         if "date" in compare:
             dates = {s: v["date"] for s, v in row["sources"].items() if v["date"]}
@@ -106,8 +94,8 @@ def reconcile_stations(
             if len(set(dates.values())) > 1:
                 conflicts.append({
                     "station": labels[station], "field": "date", "values": dates,
-                    "note": "the sources give different dates. Look for a third source -- a "
-                            "fishing log, a time-stamped event -- before choosing one."})
+                    "note": "the sources give different dates; a third source (a fishing "
+                            "log, a time-stamped event) can settle which is right."})
         detail[labels[station]] = row
 
     return {
@@ -117,9 +105,8 @@ def reconcile_stations(
         "conflicts": conflicts,
         "single_source": single,
         "stations": detail,
-        "note": ("Every conflict is a value to confirm with the submitter or settle from a "
-                 "third source. Record the decision in the staged notes either way."
-                 if conflicts else None),
+        "note": ("Each conflict needs the submitter or a third source to settle it; set "
+                 "its resolution in decisions.toml." if conflicts else None),
     }
 
 
@@ -147,13 +134,10 @@ def check_track(
     """Flag stations along the cruise track that are not where their neighbours suggest.
 
     `stations` is in occupation order: the dict `read_station_list` returns, or a list of
-    entries with `latitude`, `longitude` and optionally `date`/`time`. Flags:
-
-    * outlying step -- a hop over `outlier_factor` times the median hop
-    * time running backwards -- a station dated before the previous one
-    * impossible speed -- above `max_speed_knots`, when both stations have a time
-
-    `bounding_box` is `(lon_min, lon_max, lat_min, lat_max)`; stations outside it are flagged.
+    entries with `latitude`, `longitude` and optionally `date`/`time`. A step is flagged when
+    it is over `outlier_factor` times the median hop, runs back in time, or exceeds
+    `max_speed_knots` (when both stations have a time). `bounding_box` is
+    `(lon_min, lon_max, lat_min, lat_max)`; stations outside it are flagged.
     """
     entries = list(stations.values()) if isinstance(stations, dict) else list(stations)
     name = lambda e, i: str(e.get("station", i))
@@ -193,8 +177,8 @@ def check_track(
                 flags.append({"check": "outlying_step", "from": s["from"], "to": s["to"],
                               "evidence": f"{s['km']:.1f} km, {s['km'] / median:.2f}x the "
                                           f"median hop of {median:.1f} km",
-                              "note": "Check this station's position against every other "
-                                      "source: a mistyped degree or minute looks like this."})
+                              "note": "A hop this long often means a mistyped degree or "
+                                      "minute in the position."})
 
     if bounding_box:
         lon_min, lon_max, lat_min, lat_max = bounding_box

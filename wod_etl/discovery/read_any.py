@@ -1,8 +1,7 @@
 """Read any file an accession can hold, whatever its extension, dispatching on `sniff_format`.
 
-Returns (casts, info); each cast is {"cast_id", "df", "header_block", "source_note"}, where
-`header_block` is `Key: value` text the mapper parses. Never raises: an unreadable file
-returns ([], {"error": ...}).
+Returns (casts, info); each cast is {"cast_id", "df", "header_block", "source_note"}, with
+`header_block` as `Key: value` text. Never raises: a failure returns ([], {"error": ...}).
 """
 import io
 import re
@@ -19,8 +18,7 @@ from wod_etl.discovery.profile_raw_data import profile_raw_data
 from wod_etl.discovery.sniff_format import sniff_format
 from wod_etl.discovery.split_casts import cast_as_profile_input, split_casts
 
-# Dimension-name substrings for levels within a cast and casts within a file, matched
-# case-insensitively (Argo N_LEVELS/N_PROF, CF obs/profile, WOD z/casts).
+# Dimension-name substrings (case-insensitive) for levels within a cast and casts within a file.
 LEVEL_DIM_HINTS = ("level", "n_levels", "nlevels", "depth", "pres", "z", "obs",
                    "sample", "row", "nzmax", "maxz")
 PROFILE_DIM_HINTS = ("prof", "n_prof", "cast", "station", "profile", "instance", "traj")
@@ -48,10 +46,7 @@ PROFILE_BYTES = 65536
 def read_any(path: str, sniff: Optional[Dict[str, Any]] = None,
              profile: Optional[Dict[str, Any]] = None,
              max_casts: Optional[int] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Read a file of any supported format into a list of casts.
-
-    Pass `sniff` if you already called `sniff_format`; otherwise it is called here.
-    """
+    """Read a file of any supported format into casts; `sniff` is an earlier sniff_format result."""
     fmt = sniff or sniff_format(path)
     info: Dict[str, Any] = {"source": str(path), "sniff": fmt, "reader": fmt["reader"],
                             "warnings": []}
@@ -170,7 +165,6 @@ def split_by_station(cast: Dict[str, Any], warnings: List[str]) -> List[Dict[str
 # ------------------------------------------------------------- delimited text
 def _read_delimited(path, fmt, profile):
     """Profile the preview, split casts, and load each one."""
-    # Profile only the head; load_tabular reads the whole file afterwards.
     with Path(path).open("r", encoding=fmt.get("encoding", "utf-8"), errors="replace") as fh:
         head = fh.read(PROFILE_BYTES)
     prof = profile or profile_raw_data(head, str(path))
@@ -222,10 +216,7 @@ def _frame_from_text(data_text: str, prof):
 
 # ------------------------------------------------------------- fixed width
 def _read_fixed_width(path, fmt, profile):
-    """Fixed-column ASCII, using the boundaries sniff_format inferred.
-
-    The inferred boundaries are reported in `source_note` so a wrong split is visible.
-    """
+    """Fixed-column ASCII, split at sniff_format's boundaries (shown in `source_note`)."""
     colspecs = fmt.get("colspecs")
     text = Path(path).read_text(encoding=fmt.get("encoding", "utf-8"), errors="replace")
     split = split_casts(text)
@@ -247,9 +238,9 @@ def _read_fixed_width(path, fmt, profile):
     if headerless:
         df.columns = [f"col_{i}" for i in range(df.shape[1])]
         warnings.append(f"no column header row: {df.shape[1]} columns named col_0..."
-                        f"col_{df.shape[1] - 1}. Nothing downstream can map col_N to a WOD "
-                        f"code -- name them during staging, from the header block or the "
-                        f"accession's format description, with units folded into the name.")
+                        f"col_{df.shape[1] - 1}. No col_N maps to a WOD code: name them "
+                        f"during staging, from the header block or the accession's format "
+                        f"description, with units folded into the name.")
     else:
         df.columns = [str(c).strip() for c in df.columns]
     note = (f"fixed width, {len(colspecs)} inferred columns at {colspecs}"
@@ -295,8 +286,7 @@ def _read_station_blocks(split: Dict[str, Any]):
 
 
 def _preamble(casts) -> str:
-    """The first block's header lines that come before the key every block's header starts
-    with: the file's own header."""
+    """The file's own header: the first block's lines before the key each block starts with."""
     if len(casts) < 2 or not casts[1]["header_block"]:
         return ""
     key = _line_key(casts[1]["header_block"].splitlines()[0])
@@ -310,8 +300,7 @@ def _line_key(line: str) -> Optional[str]:
     return m.group(1).lower() if m else None
 
 
-# A missing-value code the file declares (`Missing value: -9`, `missing_value = -99.0`).
-# Unsafe as a global default, but valid for the file that declares it.
+# A missing-value code the file declares (`Missing value: -9`): unsafe globally, valid here.
 _DECLARED_MISSING = re.compile(r"\b(?:missing|fill|no[\s_-]?data)[\s_-]*(?:values?|codes?)?\s*"
                                r"[:=]\s*(-?\d+(?:\.\d+)?)(?![\d.])", re.IGNORECASE)
 
@@ -394,8 +383,7 @@ def _read_sea_bird_cnv(path, fmt, profile):
     if not body.strip():
         return [], {"error": "Sea-Bird header ends with no data rows after *END*"}
 
-    # An ASCII export has no '# name' lines, but a row of short names above the data:
-    # 'Pr T068 Sal00 ...'.
+    # An ASCII export has a row of short names ('Pr T068 Sal00') above the data, not '# name' lines.
     rows = [l for l in lines[end + 1:] if l.strip()]
     if not names and rows and not any(_all_numeric(t) for t in rows[0].split()):
         seen: Dict[str, int] = {}
@@ -419,10 +407,7 @@ def _read_sea_bird_cnv(path, fmt, profile):
 
 
 def _cnv_header_block(header_lines) -> str:
-    """Rewrite the Sea-Bird header into the `Key: value` form the mapper parses.
-
-    `Key = value` lines become `Key: value`, e.g. `* NMEA Latitude = 34 15.00 N`.
-    """
+    """Rewrite the Sea-Bird header's `Key = value` lines as the `Key: value` the mapper parses."""
     out = []
     for line in header_lines:
         s = line.lstrip("#* \t")
@@ -489,8 +474,7 @@ def _read_spreadsheet(path, fmt, profile):
 
 
 def _sheet_table(raw: "pd.DataFrame") -> "pd.DataFrame":
-    """A sheet read without a header, as a table: its header row found the way a CSV's is
-    (under a title, over a units row), or its first row."""
+    """A headerless sheet as a table, its header row found as for a CSV, else its first row."""
     from wod_etl.discovery.profile_raw_data import table_layout
 
     cells = []
@@ -585,8 +569,7 @@ def _read_ruskin(path, names):
 def _read_netcdf(path, fmt, profile):
     """Read NetCDF/HDF5 into one cast per profile.
 
-    Handles single-profile files, profile x level variables (as Argo writes), and CF
-    contiguous ragged arrays (a `row_size` variable carrying `sample_dimension`).
+    Handles single profiles, profile x level variables, flattened tables and CF ragged arrays.
     """
     import netCDF4
 
@@ -617,7 +600,9 @@ def _read_netcdf(path, fmt, profile):
             casts, warnings = (_netcdf_flattened(ds, variables, level_dim, flattened)
                                if flattened else
                                _netcdf_rectangular(variables, level_dim, profile_dim))
+        upward = _upward_labels(variables)
 
+    _depth_from_height(casts, upward, warnings)
     undated: Dict[str, List[Any]] = {}
     for c in casts:
         scalars = c.pop("_scalars", {})
@@ -637,6 +622,26 @@ def _read_netcdf(path, fmt, profile):
                         f"left with no date rather than that one; correct the units in a "
                         f"staged copy to date them.")
     return casts, {"warnings": warnings, "global_attributes": global_attrs}
+
+
+def _upward_labels(variables) -> set:
+    """Labels of vertical coordinates measured upward (CF `positive = "up"`)."""
+    return {_label(n, v, variables) for n, v in variables.items()
+            if str(getattr(v, "positive", "")).strip().lower() == "up"
+            and (str(getattr(v, "axis", "")).upper() == "Z"
+                 or re.search(r"^(?:z|depth|height|altitude|elevation)$",
+                              str(getattr(v, "standard_name", "") or n), re.I))}
+
+
+def _depth_from_height(casts, up: set, warnings) -> None:
+    """Flip an upward vertical coordinate (values at or below 0) into depth."""
+    for c in casts:
+        for label in up & set(c["df"].columns):
+            values = pd.to_numeric(c["df"][label], errors="coerce")
+            if values.notna().any() and (values.dropna() <= 0).mean() >= 0.9:
+                c["df"][label] = -values
+                warnings.append(f"'{label}' is positive up: written as depth (its sign "
+                                f"flipped)")
 
 
 # Fill-value attribute names netCDF4 does not apply; unmasked, a sentinel such as 9999.99
@@ -715,16 +720,14 @@ def _netcdf_ragged(ds, variables, spec):
                    f"{len(casts)} profile(s)"]
 
 
-# CF discrete-sampling-geometry attributes naming the variables that are constant along a
-# profile (or a time series or trajectory of them).
+# CF DSG attributes listing the variables constant along a profile, time series or trajectory.
 _INSTANCE_LISTS = ("cdm_profile_variables", "cdm_timeseries_variables",
                    "cdm_trajectory_variables")
 _UPCAST = re.compile(r"^(?:up|upward|upcast|ascending|asc|u)$", re.IGNORECASE)
 
 
 def _flattened_keys(ds, global_attrs, level_dim) -> Optional[List[str]]:
-    """The per-profile variables of a flattened table -- every level of every profile one row,
-    the profile's id, position and time repeated down it, as ERDDAP writes CF profiles."""
+    """Per-profile variables of a flattened table (a row per level, as ERDDAP writes profiles)."""
     listed = ",".join(str(global_attrs.get(a) or "") for a in _INSTANCE_LISTS)
     names = [n for n in dict.fromkeys(x.strip() for x in listed.split(","))
              if n in ds.variables and ds.variables[n].dimensions[:1] == (level_dim,)]
@@ -831,7 +834,6 @@ def _netcdf_rectangular(variables, level_dim, profile_dim):
                 n_profiles = v.shape[v.dimensions.index(profile_dim)]
                 break
 
-    # Carry each flag variable's flag_values and flag_meanings with its column.
     schemes = {_label(name, v, variables): {"flag_values": _scalar(v.getncattr("flag_values"))
                                  if "flag_values" in v.ncattrs() else None,
                                  "flag_meanings": str(v.getncattr("flag_meanings"))}
@@ -884,8 +886,7 @@ def _index(v, i):
 def _pick_dim(ds, variables, hints, exclude=None, prefer=None):
     """The dimension whose name matches a hint; fall back to the largest one in use.
 
-    Only dimensions of numeric variables count, so a string length such as
-    `profile_id_length` is never picked.
+    Only numeric variables' dimensions count, so a string length is never picked.
     """
     used = {d for v in variables.values() if _kind(v) not in "SU" for d in v.dimensions}
     named = [d for d in ds.dimensions if d in used and d != exclude
@@ -957,12 +958,10 @@ def _scalar(value):
 
 def _header_block(global_attrs: Dict[str, Any], scalars: Dict[str, Any],
                   times: Optional[Dict[str, Any]] = None) -> str:
-    """`Key: value` text, with coordinates and time aliased to the names the mapper parses.
+    """`Key: value` text, with coordinates and time also under the names the mapper parses.
 
-    Recognised keys are re-emitted as `Latitude:`, `Longitude:`, `Date:` or `Time:` and kept
-    under their original name. Cast variables come before global attributes, since the parser
-    keeps the first `Date:`. `times` holds the cast's decoded CF times, None where missing or
-    implausible.
+    Cast variables come before global attributes, since the parser keeps the first `Date:`.
+    `times` holds the cast's decoded CF times, None where missing or implausible.
     """
     times = times or {}
     lines, supplied = [], set()
@@ -985,8 +984,7 @@ def _header_block(global_attrs: Dict[str, Any], scalars: Dict[str, Any],
 
 
 def _clock_lines(key: str, raw, when) -> List[str]:
-    """A CF time variable's lines: its value in ISO form with `Date:` and `Time:` aliases,
-    or only the stored number when it decoded to nothing a cast can be dated by."""
+    """A CF time as ISO text with `Date:`/`Time:` aliases, or the raw number if it gave no date."""
     if when is None:
         return [] if raw is None or raw == "" else [f"{key}: {raw}"]
     iso = _iso(when)
@@ -1011,8 +1009,7 @@ def _first_valid(data):
 def _decode_time(value, units: str, calendar) -> Optional[Any]:
     """A CF time value as a datetime, or None when it is missing or will not decode.
 
-    cftime applies an offset written into the units (`... 00:00:00 0:00`), so the result
-    is UTC whatever zone the epoch was given in.
+    cftime applies any offset in the units (`... 00:00:00 0:00`), so the result is UTC.
     """
     from netCDF4 import num2date
 
@@ -1027,8 +1024,7 @@ def _decode_time(value, units: str, calendar) -> Optional[Any]:
 
 
 def _plausible(when) -> bool:
-    """Whether a decoded time could be when a cast was taken: no earlier than
-    EARLIEST_PLAUSIBLE_YEAR and no later than tomorrow."""
+    """True if a decoded time is between EARLIEST_PLAUSIBLE_YEAR and tomorrow."""
     latest = (datetime.now(timezone.utc) + timedelta(days=1)).timetuple()[:6]
     stamp = (when.year, when.month, when.day, when.hour, when.minute, when.second)
     return when.year >= EARLIEST_PLAUSIBLE_YEAR and stamp <= latest

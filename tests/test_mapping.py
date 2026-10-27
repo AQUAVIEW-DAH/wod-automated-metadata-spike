@@ -146,7 +146,7 @@ class TestConversions:
             [{"raw_column": "P", "wod_code": 4, "conversion_needed": "molar_rescale",
               "conversion_from": "umol/l", "conversion_to": "umol/kg"}])
         assert log["seawater_density_kg_m3"] == 1025.0
-        assert "not specified by WOD" in log["seawater_density_provenance"]
+        assert "manual p.15" in log["seawater_density_provenance"]
 
     def test_a_rescale_without_endpoints_is_refused_not_guessed(self):
         """Without from/to units the direction is unknown, so values are left alone."""
@@ -163,7 +163,7 @@ class TestQCAuditing:
         {"raw_column": "Temp", "wod_code": 1}]}
 
     def test_depth_flags_use_the_depth_scale(self):
-        """Table 12 (2)(a): 1 means duplicate/inversion on the DEPTH scale."""
+        """Table 12 (2)(a): 1 means duplicate/inversion on the depth scale."""
         df = pd.DataFrame({"Depth": [0., 10., 5., 20., 20.], "Temp": [9.]*5})
         out, _ = apply_qc_auditing(df, self.CONTRACT)
         assert list(out["Depth_qc_flag"]) == [0, 0, 1, 0, 1]
@@ -260,8 +260,6 @@ class TestInstrumentExportNames:
 
 
 class TestUnitTraps:
-    """Units whose conversion is easy to miss."""
-
     def test_mg_per_litre_oxygen_is_converted(self):
         from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion
         assert _detect_unit_conversion("DO[mg/L]", 3) == "mg_per_l_to_umol_per_kg"
@@ -345,8 +343,6 @@ class TestNonProfileQC:
 
 
 class TestHeaderMiningIsNotProseMining:
-    """Prose in a header block must not become a secondary header or a coordinate."""
-
     @staticmethod
     def _headers(header_text):
         from wod_etl.mapping.generate_field_mapping import _parse_header_block
@@ -391,8 +387,6 @@ class TestHeaderMiningIsNotProseMining:
 
 
 class TestShortAliasesDoNotMatchMidName:
-    """A one-character alias such as 't' must not match inside 'sigma_t'."""
-
     @pytest.mark.parametrize("column", ["Sigma-t (kg/m3)", "sigma_t", "pot_t", "cond_t"])
     def test_a_t_inside_a_name_is_not_temperature(self, column):
         assert match_variable(column) != 1
@@ -420,8 +414,6 @@ class TestShortAliasesDoNotMatchMidName:
 
 
 class TestMolarPrefixIsNotConflated:
-    """Milli-, micro- and nanomolar units are told apart."""
-
     @staticmethod
     def _conv(col, code):
         from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion
@@ -470,9 +462,9 @@ class TestEachCoordinateIsCheckedOnItsOwnCode:
         assert contract["ready_for_transform"] is False
 
 
-MICRO = "\u00b5"      # U+00B5 MICRO SIGN, common in CSVs
-GREEK_MU = "\u03bc"   # U+03BC GREEK SMALL LETTER MU, from Word and PDFs
-MINUS = "\u2212"      # U+2212 MINUS SIGN, in pasted exponents
+MICRO = "\u00b5"      # micro sign, common in CSVs
+GREEK_MU = "\u03bc"   # Greek small letter mu, from Word and PDFs
+MINUS = "\u2212"      # minus sign, in pasted exponents
 
 
 class TestTypographicUnitCharacters:
@@ -508,8 +500,6 @@ class TestTypographicUnitCharacters:
 
 
 class TestFluorescenceIsDecidedByItsUnit:
-    """A concentration unit makes it chlorophyll; a raw signal is dropped."""
-
     @pytest.mark.parametrize("col", ["Fluorescence (ug/l)", "fluorescence (mg/m^3)",
                                      "Fluor [ppb]", "Fl (µg/L)", "FlSP", "flECO-AFL"])
     def test_a_concentration_is_chlorophyll(self, col):
@@ -571,8 +561,6 @@ class TestTheRangeLookupIsTheManualsRuleForAnyNumberOfDepths:
 
 
 class TestNamesFromAccession0303809:
-    """Names from an AOML CTD NetCDF: DPTH, OXY and 'decibar = 10000 pascals'."""
-
     @pytest.mark.parametrize("column, code", [
         ("DPTH (meters)", 0), ("OXY (ml/l)", 3), ("PRES (decibar = 10000 pascals)", 25)])
     def test_they_map(self, column, code):

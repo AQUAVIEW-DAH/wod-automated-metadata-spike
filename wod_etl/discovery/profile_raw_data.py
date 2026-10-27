@@ -21,7 +21,6 @@ def profile_raw_data(preview_text: str, file_url_or_path: str = "") -> Dict[str,
 
     lines = preview_text.splitlines()
 
-    # 1. Identify Header Comment Lines vs Data Lines
     comment_lines = []
     data_lines = []
 
@@ -36,8 +35,7 @@ def profile_raw_data(preview_text: str, file_url_or_path: str = "") -> Dict[str,
 
     raw_header_block = "\n".join(comment_lines)
 
-    # raw_header_block keeps comments from anywhere in the file, but the count is used
-    # downstream as a skip count, so it covers only the leading block.
+    # Only the leading block counts: downstream uses this as a skip count.
     leading_comment_lines = 0
     for line in lines:
         stripped = line.strip()
@@ -58,10 +56,9 @@ def profile_raw_data(preview_text: str, file_url_or_path: str = "") -> Dict[str,
             "inferred_dtypes": {}
         }
 
-    # 2. Sniff Delimiter
     delimiter = _sniff_delimiter(data_lines[0] if data_lines else "")
 
-    # 2b. A delimited table may sit under 'Key,value' rows and carry a units row.
+    # A delimited table may sit under 'Key,value' rows and carry a units row.
     layout = delimited_layout(lines, delimiter)
     if layout:
         data_lines = [l.strip() for l in lines[layout["header_line"]:] if l.strip()]
@@ -74,7 +71,6 @@ def profile_raw_data(preview_text: str, file_url_or_path: str = "") -> Dict[str,
         leading_comment_lines = layout["header_line"]
     sample_data_str = "\n".join(data_lines[:20])
 
-    # 3. Parse tabular preview with Pandas
     try:
         df = pd.read_csv(
             io.StringIO(sample_data_str),
@@ -95,7 +91,6 @@ def profile_raw_data(preview_text: str, file_url_or_path: str = "") -> Dict[str,
             "raw_first_data_line": data_lines[0] if data_lines else None
         }
 
-    # 4. Map Column Names to Known Scientific Variables
     detected_vars = []
     for col in columns:
         col_lower = col.lower()
@@ -121,8 +116,7 @@ def profile_raw_data(preview_text: str, file_url_or_path: str = "") -> Dict[str,
 
 
 _UNIT_TOKEN = re.compile(r"^[^\d\s][^,;\t]{0,19}$|^$")
-# Values a data row holds that are not plain numbers: missing-value codes ('**NS', '*DL',
-# '***NA'), dates, and degree-minute positions ('49-46.9858N').
+# Non-numeric data values: missing-value codes ('**NS'), dates and positions ('49-46.9858N').
 _DATA_TOKEN = re.compile(r"^\*{1,4}[A-Za-z]{1,3}$|^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|"
                          r"^\d{1,3}-\d{1,2}\.\d+[NSEW]?$|^\d{1,3}-\d{1,2}[NSEW]$|"
                          r"^(?:na|nan|n/a|nd|n\.d\.|-)$|"
@@ -155,10 +149,9 @@ def _data_share(fields: List[str]) -> float:
 def delimited_layout(lines: List[str], delimiter: str) -> Optional[Dict[str, Any]]:
     """Where a delimited table starts, when that is not its first line.
 
-    Handles a title or 'Key,value' rows above the header (blank-line separated or not), a
-    group label over some columns (`,,,,Chlorophyll a (mg m-3),,`), and a units row under
-    the header. Returns `{"header_line", "columns", "pairs", "unit_row"}` or None for an
-    ordinary table.
+    Handles a title or 'Key,value' rows above the header, a group label over some columns and
+    a units row under it. Returns `{"header_line", "columns", "pairs", "unit_row"}`, or None
+    for an ordinary table.
     """
     if delimiter not in (",", "\t", ";"):
         return None
@@ -168,8 +161,7 @@ def delimited_layout(lines: List[str], delimiter: str) -> Optional[Dict[str, Any
 
 
 def table_layout(rows) -> Optional[Dict[str, Any]]:
-    """`delimited_layout` for rows already split into fields: `[(row index, [field, ...])]`.
-    Spreadsheets use it too."""
+    """`delimited_layout` for rows already split into fields: `[(row index, [field, ...])]`."""
     rows = [(i, r) for i, r in rows if any(r)]
     for k in range(len(rows) - 1):
         i, head = rows[k]
@@ -186,8 +178,8 @@ def table_layout(rows) -> Optional[Dict[str, Any]]:
         data = rows[nxt][1]
         if abs(len(data) - len(head)) > 2 or _data_share(data) < 0.5:
             continue
-        # Key-value rows can pass for a small table ('Cruise,KH-23-1' over 'Date,2023-07-02').
-        # A run of rows that ends at another header with rows of its own is a preamble.
+        # 'Key,value' rows can pass for a small table; a run of them that ends at another
+        # header with rows of its own is a preamble.
         end = nxt
         while end < len(rows) and _data_share(rows[end][1]) >= 0.5 \
                 and abs(len(rows[end][1]) - len(head)) <= 2:
@@ -196,8 +188,7 @@ def table_layout(rows) -> Optional[Dict[str, Any]]:
                 and _data_share(rows[end + 1][1]) >= 0.5:
             continue
         above = [r for _, r in rows[:k]]
-        # A data row above -- a value in its first field -- means another table, not a
-        # preamble; 'Key,value' rows always start with a label.
+        # A row above starting with a value is another table; 'Key,value' rows start with a label.
         if any(len(r) >= len(head) and _data_share(r[:1]) == 1 and _data_share(r) >= 0.5
                for r in above):
             return None

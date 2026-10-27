@@ -1,13 +1,12 @@
 # WOD reference: where each answer lives
 
-These files hold what this project needs from the WOD 2023 manual, with page citations. Open
-[`wod_readme.pdf`](wod_readme.pdf) only for the items in tier 3. Page numbers are the same in
-print and in the PDF.
+These files hold what this project needs from the WOD 2023 manual, with page citations. Only
+the items in tier 3 need [`wod_readme.pdf`](wod_readme.pdf). Page numbers are the same in print
+and in the PDF.
 
 ## Tier 1. Code tables (read by the code at runtime)
 
-Look codes, units and thresholds up here; never retype them from memory. The loaders are
-described in [`wod_etl/reference/README.md`](../wod_etl/reference/README.md).
+The loaders are described in [`wod_etl/reference/README.md`](../wod_etl/reference/README.md).
 
 | Table | File | Manual |
 | --- | --- | --- |
@@ -22,13 +21,18 @@ described in [`wod_etl/reference/README.md`](../wod_etl/reference/README.md).
 | The five QC flag scales | [`table_12_qc_flags.json`](wod_code_tables/table_12_qc_flags.json) | p.55 |
 | Gradient factors | [`table_13_gradients.json`](wod_code_tables/table_13_gradients.json) | p.56 |
 | Acceptable ranges by depth | [`appendix_11_ranges.json`](wod_code_tables/appendix_11_ranges.json) | pp.86–113 |
+| Country codes | [`appendix_1_country_codes.json`](wod_code_tables/appendix_1_country_codes.json) | Appendix 1, p.68 |
 | Links to the online code lists | [`code_table_links.json`](wod_code_tables/code_table_links.json) | link annotations |
 
-**Code lists.** The tables define metadata fields. The values of those fields (platform, probe
-type, gear…) are code lists that WOD publishes online. The manual links to them through PDF
-annotations, which a text copy loses, so all 62 links are extracted.
-`code_table_link("secondary_header", 29)` returns the probe-type list's URLs; `None` means the
-field is not coded. The pipeline looks names up in these lists and caches them for 30 days.
+**Code lists.** The tables define metadata fields; their values (platform, probe type, gear…)
+are code lists WOD publishes online, linked from the manual through PDF annotations that a text
+copy loses. All 62 links are extracted, plus the two lists the text cites without a link:
+countries and principal investigators. `code_table_link("secondary_header", 29)` returns the
+probe-type list's URLs; `None` means the field is not coded. The pipeline looks names up in
+these lists and caches them for 30 days.
+
+**Not extracted**, because nothing here uses them: Tables 1a/1b (volumes, cast counts), 4c (WMO
+code table names), 10a–c (WOD's native ASCII layout), and Appendices 6, 7, 9, 10 and 13 (below).
 
 ## Tier 2. Prose references
 
@@ -45,7 +49,6 @@ field is not coded. The pipeline looks names up in these lists and caches them f
 
 | Content | Where | Note |
 | --- | --- | --- |
-| ISO country codes | Appendix 1, p.68 | |
 | Secondary header value codes | Appendix 2, pp.69–70 | Only links; use `code_table_link("secondary_header", id)` |
 | Variable-specific header value codes | Appendix 3, p.71 | Only links; use `code_table_link("variable_specific_header", id)` |
 | Biological header value codes | Appendix 4, p.71 | Only links; use `code_table_link("biological_header", id)` |
@@ -55,17 +58,18 @@ field is not coded. The pipeline looks names up in these lists and caches them f
 | Reiniger-Ross coefficients | Appendix 10, p.82 | Not used |
 | WOD's own NetCDF format | Appendix 12, p.114 | |
 | Ocean basins | Appendix 13, p.116 | Needs basin masks from the WOD website |
-| Glossary; acronyms | Appendix 14, p.117; Appendix 15, p.128 | |
+| Submitting data to NCEI | Appendix 14, p.117 | |
+| Glossary | Appendix 15, p.128 | Acronyms are in §VI, p.62 |
 | XBT fall-rate equation | §III.C, p.61 | |
 | Standard-level QC | §III.B, p.57 | Downstream of this project |
 
-If you open the PDF for anything else, add the answer to tier 1 or 2.
+Anything else read from the PDF belongs in tier 1 or 2.
 
 ## Common traps
 
 - Five tables number from 1. Code `4` is Phosphate (3a), Institution Code (4a), Institution
-  (5a), Type of tow (6a) and Biomass value (7a). Know which table a number came from before
-  looking it up. Table 4a describes the cast; 5a describes one variable.
+  (5a), Type of tow (6a) and Biomass value (7a). Table 4a describes the cast; 5a describes one
+  variable.
 - "Julian year-day" is day-of-year, not the Julian calendar.
 - Depth is not a variable; code 25 is Pressure. A plankton measurement has an upper and lower
   depth instead of one depth, so it is a Taxa-Record, not a profile.

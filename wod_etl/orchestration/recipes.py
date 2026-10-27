@@ -113,25 +113,25 @@ def check_mooring_recipe(recipe: Dict[str, Any], root: Path) -> Dict[str, Any]:
             continue
         if depths.get(name) == "pressure" and not info.get("pressure"):
             problems.append(f"{name}: depth = \"pressure\", but it records no pressure it "
-                            f"can be placed by -- give its depth in m")
+                            f"can be placed by; give its depth in m")
         for v in info["variables"]:
             key = _unit_key(v["code"], v["units"])
             seen = units.setdefault(v["code"], (key, v["units"] or "no unit", name))
             if seen[0] != key:
                 problems.append(f"{name} states {v['column']!r} in '{v['units'] or 'no unit'}' "
                                 f"where {seen[2]} states '{seen[1]}': one unit per variable on "
-                                f"a mooring -- convert one, or stage it with a script recipe")
+                                f"a mooring; convert one, or stage it with a script recipe")
         lat, lon = info.get("latitude"), info.get("longitude")
         if lat is not None and lon is not None:
             if not (-90 <= lat <= 90 and -180 <= lon <= 360):
                 problems.append(f"{name}: its position reads as {lat}, {lon}, not a place on "
-                                f"Earth -- set position = [lat, lon]")
+                                f"Earth; set position = [lat, lon]")
             else:
                 positions.append((lat, lon))
     if positions and max(max(abs(a[0] - b[0]), abs(a[1] - b[1]))
                          for a in positions for b in positions) > 0.01:
-        problems.append("its instruments are 0.01 degree or more apart: one recipe is one "
-                        "mooring -- split it into one per mooring")
+        problems.append("its instruments are 0.01 degree or more apart, and one recipe is one "
+                        "mooring: split it into one per mooring")
     if not recipe.get("position") and not positions:
         problems.append("no instrument states its position: set position = [lat, lon]")
     return {"instruments": len(recipe.get("files") or []), "mooring_problems": problems}
@@ -169,8 +169,7 @@ def _run_mooring(name: str, recipe: Dict[str, Any], root: Path, out: Path, acces
     if not built["profiles"]:
         raise ValueError(f"no day of the deployment has an instrument recording for "
                          f"{fraction:.0%} of its hours: there is no daily mean to write")
-    # One column per variable, named by the first instrument recording it; units agree
-    # (check_mooring_recipe) and pressure is in decibars.
+    # One column per variable, named by its first instrument; units agree, pressure is in dbar.
     columns: Dict[int, str] = {}
     for info in instruments:
         for v in info["variables"]:
@@ -190,7 +189,7 @@ def _run_mooring(name: str, recipe: Dict[str, Any], root: Path, out: Path, acces
             else "its record without its first and last day: none of its instruments records "
                  "pressure to tell when it went in, and a logger may record air on deck")
          + ": samples outside are not used." if built["window"] else
-         "Deployed: the whole record -- none of its instruments records pressure to tell "
+         "Deployed: the whole record. None of its instruments records pressure to tell "
          "when it was in the water, and the review included it as it stands.")]
     notes += [f"{n}: depth {d}." for n, d in sorted((recipe.get("placed") or {}).items())
               if d and recipe["depths"].get(n) != "pressure"]
@@ -261,6 +260,8 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
         return _run_mooring(name, recipe, root, out, accession, plan)
     if kind == "combine":
         return _run_combine(name, recipe, root, out, accession, plan)
+    if kind == "tracks":
+        return _run_tracks(name, recipe, root, out, accession, plan)
 
     stations, sinfo = _station_lookup(root, recipe)
     overrides = {normalise_station(k): v for k, v in (plan.get("station_overrides") or {}).items()}
@@ -383,7 +384,7 @@ def _run_combine(name: str, recipe: Dict[str, Any], root: Path, out: Path, acces
         held = "; ".join(f"{names[p]}: {', '.join(cs)}" for p, cs in c["columns_from"].items())
         notes = [f"Staged by `wod-etl confirm`: recipe {name} (kind = combine).",
                  f"Station {c['station']} on {c['date']}, combined from {len(c['sources'])} "
-                 f"file(s) reporting the same cast, levels merged by depth -- {held}."]
+                 f"file(s) reporting the same cast, levels merged by depth: {held}."]
         path = out / f"{_safe(c['station'])}_{c['date']}.csv"
         write_staged_cast(
             path, cols, rows, latitude=c["latitude"], longitude=c["longitude"], date=c["date"],
@@ -394,6 +395,41 @@ def _run_combine(name: str, recipe: Dict[str, Any], root: Path, out: Path, acces
         written.append(str(path))
     return {"recipe": name, "written": written, "skipped": [],
             "in_one_file_only": info["in_one_file_only"]}
+
+
+def _run_tracks(name: str, recipe: Dict[str, Any], root: Path, out: Path, accession: str,
+                plan: Dict[str, Any]) -> Dict[str, Any]:
+    """One staged SUR track per cast: files on one clock merged on time."""
+    import pandas as pd
+
+    from wod_etl.staging.tracks import combine_tracks
+
+    files = recipe.get("files") or []
+    names = {str(root / f): f for f in files}
+    written, skipped = [], []
+    for i, track in enumerate(combine_tracks([root / f for f in files]), start=1):
+        df = track["df"]
+        located = df.dropna(subset=[c for c in ("Latitude", "Longitude") if c in df])
+        if not {"Latitude", "Longitude"} <= set(df.columns) or located.empty:
+            skipped.append({"cast": f"track {i}", "reason": "no position in any of its files"})
+            continue
+        first = located.iloc[0]
+        stamp = pd.Timestamp(first.iloc[0])
+        cols, rows = _rows(df)
+        sources = [names.get(s, s) for s in track["sources"]]
+        path = out / f"track_{i:02d}.csv"
+        write_staged_cast(
+            path, cols, rows, latitude=float(first["Latitude"]),
+            longitude=float(first["Longitude"]), date=f"{stamp:%Y-%m-%d}",
+            time=f"{stamp:%H:%M:%S}", time_zone="UTC" if track["utc"] else None,
+            metadata=_metadata(accession, plan.get("metadata") or {}, recipe, "",
+                               f"{name}_{i:02d}"),
+            notes=[f"Staged by `wod-etl confirm`: recipe {name} (kind = tracks).",
+                   f"One SUR cast from {len(sources)} file(s) on one clock, merged on time: "
+                   f"{', '.join(sources)}."],
+            sources=[str(root / f) for f in sources])
+        written.append(str(path))
+    return {"recipe": name, "written": written, "skipped": skipped}
 
 
 def _table(path: Path):
@@ -532,8 +568,7 @@ def _taxa_hauls(recipe: Dict[str, Any], root: Path) -> Dict[str, Any]:
             value = row[i].strip() if i < len(row) else ""
             if is_missing(value):
                 continue
-            # A negative value is a missing-value code (e.g. -999); Table 7a's sign rule would
-            # misread it as a value in the smaller unit.
+            # A negative value is a missing-value code (-999), not a Table 7a smaller-unit sign.
             if _negative(value):
                 negatives[m["column"]] = negatives.get(m["column"], 0) + 1
                 continue

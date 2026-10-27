@@ -122,7 +122,7 @@ files = ["3-old-ascii/drop_001.dat"]
 staged CSVs with `wod_etl.staging.write_staged_cast`. See
 [`knowledge/reading_unknown_files.md`](knowledge/reading_unknown_files.md).
 
-**After a new WOD release**, replace the PDF and rebuild the code-list links:
+**New WOD release.** Replace the PDF and rebuild the code-list links:
 `uv run python -m wod_etl.reference.extract_code_table_links`.
 
 **Settings.** Move the data folders with `WOD_DATA_DIR` (or `WOD_RAW_DIR`,
@@ -136,14 +136,15 @@ it with `WOD_PROJECT_ROOT`.
 | Range checks | Bounds are the union of all 30 ocean basins, so they are permissive. Basin masks are not in the manual. |
 | Standard levels | No interpolation to standard depths; output is at observed levels. |
 | Pressure → depth | Automatic for pressure in dbar. Other units need a staging script. |
-| Station lists | Joined when the list names each cast's file or station. Positions only in a PDF or readme prose need a staging script. |
+| Station lists | Joined when a delimited list names each cast's file or station; a workbook-only list is not read. Positions only in a PDF or readme prose need a staging script. |
 | Unlabelled columns | Files with unnamed columns (bare XBT/CTD exports) are left out. Use a staging script. |
 | Time zones | Offsets, fixed names (JST, NZST) and US regional zones (ET, PT) are converted to UTC. Ambiguous names (CST, EST, MST, IST, BST) are not. |
-| Surface data | Written at 0 m (manual p.20). A track (SUR) is one cast per file with a year-day per observation. |
+| Surface data | Written at 0 m (manual p.20), a year-day per observation. Streams logged on one clock are one SUR cast; separate tracks stay separate casts, and casts over WOD's 24,000-observation split are not split. |
+| Metadata lookups | Country, platform, institute, project, probe, instrument, units and PI are coded from WOD's lists when one entry matches; otherwise the originator's text is kept and the report says why. |
 | Left out on purpose | ADCP, images, video, PDFs, and tables with nothing WOD stores. Media files are not downloaded. |
-| Plankton | Count matrices and whole-sample biomass need a staging script. Biological Header values cannot yet be set in `decisions.toml`. |
+| Plankton | Count matrices and whole-sample biomass need a staging script. Biological Header values cannot be set in `decisions.toml`. |
 | Code lists | Fetched from the WOD website and cached for 30 days. Offline, values are kept as text. |
 | WOD QC | Off by default (`WOD_RUN_QC=1` turns it on). The originator's flags are always kept verbatim. |
 | Below-detection values | Become missing (Table 12 has no flag for them). The count is reported. |
-| `seawater_density` | 1025 kg/m³ is an assumption, not a WOD constant. Every file that uses it says so. |
+| `seawater_density` | Per-volume values are converted with WOD's constant 1025 kg/m³ (manual p.15), not the sample's own density. Every file that uses it says so. |
 | Web page | No cancel button and no accession-id field. Use `--accession-id` in a terminal. |

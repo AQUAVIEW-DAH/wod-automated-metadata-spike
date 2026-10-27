@@ -3,16 +3,14 @@
 PDF text loses its layout, so a row is described by a regular expression with one group per
 column, and every match on the page is a row:
 
-    from wod_etl.staging import extract_pdf_rows
-
     cols, rows, info = extract_pdf_rows(
         "0-data/cruise_report.pdf", page=8,
         row_pattern=r"(\\d+) (Nov\\. \\d{2}, \\d{4}) (\\S+E) (\\S+N) (\\d+\\.\\d) (\\d+)",
         columns=["Station", "Date", "Long", "Lat", "SST (deg C)", "Tow depth (m)"])
     info["source"]     # 'cruise_report.pdf, PDF page 8'
 
-Check `info["matches"]` against the printed table: a missed row is silently absent. `page`
-is the 1-based PDF page index, not the printed page number.
+A row the pattern misses is absent, not flagged; `info["matches"]` counts the rows found.
+`page` is the 1-based PDF page index, not the printed page number.
 """
 import re
 from pathlib import Path
@@ -77,6 +75,6 @@ def extract_pdf_rows(
     return list(columns), rows, {
         **info, "page": page, "matches": len(rows), "source": source,
         "text_excerpt": None if rows else text[:400],
-        "note": "Compare `matches` with the rows the printed table shows: a row the pattern "
-                "misses is absent, not flagged.",
+        "note": "`matches` counts only the rows the pattern found; a row it misses is "
+                "absent, not flagged.",
     }

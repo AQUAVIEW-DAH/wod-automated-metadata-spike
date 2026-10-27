@@ -29,7 +29,7 @@ VARIABLE_ALIASES = {
     21: ["dic", "tco2", "dissolved_inorganic_carbon"],
     24: ["transmissivity", "beam_attenuation", "transmission"],
     25: ["pressure", "press", "pres", "dbar", "prdm", "prsm", "prdb", "prm", "pr"],
-    # 'air_temp' is listed so the longest-alias fallback does not pick code 1's 'temp'.
+    # 'air_temp' stops the longest-alias fallback picking code 1's 'temp'.
     26: ["air_temperature", "airtemp", "atemp", "air_temp", "airtemperature",
          "dry_bulb", "dry_bulb_temperature"],
     29: ["air_pressure", "barometric_pressure", "baro"],
@@ -49,15 +49,13 @@ VARIABLE_ALIASES = {
     43: ["oxygen_18", "o18", "18o", "d18o", "delta_18o", "delta_o18"],
 }
 
-# Depth is the vertical axis, not a WOD variable (code 25 is Pressure). Sentinel 0 marks
-# the depth-axis column, in metres.
+# Depth is the vertical axis, not a WOD variable (25 is Pressure): sentinel code 0, in metres.
 DEPTH_SENTINEL_CODE = 0
 DEPTH_ALIASES = ["depth", "dep", "z", "deph", "dpth", "depth_m", "depth_meters",
                  # Sea-Bird export names: depth in salt water / fresh water, metres or feet.
                  "depsm", "depfm", "depsf", "depff", "dpthm"]
 
-# Columns containing 'depth' that are not the vertical axis (bottom depth is secondary
-# header 10).
+# 'Depth' columns that are not the vertical axis (bottom depth is secondary header 10).
 NOT_THE_DEPTH_AXIS = re.compile(
     r"^(?:bottom|water|station|sounding|seafloor|sea_floor|max|maximum|min|minimum|total|"
     r"cast|sensor|intake|calibration|target|nominal|upper|lower|start|end|bot)_"
@@ -78,11 +76,11 @@ NOT_STORED = {
         "patterns": [r"^(?:pot|poten|potential)_?.*temp", r"^theta(_|$)", r"_theta$"],
         "reason": "Potential temperature is derived, not measured. Table 3a code 1 is "
                   "in-situ temperature; there is no code for theta.",
-        "route": "If the file ALSO has in-situ temperature, map that and drop this. If theta "
-                 "is all there is, convert it to in-situ during staging -- it needs pressure "
-                 "and salinity -- and record the conversion. Never alias it to code 1: with "
-                 "both columns present the cast claims Temperature twice, and with only "
-                 "theta present the cast silently reports the wrong quantity.",
+        "route": "If the file also has in-situ temperature, that is written and this is not. "
+                 "If theta is all there is, convert it to in-situ during staging (it needs "
+                 "pressure and salinity) and record the conversion. It is never mapped to "
+                 "code 1: with both columns present the cast would claim Temperature twice, "
+                 "and with theta alone it would report the wrong quantity.",
     },
     "size_fractionated_chlorophyll": {
         "aliases": [],
@@ -90,7 +88,7 @@ NOT_STORED = {
         "patterns": [r"^(?:\d+_)*\d+_(?:um|m|micron)_.*chl", r"chl.*_\d+_?(?:um|micron)(?:_|$)"],
         "reason": "A size fraction of chlorophyll. WOD has one chlorophyll code (11), for the "
                   "total.",
-        "route": "Map the total chlorophyll column and drop the size fractions.",
+        "route": "Not written; a total chlorophyll column is written as code 11.",
     },
     "oxygen_saturation": {
         "aliases": ["oxygen_saturation", "o2_saturation", "o2sat", "oxy_sat", "oxsat",
@@ -99,61 +97,57 @@ NOT_STORED = {
                      r"(?:^|_)saturation(?:_|$)"],
         "reason": "Percent saturation is derived from the oxygen concentration, temperature "
                   "and salinity. WOD stores the concentration (code 3).",
-        "route": "Map the concentration column instead and drop this one.",
+        "route": "Not written; the concentration column is written as code 3.",
     },
     "conductivity": {
         "aliases": ["conductivity", "cond", "c0s_m", "c1s_m", "c0ms_cm", "condwat", "cndc"],
         "reason": "WOD stores salinity, not conductivity. No Table 3a code.",
-        "route": "Drop it and report the drop. Salinity is usually already derived in the "
-                 "same file; if it is not, deriving it needs temperature and pressure and "
-                 "belongs in staging.",
+        "route": "Not written. Salinity is usually already derived in the same file; if it "
+                 "is not, derive it during staging (it needs temperature and pressure).",
     },
     "density": {
         "aliases": ["density", "sigma_t", "sigma_theta", "sigma_0", "sigma0", "sigmat",
                     "sigma", "dens", "rho", "density_anomaly"],
         "patterns": [r"^sigma(_|\d|$)"],
         "reason": "Derived from temperature, salinity and pressure. No Table 3a code.",
-        "route": "Drop it and report the drop. Note that 'sigma-t' normalises to a token "
-                 "ending in '_t', which is why the single-character alias 't' is barred "
-                 "from fallback matching.",
+        "route": "Not written.",
     },
     "sound_velocity": {
         "aliases": ["sound_velocity", "sound_speed", "svel", "svcm", "sv", "soundspeed"],
         "patterns": [r"sound_?(speed|velocity)", r"speed_of_sound"],
         "reason": "Derived. No Table 3a code.",
-        "route": "Drop it and report the drop.",
+        "route": "Not written.",
     },
     "nitrite": {
         "aliases": ["nitrite", "no2"],
         "reason": "WOD deliberately excludes nitrite alone (manual p.49). Code 8 is nitrate, "
                   "or nitrate+nitrite.",
-        "route": "Drop a nitrite-only column. A nitrate+nitrite column IS storable: map it "
-                 "to code 8 and set variable specific second header 17 (Contains nitrite).",
+        "route": "A nitrite-only column is not written; a nitrate+nitrite column is written "
+                 "as code 8 with variable specific second header 17 (Contains nitrite).",
     },
     "ammonium": {
         "aliases": ["ammonium", "ammonia", "nh4", "nh3"],
         "reason": "No Table 3a code.",
-        "route": "Drop it and report the drop.",
+        "route": "Not written.",
     },
     "turbidity": {
         "aliases": ["turbidity", "ntu", "cdom", "fdom", "obs_turbidity"],
-        "reason": "No Table 3a code. Code 24 is Transmissivity, which is a different "
-                  "measurement -- do not substitute one for the other.",
-        "route": "Drop it and report the drop.",
+        "reason": "No Table 3a code. Code 24 is Transmissivity, a different measurement "
+                  "that cannot stand in for it.",
+        "route": "Not written.",
     },
 }
 
-# alias -> registry key, built once so match failures can be explained in one lookup.
+# alias -> NOT_STORED key.
 _NOT_STORED_BY_ALIAS = {a: k for k, v in NOT_STORED.items() for a in v["aliases"]}
 _NOT_STORED_PATTERNS = [(re.compile(p), k)
                         for k, v in NOT_STORED.items() for p in v.get("patterns", [])]
 
 
 def normalize_name(name: str) -> str:
-    """Reduce a raw column name to a comparable token, for matching only.
+    """A raw column name as a token for matching: 'Temp (C)' -> 'temp', 'Depth, m' -> 'depth'.
 
-    'Temp (C)' -> 'temp', 'Sal_PSU [psu]' -> 'sal_psu', 'Depth, m' -> 'depth'. The stripped
-    unit is recovered by `extract_unit`.
+    `extract_unit` recovers the stripped unit.
     """
     s = english_terms(str(name)).strip().lower()
     s = re.sub(r"[\(\[\{].*?[\)\]\}]", " ", s)   # drop bracketed unit text
@@ -162,7 +156,7 @@ def normalize_name(name: str) -> str:
     return s
 
 
-# Typographic unit characters (Greek mu, U+2212 minus, superscripts...) folded for matching.
+# Typographic unit characters, folded for matching.
 _UNIT_CHAR_FOLD = str.maketrans({
     "\u03bc": "\u00b5",                      # Greek mu -> micro sign (identical on screen)
     **dict.fromkeys("\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u207b", "-"),  # dashes, minus
@@ -171,7 +165,7 @@ _UNIT_CHAR_FOLD = str.maketrans({
     **dict.fromkeys("\u2044\u2215", "/"),            # fraction and division slashes
     **dict.fromkeys("\u00b7\u2022\u22c5", "."),       # middle dots used as a separator
     **dict.fromkeys("\u00a0\u2009\u202f", " "),       # non-breaking and thin spaces
-    "\u2103": "\u00b0C",                    # ℃ as one character, as Japanese headers write it
+    "\u2103": "\u00b0C",                    # ℃ as one character
 })
 
 
@@ -181,10 +175,9 @@ def canonical_unit_text(text: str) -> str:
 
 
 def extract_unit(name: str) -> Optional[str]:
-    """The unit text a raw column name carries, verbatim, or None.
+    """The unit text in a raw column name, verbatim, or None: `Temperature (deg C)` -> 'deg C'.
 
-    `Temperature (deg C)` -> 'deg C', `Depth, m` -> 'm'. Recorded as the originator's unit
-    (variable specific second header 8).
+    Recorded as the originator's unit (variable specific second header 8).
     """
     raw = str(name).strip()
     for candidate in reversed(re.findall(r"[\(\[\{]\s*([^\)\]\}]*?)\s*[\)\]\}]", raw)):
@@ -221,8 +214,7 @@ def extract_scale(name: str) -> Optional[str]:
     return None
 
 
-# A bracketed suffix is not always a unit: 'Temperature (secondary sensor)' and
-# 'Salinity (bottle)' are qualifiers. Units are short and made of unit-ish characters.
+# Units are short and use unit characters; these words mark a qualifier or a scale.
 _UNIT_LIKE = re.compile(r"^[A-Za-zµ°‰%/·^\-\d\s.]+$")
 _NOT_UNITS = {"secondary", "primary", "bottle", "ctd", "sensor", "sensors", "corrected",
               "raw", "average", "mean", "adjusted", "calculated", "derived", "unknown",
@@ -231,14 +223,13 @@ _NOT_UNITS = {"secondary", "primary", "bottle", "ctd", "sensor", "sensors", "cor
 
 
 def _looks_like_unit(text: str) -> bool:
-    """A bracketed suffix is a unit, a qualifier, or a scale. Only the first is a unit."""
+    """Whether a bracketed suffix is a unit, not a qualifier ('bottle') or a scale."""
     text = canonical_unit_text(text or "").strip()
     if not text or len(text) > 24 or not _UNIT_LIKE.match(text):
         return False
     words = [w for w in re.split(r"[^a-z0-9]+", text.lower()) if w]
     if not words:
         return bool(re.fullmatch(r"[µ°‰%]+", text))   # symbol-only units: ‰, %, °
-    # A qualifier or scale word anywhere means it is not a unit.
     return not any(w in _NOT_UNITS for w in words)
 
 
@@ -297,8 +288,8 @@ def fluorescence_rule(column_name: str) -> Optional[Dict[str, Any]]:
                        f"has no fluorescence variable." if unit_text else
                        "Fluorescence with no stated unit: it may be a concentration or a raw "
                        "signal, and only a concentration can be written as Chlorophyll."),
-            "route": ("Drop it and report the drop. If the submitter supplies a calibration "
-                      "to ug/l, apply it in staging and name the column with that unit."
+            "route": ("Not written. If the submitter supplies a calibration to ug/l, apply it "
+                      "in staging and name the column with that unit."
                       if unit_text else
                       "Find the unit (ISO metadata, readme, instrument export) and put it in "
                       "the staged column name: 'Fluorescence (ug/l)' maps to Chlorophyll, "
@@ -306,11 +297,7 @@ def fluorescence_rule(column_name: str) -> Optional[Dict[str, Any]]:
 
 
 def explain_column(column_name: str) -> Optional[Dict[str, Any]]:
-    """Why a column has no WOD code, when the reason is known.
-
-    Returns None for an unrecognised column (it may need an alias), or a reason and route
-    for a column that must not be aliased.
-    """
+    """Why a column has no WOD code: a reason and route, or None if it is unrecognised."""
     norm = normalize_name(column_name)
     fluor = fluorescence_rule(column_name)
     if fluor is not None and fluor["code"] is None:
@@ -326,16 +313,14 @@ def explain_column(column_name: str) -> Optional[Dict[str, Any]]:
             "route": entry["route"], "do_not_alias": True}
 
 
-# Aliases shorter than this match only a whole column name, never a token within one
-# ('t' would match 'sigma_t').
+# Shorter aliases match only a whole name, not a token ('t' would match 'sigma_t').
 MIN_FALLBACK_ALIAS_LEN = 2
 
 
 def match_variable(column_name: str) -> Optional[int]:
-    """Return the WOD variable code for a raw column name, or None.
+    """The WOD variable code for a raw column name, or None.
 
-    Matches the normalised name: exact alias first, then the longest whole-word alias of at
-    least MIN_FALLBACK_ALIAS_LEN characters.
+    Exact alias first, then the longest whole-word alias at least MIN_FALLBACK_ALIAS_LEN long.
     """
     norm = normalize_name(column_name)
     if not norm:
@@ -372,11 +357,9 @@ def match_variable(column_name: str) -> Optional[int]:
 
 
 def resolve_column(query: str, columns: List[str]) -> Dict[str, Any]:
-    """The column a human's name for it refers to, e.g. 'latitude' -> 'LAT'.
+    """The column a plain name refers to ('latitude' -> 'LAT'), by tiers tried in order.
 
-    Tiers, tried in order and reported in `matched_by`: `exact`, `normalized`, `wod_code`
-    (same WOD variable) and `substring` (low confidence). Several hits at one tier give
-    `column: None` and `ambiguous: True`; a column WOD does not store is refused.
+    Several hits at one tier give `ambiguous: True`; a column WOD does not store is refused.
     """
     cols = [c for c in columns if c and c.strip()]
     out: Dict[str, Any] = {"query": query, "column": None, "wod_code": None,
@@ -407,7 +390,7 @@ def resolve_column(query: str, columns: List[str]) -> Dict[str, Any]:
             out["ambiguous"] = True
             out["note"] = (f"{len(hits)} columns match {query!r} at the {tier} tier: "
                            f"{hits}. Name the one you mean. Sensor-indexed pairs such as "
-                           f"t090C/t190C resolve to the same WOD code by design -- they "
+                           f"t090C/t190C resolve to the same WOD code by design: they "
                            f"are the primary and secondary sensor, not duplicates.")
             return out
         column = hits[0]
@@ -464,10 +447,9 @@ def query_wod_spec(
     variable_query: Optional[List[str]] = None,
     depth_increment_m: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Query WOD standard specifications for a dataset and set of variables.
+    """WOD's definition of a dataset and of each queried variable.
 
-    variable_query accepts raw column names or keywords; each is matched to a WOD code.
-    Omit it to get every Table 3a variable.
+    `variable_query` takes column names or keywords; omit it for every Table 3a variable.
     """
     resolved = resolve_dataset(dataset_type, depth_increment_m)
     variables = wod_variables()

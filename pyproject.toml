@@ -7,12 +7,10 @@ dependencies = [
     "fastapi>=0.143.2",
     "httpx>=0.28.1",
     "netcdf4>=1.7.4",
-    # Accessions arrive as spreadsheets often enough that read_any needs an Excel engine;
-    # without one it can only tell you to export the sheet to CSV yourself.
+    # read_any's Excel engine: accessions often arrive as spreadsheets.
     "openpyxl>=3.1.5",
     "pandas>=3.0.5",
-    # Cruise reports state station positions, dates and some measurements only in PDF
-    # tables; wod_etl.staging.extract_pdf_rows reads them, with a page citation.
+    # extract_pdf_rows: some positions, dates and measurements exist only in PDF cruise reports.
     "pypdf>=6.16.1",
     "uvicorn>=0.54.0",
 ]
@@ -30,7 +28,7 @@ dev = [
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-# The package sits at the repo root, so it installs like any other Python project.
+# The package sits at the repo root.
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["wod_etl*"]

@@ -1,12 +1,11 @@
 # Reading a file nobody documented
 
 Submitters send NetCDF, Sea-Bird `.cnv`, old fixed-column ASCII, Excel workbooks, CSV named
-`.dat`, and files with no extension. Use this procedure for a file that does not open: one
-listed under **Check**, or one reported as "does not read as any table".
+`.dat`, and files with no extension. This procedure is for a file that does not open: one
+listed under "Check", or one reported as "does not read as any table".
 
-Work one folder at a time and answer every question below before staging anything. Record the
-answers: they are the provenance of every value you derive. The Python calls run from
-`uv run python`.
+Answer the questions below for each folder before staging; the answers are the provenance of
+every derived value. The Python calls run from `uv run python`.
 
 ## 0. Before any file: what is in this accession?
 
@@ -61,10 +60,8 @@ parses, so a coordinate from a NetCDF attribute reaches the contract by the same
 - Fixed-width column boundaries are inferred from where whitespace held across the sampled
   rows. A column that is full in the sample and empty later shifts every field after it. Check
   the boundaries against the accession's format description.
-- A headerless fixed-width file gets `col_0…col_N`, which nothing downstream can map. Name the
-  columns during staging (Q2).
-- NetCDF units are folded into the column name (`TEMP (degree_Celsius)`) because unit
-  detection reads only the name. Do not strip them.
+- A headerless fixed-width file gets `col_0…col_N`; name the columns during staging (Q2).
+- NetCDF units are folded into the column name (`TEMP (degree_Celsius)`); do not strip them.
 
 ## 2. Where does the table start, and what are the columns?
 
@@ -73,10 +70,9 @@ Ask, in this order:
 1. Is the first non-comment line a header or the first level? A headerless file read with a
    header loses its shallowest level and labels every column with that level's values. For
    fixed-width files `read_any` checks whether that line is all numeric; for delimited files
-   it trusts the profile. Always compare `df.head()` with the raw first lines.
+   it trusts the profile. Compare `df.head()` with the raw first lines.
 2. Is there a units row under the header? `Station,Pressure,Temperature` over
-   `,dbar,ITS-90 deg C` is two header rows. Unit detection reads only the full column name, so
-   a units row is invisible to it. Fold it in when staging with `fold_unit_row`:
+   `,dbar,ITS-90 deg C` is two header rows. Fold them with `fold_unit_row` when staging:
    `Pressure (dbar)`, not `Pressure`.
 3. Is there a title row above the header? Common in exported spreadsheets:
    `read_table(header_row=1)`.
@@ -90,7 +86,7 @@ Ask, in this order:
    ```
 
    `rename_columns` refuses any rename that would change the column's WOD code, unit or scale,
-   and prints the fix. Report `audit["renames"]`.
+   and prints the fix.
 5. Did the whole file come back as one column? `read_table` is comma-only by default, so a
    tab- or semicolon-separated file collapses into one column and later shows up as "no
    measurements in this file", not as a delimiter problem. Pass
@@ -112,11 +108,10 @@ Look in this order, and record which source you used:
 | NetCDF attributes or per-profile variables | `LATITUDE(N_PROF)`, `geospatial_lat_min` | Nothing; `read_any` puts them in the header block |
 | A sibling station list | `stations.csv` keyed by station number | Join it in during Phase 0 staging |
 | Only in a readme or cruise report | Prose, or a PDF | Phase 0 staging. A position stated in a readme is a source: use it and cite it |
-| Nowhere | | The cast cannot be staged. Say so; never invent one |
+| Nowhere | | The cast cannot be staged; a position is never invented |
 
-Coordinates that are not decimal degrees (`49-46.9858N`, `49 46.9858 S`, `178-12.33E`) are
-handled by `parse_coordinate` in `wod_etl.staging`; see
-[`accession_field_guide.md`](accession_field_guide.md).
+Coordinates that are not decimal degrees (`49-46.9858N`) are handled by `parse_coordinate` in
+`wod_etl.staging`; see [`accession_field_guide.md`](accession_field_guide.md).
 
 Time traps: a `Date time (UTC)` column beside a `Time zone` column is ambiguous until tested.
 `08 30` is 08:30, not two fields. A "Julian day" is day-of-year, not the Julian calendar.
@@ -135,21 +130,18 @@ contract["unmapped_columns"], contract["warnings"]
 
 Each name in `unmapped_columns` is one of three things:
 
-1. A WOD variable under an instrument's name: `T090C` is Temperature, `SBEOX0ML/L` is Oxygen,
-   `PRDM` is Pressure. If the name will recur, add an alias to `VARIABLE_ALIASES` in
-   `wod_etl/mapping/query_wod_spec.py`; for one file, rename the staged copy with
-   `rename_columns`. Never edit `data/raw/`.
-2. A variable WOD does not store: conductivity, sigma-t, sound velocity, nitrite alone,
-   ammonium, CDOM, turbidity, potential temperature. There is no Table 3a code;
-   `classify_dataset` lists these in `unstorable_columns`. Drop it and report the drop. Mapping
-   it onto an adjacent code is worse: aliasing potential temperature to code `1` makes a cast
-   claim Temperature twice.
+1. A WOD variable under an instrument's name: `T090C` is Temperature. If the name will recur,
+   add an alias to `VARIABLE_ALIASES` in `wod_etl/mapping/query_wod_spec.py`; for one file,
+   rename the staged copy with `rename_columns`. Never edit `data/raw/`.
+2. A variable with no Table 3a code (conductivity, sigma-t, nitrite alone, potential
+   temperature…); `classify_dataset` lists these in `unstorable_columns`, and they are not
+   written. Mapping it onto an adjacent code is worse: aliasing potential temperature to code
+   `1` makes a cast claim Temperature twice.
 3. Not a measurement: a station id, a flag column, a comment, an originator's QC code. Leave
    it unmapped, and consider carrying a flag column as secondary header 96 (Originator's
    Flags).
 
-If unsure whether WOD stores something, look it up in Table 3a through
-[`README.md`](README.md), not from memory.
+Table 3a, reached through [`README.md`](README.md), decides what WOD stores.
 
 ## 5. What are the units?
 
@@ -161,9 +153,9 @@ A wrong unit still validates, so this is the most expensive question to get wron
 - Check the conversion direction against Table 3a. Alkalinity and DIC are stored per volume;
   nutrients are stored per mass. "Already µmol/kg" is correct for one and a 1000× error for
   the other.
-- Depth versus pressure: depth is the axis and has no variable code; pressure is code 25. A
-  file with pressure and no depth needs a conversion that requires latitude and is not
-  automatic: `pressure_to_depth` in `wod_etl.staging`.
+- Depth versus pressure: depth is the axis and has no variable code; pressure is code 25.
+  Pressure in dbar becomes depth automatically when the cast has a latitude; otherwise
+  stage it with `pressure_to_depth` in `wod_etl.staging` (dbar in, metres out).
 - Read the value ranges of one output file before trusting any of this. `audit_dataset` in
   `wod_etl.verify` does it per dataset.
 
@@ -184,8 +176,8 @@ The sample is only the first few KB. Count real values over the whole file befor
 anything.
 
 Sentinels such as `**NS`, `***NA`, `*DL` and `**ND` are counted by `clean_sentinels` (legend in
-[`accession_field_guide.md`](accession_field_guide.md)). Below-detection is a real measurement:
-WOD has no flag for it, so it becomes missing, and that loss must appear in the report.
+[`accession_field_guide.md`](accession_field_guide.md)). Below-detection is a real measurement,
+but WOD has no flag for it, so it becomes missing.
 
 ## When the file still will not open
 
@@ -204,8 +196,7 @@ WOD has no flag for it, so it becomes missing, and that loss must appear in the 
   ```
 
   `wod-etl confirm` runs it with `WOD_DATA_ROOT` and `WOD_STAGING_OUT` set. The script writes
-  staged CSVs with `wod_etl.staging.write_staged_cast`. Record every derived value in the
-  staged header, and never edit `data/raw/`.
+  staged CSVs with `wod_etl.staging.write_staged_cast`.
 - A layout seen twice needs a reader, not a script: add it to
   `wod_etl/discovery/read_any.py` and a signature to `sniff_format.py`.
 

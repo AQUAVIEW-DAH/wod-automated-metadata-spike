@@ -1,8 +1,7 @@
 """WOD's file layout: one dataset and one year per file, named the way WOD names its own.
 
-WOD distributes `wod_<dataset>_<year>.nc` (sorting per manual pp.44, 46; names from NCEI's
-listing). An accession's output adds the accession, `wod_ctd_2008_0062621.nc`, so it never
-claims to be WOD's own file for that year.
+WOD distributes `wod_<dataset>_<year>.nc` (manual pp.44, 46; names from NCEI's listing).
+Output adds the accession (`wod_ctd_2008_0062621.nc`) so it is never taken for WOD's own.
 """
 import hashlib
 import math
@@ -26,8 +25,7 @@ def wod_file_name(dataset_code: Optional[str], year: Optional[int],
 
 
 def is_wod_file_name(name: str, accession: Optional[str] = None) -> bool:
-    """Whether `name` is a file `wod_file_name` writes for this accession: the only names a
-    rerun may replace or remove."""
+    """Whether `wod_file_name` writes `name` for this accession (a rerun touches only these)."""
     tail = _accession_token(accession)
     pattern = (rf"wod_[a-z0-9]+_(?:\d{{4}}|{UNDATED})"
                + (rf"_{re.escape(tail)}" if tail else "") + r"\.nc")

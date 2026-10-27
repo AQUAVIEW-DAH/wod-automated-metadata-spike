@@ -2,8 +2,8 @@
   "table": "Appendix 11. Tables of acceptable measurement ranges of observed variables as a function of depth and basin",
   "source": "World Ocean Database 2023 User's Manual (knowledge/wod_readme.pdf)",
   "pages": "87-113",
-  "what_this_is": "The manual gives min/max per depth level PER OCEAN BASIN (30 basin columns spread over 3 pages per variable). Assigning a cast to a basin requires the range_area.msk and range_basin_list.msk files from the WOD website, which are NOT in the PDF. These values are therefore the UNION across all basins at each depth: min of all basin minima, max of all basin maxima.",
-  "consequence": "This envelope is depth-dependent (a large improvement over one global pair) but deliberately permissive, because marginal seas widen it. At 5500 m the salinity union spans 1.0-50.0 because the Baltic reaches 1.0 and the Red Sea reaches 50.0. A value inside this envelope is not necessarily inside its own basin's range.",
+  "what_this_is": "The manual gives min/max per depth level for each ocean basin (up to 30 basin columns per variable). Placing a cast in a basin needs the range_area.msk and range_basin_list.msk files from the WOD website, so these values are the union across basins: the lowest minimum and the highest maximum at each depth.",
+  "consequence": "Depth-dependent but permissive: marginal seas widen it (at 5500 m salinity spans 1.0-50.0, from the Baltic and the Red Sea). A value inside it may still be outside its own basin's range.",
   "lookup_rule": "A depth between two listed levels uses the nearest listed level; if equidistant, the shallower one (manual p.86). The deepest entry, 5500, covers all greater depths.",
   "variables": {
     "1": {

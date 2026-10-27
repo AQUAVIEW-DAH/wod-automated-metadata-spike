@@ -2,7 +2,6 @@
 
 One `casts` entry per haul (position, time, Biological Header as `b_<id>_<name>`, Table 6a)
 and one `taxa_obs` entry per Taxa-Record (`t_<id>_<name>`, Table 7a), contiguous by haul.
-Headers, notes, time and cast ids use the profile writer's helpers.
 """
 import os
 import re
@@ -21,8 +20,7 @@ from wod_etl.writers.generate_netcdf_ragged import (
 OBS_DIM = "taxa_obs"
 INT_FILL = np.int32(-2147483647)
 
-# Table 7a fields written as numbers (float), by id. Coded fields (5, 6, 7...) are written
-# separately as codes plus the originator's text.
+# Table 7a field ids written as floats, and those written as a code plus the originator's text.
 _NUMERIC_FIELDS = (2, 3, 4, 10, 11, 12, 13, 14, 15, 18, 19, 21, 22, 23, 25)
 _CODED_FIELDS = (5, 6, 7, 8, 9, 16, 17, 26)
 

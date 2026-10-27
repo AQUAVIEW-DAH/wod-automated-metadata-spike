@@ -1,7 +1,7 @@
 """Split a file containing several casts into individual casts.
 
-A header or comment line after data rows marks the start of the next cast. A file with a
-single leading header block yields one cast, so callers can run this unconditionally.
+A header or comment line after data rows starts the next cast. A single-cast file yields one
+cast, so callers can run this unconditionally.
 """
 import os
 import re

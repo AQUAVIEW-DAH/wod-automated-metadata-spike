@@ -1,10 +1,10 @@
 """Readers for self-identifying text formats that generic readers misread.
 
-- WOD's own CSV export: a block per cast of `Key,,value,unit` rows, then a `VARIABLES`
-  table with a WOD flag (F) and an originator flag (O) per variable.
-- XCTD and XBT `.dat` files with a one-line header and unlabelled columns:
-  `# XCTD YK17-10 20170516 1251 17-00.14N 143-29.97E 1001`, then depth, temperature
-  (and salinity) and a flag string per level.
+- WOD's own CSV export: per cast, `Key,,value,unit` rows, then a `VARIABLES` table with a WOD
+  flag (F) and an originator flag (O) per variable.
+- XCTD and XBT `.dat` files: a header line such as
+  `# XCTD <cruise> 20170516 1251 17-00.14N 143-29.97E 1001`, then unlabelled columns and a
+  flag string per level.
 - Tsurumi-Seiki XCTD exports.
 
 Each returns casts in `read_any`'s shape: `{"cast_id", "df", "header_block", "source_note"}`.
@@ -34,7 +34,7 @@ def _code(value: str) -> str:
 
 
 def _wod_name(short: str) -> str:
-    """A WOD CSV variable name, which is cut at ten characters ('Temperatur'), in full."""
+    """Expand a WOD CSV variable name cut at ten characters ('Temperatur')."""
     from wod_etl.reference import wod_variables
 
     short = short.strip()
@@ -176,10 +176,9 @@ def read_probe_dat(path, encoding: str = "utf-8") -> Tuple[List[Dict[str, Any]],
 
 
 # ------------------------------------------------------------ TSK XCTD export
-# Tsurumi-Seiki XCTD export: a 256-byte header record
-#   serial, material, YYYYMMDD, HHMMSS (UTC), DD-MM.MMMMN, DDD-MM.MMMMW, probe (CT1/CT4), n, step
-# then one record per level: depth, temperature, conductivity, salinity[, sound velocity,
-# density]. A cast may come twice: binned to 1 m and with every sample.
+# Tsurumi-Seiki XCTD export: a 256-byte header record (serial, material, YYYYMMDD, HHMMSS UTC,
+# DD-MM.MMMMN, DDD-MM.MMMMW, probe CT1/CT4, n, step), then one record per level: depth,
+# temperature, conductivity, salinity[, sound velocity, density]. A cast may come binned and raw.
 _TSK_HEADER = re.compile(
     r"^\s*(?P<serial>\d{5,9})\s*,\s*\d{1,6}\s*,\s*(?P<date>\d{8})\s*,\s*(?P<time>\d{6})\s*,"
     r"\s*(?P<lat>\d{1,2}-\d{1,2}\.\d+[NS])\s*,\s*(?P<lon>\d{1,3}-\d{1,2}\.\d+[EW])\s*,"

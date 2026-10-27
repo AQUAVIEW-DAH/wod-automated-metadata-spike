@@ -271,8 +271,6 @@ class TestSurfaceData:
 
 
 class TestTablesAcrossFiles:
-    """Flattened NetCDF, sparse units rows, station-list joins and combined tables."""
-
     def test_a_flattened_netcdf_is_a_cast_per_profile_and_upcasts_are_left_out(self, tmp_path):
         import netCDF4
 
@@ -385,8 +383,6 @@ class TestTablesAcrossFiles:
 
 
 class TestInstrumentFilesAndOutput:
-    """Sea-Bird exports, mooring metadata, originator flags and cast ids."""
-
     def test_a_sea_bird_ascii_export_has_a_header_row_and_an_upload_time(self, tmp_path):
         p = tmp_path / "017.cnv"
         p.write_text("* Sea-Bird SBE 9 Raw Data File:\n* NMEA Latitude = 37 59.49 NN\n"
@@ -563,3 +559,77 @@ class TestSplittingAndReadingEdgeCases:
         (cast,), _ = read(p)
         assert list(cast["df"].columns) == ["Depth (m)", "Temperature (C)", "Salinity",
                                             "Oxygen (umol/kg)"]
+
+
+class TestManualConventions:
+    def test_a_cast_recorded_deepest_first_is_reversed(self):
+        from wod_etl.orchestration.process_accession import _shallowest_first
+
+        df = pd.DataFrame({"Depth (m)": [30.0, 20.0, 10.0, 0.0], "Temperature (C)": [4, 5, 6, 7]})
+        out, note = _shallowest_first(df)
+        assert out["Depth (m)"].tolist() == [0.0, 10.0, 20.0, 30.0] and "p.52" in note
+        both_ways = pd.DataFrame({"Depth (m)": [0.0, 10, 20, 10, 0], "T": [1, 2, 3, 2, 1]})
+        assert _shallowest_first(both_ways)[1] is None
+
+    def test_a_height_axis_measured_upward_is_depth(self, tmp_path):
+        import netCDF4
+
+        p = tmp_path / "up.nc"
+        with netCDF4.Dataset(p, "w") as ds:
+            ds.createDimension("z", 5)
+            z = ds.createVariable("z", "f8", ("z",))
+            z.units, z.positive, z.standard_name = "m", "up", "height"
+            z[:] = -np.arange(1.0, 6.0)
+            t = ds.createVariable("TEMP", "f8", ("z",))
+            t.units, t[:] = "degree_Celsius", np.linspace(10, 5, 5)
+        (cast,), info = read(p)
+        assert cast["df"]["z (m)"].tolist() == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+    def test_a_longitude_beyond_180_is_brought_into_range(self):
+        coords = parse_header_block("Latitude: 41.5\nLongitude: 200.5\n")["coordinates"]
+        assert coords["longitude"] == -159.5
+
+    def test_an_xbt_probe_model_and_fall_rate(self, offline_code_lists):
+        from helpers import cache_code_list
+        from wod_etl.mapping.map_metadata import map_metadata
+
+        cache_code_list(offline_code_lists, "s_29_probe_type",
+                        "code_name,probe_type\nunit,OCL_code\n2,XBT\n4,CTD\n")
+        cache_code_list(offline_code_lists, "v_5_instrument",
+                        "code_name,Instrument\nunits,OCL code\n201,XBT: T7 (UNKNOWN BRAND)\n"
+                        "207,XBT: T7 (SIPPICAN)\n")
+        df = pd.DataFrame({"Depth (m)": [0.0, 1.0], "Temperature (deg C)": [20.0, 19.0]})
+        meta = map_metadata("Probe type: T-7\nFall rate equation: Hanawa et al. (1995)\n",
+                            list(df.columns), df)
+        assert meta["secondary_headers"]["29"]["value"] == "2"
+        assert meta["secondary_headers"]["33"]["value"] == 1
+        temp = meta["variable_specific_headers"]["Temperature (deg C)"]["headers"]
+        assert temp["5"]["value"] == "201"
+
+    def test_a_depth_unit_other_than_metres_is_secondary_header_95(self, offline_code_lists):
+        from helpers import cache_code_list
+        from wod_etl.mapping.map_metadata import map_metadata
+
+        cache_code_list(offline_code_lists, "s_95_depth_unit",
+                        "code_name,Depth unit\nunits,NODC code\n083,foot\n086,fathom\n")
+        df = pd.DataFrame({"Depth (ft)": [0.0, 10.0], "Temperature (deg C)": [20.0, 19.0]})
+        meta = map_metadata("", list(df.columns), df)
+        assert meta["secondary_headers"]["95"]["value"] == "083"
+        assert "8" not in meta["variable_specific_headers"]["Depth (ft)"]["headers"]
+
+    @pytest.mark.parametrize("calendar, days, date", [
+        ("proleptic_gregorian", 8582.25, "2023-07-01"), ("noleap", 365 * 23 + 180.5, "2023-06-30")])
+    def test_netcdf_calendars(self, tmp_path, calendar, days, date):
+        import netCDF4
+
+        p = tmp_path / "cal.nc"
+        with netCDF4.Dataset(p, "w") as ds:
+            ds.createDimension("depth", 3)
+            d = ds.createVariable("depth", "f8", ("depth",))
+            d.units, d[:] = "m", [0.0, 1.0, 2.0]
+            ds.createVariable("temperature", "f8", ("depth",))[:] = [5.0, 4.9, 4.8]
+            t = ds.createVariable("time", "f8")
+            t.units, t.calendar = "days since 2000-01-01", calendar
+            t[...] = days
+        (cast,), _ = read(p)
+        assert f"Date: {date}" in cast["header_block"]

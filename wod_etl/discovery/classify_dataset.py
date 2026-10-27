@@ -1,8 +1,7 @@
 """Decide which WOD dataset a file belongs to, or that it is not WOD profile data.
 
-Returns a ranked verdict with its evidence (path, header, columns, depth spacing). An
-`exclusion` means the file cannot become a profile; `dataset_type: None` means nothing
-identifies the instrument and `candidates` lists the options.
+Returns a ranked verdict with evidence. An `exclusion` means the file cannot become a profile;
+`dataset_type: None` means nothing identifies the instrument and `candidates` lists the options.
 """
 import logging
 import math
@@ -86,8 +85,7 @@ INSTRUMENT_SIGNALS: Dict[str, List[tuple]] = {
 }
 
 # Content that cannot become a WOD profile. `route` says where it belongs, if anywhere;
-# `harvest` says what metadata to take from it first. Matched against the path and column
-# names, never prose alone. Every category is scored and the strongest wins.
+# `harvest` says what metadata to take from it first.
 EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
     "plankton biomass or taxonomy": {
         "signals": [
@@ -107,7 +105,7 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
                  "anything else is staged with wod_etl.staging.write_staged_haul and written "
                  "with wod_etl.orchestration.process_taxa. See "
                  "knowledge/plankton_biomass.md.",
-        "harvest": "Capture the Table 6a collection metadata while the accession is open -- "
+        "harvest": "Capture the Table 6a collection metadata while the accession is open: "
                    "gear and tow type, mesh size, water volume filtered or tow distance, "
                    "preservative, counting and weighing method. Only the submitter has it, "
                    "and the plankton writer records what is missing.",
@@ -128,7 +126,7 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
         "route": "Not in WOD Table 3a, and not plankton: fish catch has no route into WOD. "
                  "It belongs with a fisheries archive.",
         "harvest": "Haul position, depth and time only, and only if they identify a cast. A "
-                   "trawl table often re-states station positions -- use it to cross-check "
+                   "trawl table often re-states station positions; use it to cross-check "
                    "the station list (wod_etl.staging.reconcile_stations).",
         "belongs_in_wod": False,
         "label": "fish catch",
@@ -144,11 +142,11 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
         ],
         "route": "Not in WOD Table 3a. WOD stores no velocity variable; there is no code to "
                  "map it to.",
-        "harvest": "The VELOCITIES are dropped; the rest of the file often is not. Bottom depth "
-                   "(from bottom-tracking) is secondary header 10, and the navigation -- "
-                   "position and time along the track -- can supply or verify coordinates for "
-                   "casts taken on the same station. Harvest those into the profiles they "
-                   "align with, and cite the file you took them from.",
+        "harvest": "The velocities are dropped; the rest of the file often is not. Bottom depth "
+                   "(from bottom-tracking) is secondary header 10, and the navigation "
+                   "(position and time along the track) can supply or verify coordinates for "
+                   "casts taken on the same station. Use them in the profiles they match, and "
+                   "record which file they came from.",
         "belongs_in_wod": False,
         "label": "current velocity (ADCP)",
         "why": "WOD stores no current velocity: Table 3a has no variable code for it",
@@ -168,9 +166,9 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
                      r"\bsingle[\s_-]?beam\b", 6, "seafloor depth survey")],
         "route": "Bottom depth is secondary header 10 on a cast, not a measured profile of "
                  "its own.",
-        "harvest": "This is the clearest harvest case: a sounding at a cast's position IS that "
-                   "cast's secondary header 10. Match on position and take it, rather than "
-                   "leaving bottom depth empty. Record which file the value came from.",
+        "harvest": "A sounding at a cast's position is that cast's bottom depth (secondary "
+                   "header 10). Match on position and take it rather than leaving bottom depth "
+                   "empty. Record which file the value came from.",
         "belongs_in_wod": False,
         "label": "bathymetry / seafloor depth",
         "why": "not a water-column profile: WOD keeps bottom depth only as a cast's header "
@@ -180,7 +178,7 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
         "signals": [(r"\bpah\b|\bpcb\b|\bmicroplastic|trace\s+metal|\bcontaminant", 6,
                      "contaminant chemistry")],
         "route": "Not in WOD Table 3a.",
-        "harvest": "Sample station, bottle depth and time, where they identify a cast that IS "
+        "harvest": "Sample station, bottle depth and time, where they identify a cast that is "
                    "being written.",
         "belongs_in_wod": False,
         "label": "contaminant chemistry",
@@ -205,14 +203,15 @@ STAGED_HAUL_MARKER = "Record type: WOD taxa-records"
 
 # Evidence both biological categories share: it counts toward each, so alone decides nothing.
 SHARED_BIOLOGICAL_SIGNAL = (r"\bspecies\b|\btaxa\b|\btaxon\b|\bgenus\b|\bfamily\b",
-                            1, "a taxonomic column -- plankton and fish catch both carry one")
+                            1, "a taxonomic column, which plankton and fish catch both carry")
 _SHARED_BY = ("plankton biomass or taxonomy", "fisheries catch data")
 
 AMBIGUOUS_BIOLOGICAL = {
     "reason": "biological sample: plankton or fish catch (ambiguous)",
-    "route": "Read the readme before deciding. Plankton belongs in WOD through Tables 6a/7a "
-             "(wod_etl.orchestration.process_taxa); fish catch does not belong in WOD at all. Nothing in the "
-             "path or columns separates them -- a 'Species' column is in both.",
+    "route": "Plankton belongs in WOD through Tables 6a/7a "
+             "(wod_etl.orchestration.process_taxa); fish catch does not belong in WOD at all. "
+             "Nothing in the path or columns separates them (both have a 'Species' column); "
+             "the readme may.",
     "harvest": "If it is plankton, capture the Table 6a collection metadata (gear, tow, mesh, "
                "volume filtered, preservative, counting method). If it is catch, haul "
                "positions may cross-check the station list.",
@@ -240,8 +239,7 @@ SIDECAR = {
 # of a mooring's instruments (manual p.17), so such a file is one level of many profiles.
 # Decided by the file's shape, not its words.
 MOORED_SERIES = "moored instrument time series"
-# Exclusion for a mooring file the mooring recipe cannot stage: no MRB variable, or several
-# depths.
+# Exclusion for a mooring file the recipe cannot stage (no MRB variable, or several depths).
 MOORED = {
     "route": "Belongs in WOD as MRB (moored buoy), where a profile is the concurrent "
              "readings of a mooring's instruments at their depths at one time (manual p.17), "
@@ -263,9 +261,6 @@ UNDERWAY = {
 MIN_SERIES_DAYS = 1.0             # a CTD cast recorded against time spans minutes
 MAX_POSITION_SPREAD_DEG = 0.01    # more than this along time and the platform moves
 
-# Columns WOD has no code for are decided by `explain_column` in
-# wod_etl/mapping/query_wod_spec.py; `_unstorable_columns` delegates to it.
-
 CONFIDENCE_THRESHOLDS = ((8, "high"), (4, "medium"), (1, "low"))
 
 # What a column set alone can say when nothing names an instrument.
@@ -285,9 +280,8 @@ def classify_dataset(
 ) -> Dict[str, Any]:
     """Identify a file's WOD dataset from whatever evidence it carries.
 
-    Every argument is optional. `path` should be relative to the accession root, since a
-    folder name ("2-CTD/") is often the only label. `instrument` is what a self-describing
-    file says recorded it (e.g. `instrumentType: adcp`) and weighs like the path.
+    `path` is relative to the accession root, as a folder name ("2-CTD/") is often the only label.
+    `instrument` is what a self-describing file says recorded it; it weighs like the path.
     """
     columns = [english_terms(str(c)) for c in (columns or [])]
     haystacks = {
@@ -354,10 +348,9 @@ def classify_dataset(
         result["note"] = long_format["action"]
     elif confidence == "none":
         result["note"] = (
-            "Nothing in the path, header or columns names an instrument. Do NOT default "
-            "silently: read the folder's readme, then pass dataset_type explicitly. If the "
-            "file is bottle-like (coarse levels, chemistry columns) OSD is the usual "
-            "answer, but say that you assumed it.")
+            "Nothing in the path, header or columns names an instrument: give the dataset "
+            "explicitly (the folder's readme may name it). A bottle-like file (coarse "
+            "levels, chemistry columns) is usually OSD.")
     elif best in ("CTD", "XCTD") and depth_increment_m is None:
         result["note"] = (
             "CTD and XCTD route to CTD or OSD by the cast's depth increment, not by "
@@ -375,7 +368,7 @@ NCEI_BUNDLE_FILES = [
     (r"^\d{5,7}\.md5$", "NCEI checksums", "NCEI checksums"),
     (r"^\d{5,7}_lonlat\.txt$", "NCEI position summary",
      "NCEI's position summary for the accession (often just a bounding box; NCEI may have "
-     "corrected positions in it). Not data, and not a source of cast positions -- at most a "
+     "corrected positions in it). Not data, and not a source of cast positions: at most a "
      "cross-check that every staged cast falls inside it"),
     (r"-ISO-19115-2\.xml$|^\d{5,7}\.\d+\.\d+\.xml$", "ISO 19115 metadata",
      "ISO 19115 metadata record: read it for variables, units, instruments and coverage"),
@@ -385,7 +378,7 @@ NCEI_BUNDLE_FILES = [
      "NCEI's map of the accession's sample locations"),
     (r"confirmation_email\.txt$|^\d*-?email\.txt$", "correspondence with the submitter",
      "correspondence with the submitter: read it for anything the data files do not say"),
-    # Send2NCEI names a submission with six capitals and digits: `H1CMAX-report.txt`.
+    # Send2NCEI names a submission with six capitals and digits.
     (r"(?-i:^[A-Z0-9]{6}-report\.txt$)", "NCEI submission report",
      "NCEI submission report: the submitter's contacts and the metadata they entered"),
 ]
@@ -406,19 +399,11 @@ def ncei_bundle_role(name: str) -> Optional[str]:
 def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Dict[str, Any]:
     """Triage one local file from its head: format, verdict, columns, and an `action`.
 
-    `action` is one of:
-
-    | action     | means                                                               |
-    | ---        | ---                                                                 |
-    | `process`  | profile data with a dataset type -- give it to `process_accession`  |
-    | `stage`    | profile data in a shape that must be reshaped first (long format)   |
-    | `sidecar`  | a station list -- join it INTO the casts it locates                 |
-    | `exclude`  | cannot become a profile; `exclusion` says why and where it belongs  |
-    | `document` | documentation, metadata or an NCEI bundle file -- read, not processed |
-    | `inspect`  | the evidence did not decide; read the readme and say what it is     |
-
-    `rel` is the path relative to the accession root, used as classification evidence;
-    it defaults to the file name.
+    `action` is `process` (profile data with a dataset type), `stage` (profile data to reshape or
+    combine first), `sidecar` (a station list for the casts it locates), `exclude` (cannot become
+    a profile; see `exclusion`), `document` (documentation, metadata or an NCEI bundle file) or
+    `inspect` (the evidence did not decide). `rel` is the path relative to the accession root,
+    used as evidence; it defaults to the file name.
     """
     from wod_etl.discovery.sniff_format import sniff_format
 
@@ -482,8 +467,7 @@ def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Di
                        "pressure": bool(info.get("pressure")), "depth": info.get("depth"),
                        "depth_source": info.get("depth_source"),
                        "latitude": info.get("latitude"), "longitude": info.get("longitude"),
-                       # Used to find the deployment and the depths of instruments that
-                       # record no pressure.
+                       # For the deployment, and the depth of instruments without pressure.
                        "wet": water.get("window"), "usual_pressure": water.get("pressure"),
                        "record": info.get("record")}
             verdict = {**verdict, "dataset_type": "MRB", "is_wod_profile_data": True,
@@ -550,7 +534,7 @@ def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Di
         action, reason = "inspect", ("readable, but nothing names an instrument"
                                      + ("" if _has_depth_axis(columns) else
                                         " and there is no depth axis")
-                                     + ". Read the readme, then say what it is.")
+                                     + ". The readme may say what it is.")
 
     entry = {
         "path": rel, "format": fmt["format_family"], "reader": fmt["reader"],
@@ -586,8 +570,8 @@ def classify_file(path, rel: Optional[str] = None, peek_bytes: int = 8192) -> Di
         entry.update(unlocated=entry["why"], include=False,
                      why=f"{entry['why']}; nothing in it gives a position (no latitude and "
                          f"longitude column or header line): join one in with a staging script")
-    # Depthless samples are written at 0 m only as single surface samples (see
-    # process_accession._at_the_surface): one row per sample, named as underway or surface.
+    # Depthless samples are written at 0 m only as single surface samples: one row per sample,
+    # named as underway or surface.
     if action == "process" and entry["include"] and entry.get("dataset") == "OSD" \
             and columns and not _has_depth_axis(columns) \
             and not (SURFACE_WORDS.search(f"{rel}\n{head[:4000]}")
@@ -615,8 +599,7 @@ _SV_PROBE = re.compile(r"\bsvp?\s?&\s?t\b|\bsound[\s_-]?(?:velocity|speed)[\s_-]
 
 
 def _summary(entry, verdict, exclusion, fmt, bundle, instrument: str = "") -> Dict[str, Any]:
-    """What the file holds, whether it goes into WOD, and why -- a line each, for the person
-    who reviews the decisions. `reason` keeps the long form for the log."""
+    """One-line `data`, `include` and `why` for review; `reason` keeps the long form for the log."""
     action, columns = entry["action"], entry["columns"] or []
     out = {"include": action in ("process", "stage"), "dataset": None}
     if action == "document":
@@ -651,8 +634,8 @@ def _summary(entry, verdict, exclusion, fmt, bundle, instrument: str = "") -> Di
             notes.append(f"not written: {_and(sorted(unstorable))} (no WOD code)")
         notes += [f"its {c['copy'].lower()} is computed from {c['of']} by a probe with no "
                   f"conductivity cell: left out (drop)" if c.get("computed") else
-                  f"its {c['copy'].lower()} equals its {c['of'].lower()} at every level -- "
-                  f"a copy, not a measurement: left out (drop)" for c in copies]
+                  f"its {c['copy'].lower()} equals its {c['of'].lower()} at every level "
+                  f"(a copy, not a measurement): left out (drop)" for c in copies]
         return {**out, "dataset": dataset, "include": bool(stored),
                 "drop": sorted(c.lower() for c in copied) or None,
                 "data": f"{dataset} profiles: " + (", ".join(n.lower() for n in stored)
@@ -660,7 +643,7 @@ def _summary(entry, verdict, exclusion, fmt, bundle, instrument: str = "") -> Di
                 "why": (f"{verdict['dataset_type']} by {' and '.join(sources)}"
                         if sources else str(verdict["dataset_type"]))
                        + "".join(f"; {n}" for n in notes)
-                       + (" -- a weak guess: check the dataset"
+                       + ("; a weak guess: check the dataset"
                           if verdict.get("confidence") == "low" else "")}
     if action == "stage" and entry.get("mooring"):
         m = entry["mooring"]
@@ -704,10 +687,9 @@ MOORING_WHY = ("a mooring's instrument: with its others it makes WOD MRB profile
 def _place_moorings(base: Path, files: List[Dict[str, Any]]) -> None:
     """Place and propose a mooring's instruments together, since each depends on the others.
 
-    The deployment comes from the instruments' pressure; one without pressure is placed by its
-    file, file name, or the mooring's description. Each `mooring` gets `group`, `deployed`,
-    `deployment`, `depth`, `placed_by` and `depth_note`; one that cannot be placed is
-    proposed left out, with `why` saying what is missing.
+    The deployment comes from the instruments' pressure; one without pressure is placed by its file,
+    file name or the mooring's description. Each `mooring` gets `group`, `deployed`, `deployment`,
+    `depth`, `placed_by` and `depth_note`; one that cannot be placed is proposed left out.
     """
     from wod_etl.staging.mooring_layout import depth_from_name, find_layout, place_instruments
     from wod_etl.staging.moorings import deployment, group_moorings
@@ -795,17 +777,17 @@ def _place_moorings(base: Path, files: List[Dict[str, Any]]) -> None:
                     "a mooring's instrument, but its depth is not known: it records no "
                     "pressure, and its file states none"
                     + (f"; {unplaced[m['path']]}" if m["path"] in unplaced else
-                       " -- and no description in the accession lists its serial number")))
+                       "; no description in the accession lists its serial number")))
             else:
                 m["why"] = MOORING_WHY + ({
                     "pressure": "; placed by the pressure it records",
                     "file": "; at the depth its file states",
                     "name": "; at the depth its file name states",
-                }.get(source) or (f"; at the depth {info.get('description')} gives it -- "
+                }.get(source) or (f"; at the depth {info.get('description')} gives it: "
                                   f"stated, or its place on the line fixed by the pressure of "
                                   f"an instrument on it (each listed above the entry)")) + (
                     "; no instrument on its mooring records pressure, so the first and last "
-                    "day of the record -- when it may have been on deck -- are left out"
+                    "day of the record (when it may have been on deck) are left out"
                     if found["how"] == "record" else "")
 
 
@@ -815,8 +797,7 @@ _KEY_IS_DEPTH = re.compile(r"^(depth|dep|z|pres|press|pressure|prdm|depsm)", re.
 def _locate_long_format(base: Path, files: List[Dict[str, Any]]) -> None:
     """Locate long-format files by the station list beside them (`long_format["station_list"]`).
 
-    Of several lists, the one naming most of their casts is used; with none, the files are
-    proposed left out.
+    Of several lists, the one naming most of their casts wins; with none, they are proposed out.
     """
     from wod_etl.staging import normalise_station, read_station_list, read_table
 
@@ -870,9 +851,8 @@ def _locate_long_format(base: Path, files: List[Dict[str, Any]]) -> None:
 def _locate_by_station_list(base: Path, files: List[Dict[str, Any]]) -> None:
     """Locate casts that give no position by a station list in their folder or one above.
 
-    - `per_file`: the list names each cast's file (e.g. 'C145-001' for C145-001.asc) or station;
-    - `by_station`: one table of many casts whose station column matches the list's stations.
-    Located files are staged with the list's position and date; the rest stay out.
+    The list names each cast's file stem or station (`per_file`), or the stations of one table
+    of many casts (`by_station`). Located files are staged; the rest stay out.
     """
     from wod_etl.discovery import read_any, sniff_format
     from wod_etl.staging import normalise_station, read_station_list
@@ -895,8 +875,7 @@ def _locate_by_station_list(base: Path, files: List[Dict[str, Any]]) -> None:
                      for c in columns}
 
     def nearest(path):
-        """Station lists in the file's folder or above it, the closest first; csv before a
-        workbook copy of it."""
+        """Station lists in or above a file's folder, closest first, csv before a workbook copy."""
         folder = parent(path)
         near = [sl for sl in keyed if folder == parent(sl) or not parent(sl)
                 or folder.startswith(parent(sl) + "/")]
@@ -919,7 +898,7 @@ def _locate_by_station_list(base: Path, files: List[Dict[str, Any]]) -> None:
                 casts, _ = read_any(str(base / f["path"]), sniff_format(str(base / f["path"])))
                 values = {normalise_station(v) for c in casts for v in c["df"].get(
                     station_col, [])} - {""}
-            except Exception:                           # noqa: BLE001 - stays out, as it was
+            except Exception:                           # noqa: BLE001 - the file stays out
                 values = set()
             for sl in nearest(f["path"]):
                 col = next((c for c, keys in keyed[sl].items() if _STATION_COLUMN.search(c)
@@ -979,6 +958,35 @@ def _combine_split_tables(base: Path, files: List[Dict[str, Any]]) -> None:
                          f"merged by depth")
 
 
+def _combine_tracks(base: Path, files: List[Dict[str, Any]]) -> None:
+    """Tracks logged on one clock are one SUR cast, staged and merged on time (manual pp.16, 37)."""
+    from wod_etl.staging.tracks import joining, read_track, same_clock_groups
+
+    candidates = {f["path"]: f for f in files
+                  if f["action"] == "process" and f.get("include") and f.get("dataset") == "SUR"
+                  and f["reader"] in ("delimited", "spreadsheet")}
+    if len(candidates) < 2:
+        return
+    tracks = {}
+    for path in candidates:
+        try:
+            t = read_track(base / path)
+        except Exception:                               # noqa: BLE001 - left as it is
+            t = None
+        if t is not None:
+            tracks[path] = t
+    groups = same_clock_groups(tracks)
+    together = [p for g in groups if len(g) > 1 for p in g] + joining(tracks, groups)
+    if not any(len(g) > 1 for g in groups):
+        return
+    for p in together:
+        f = candidates[p]
+        others = _and(q.rsplit("/", 1)[-1] for q in together if q != p)
+        f.update(action="stage", combine_tracks={"files": sorted(together)},
+                 why=f"{f['why']}; logged on one clock with {others}: one SUR cast per "
+                     f"stream, merged on time")
+
+
 def _pair_resolutions(files: List[Dict[str, Any]]) -> None:
     """A cast exported binned (`X001`) and at every sample (`X001all`) is written once, binned."""
     by_path = {f["path"].lower(): f for f in files if f["action"] == "process"}
@@ -995,9 +1003,8 @@ PLANKTON = "plankton biomass or taxonomy"
 
 
 def _derive_taxa(base: Path, files: List[Dict[str, Any]]) -> None:
-    """Stage plankton tables as OSD Taxa-Records when their layout is understood and their
-    hauls can be located (by a nearby station list, or by their own position columns).
-    Otherwise propose them out, with the reason."""
+    """Stage plankton tables as OSD Taxa-Records when their layout is understood and their hauls
+    can be located by a station list or their own positions; otherwise propose them out."""
     from wod_etl.staging import is_staged_haul, read_station_list
     from wod_etl.staging.taxa_haul import taxa_record_field
     from wod_etl.staging.taxa_layout import BIOMASS, FIELD_UNITS, describe_taxa_table
@@ -1080,8 +1087,7 @@ _EVIDENCE_FIELDS = {"path": "its path", "instrument": "its instrument attribute"
 
 
 def _evidence_source(evidence: str) -> str:
-    """'path matches 'CTD': names CTD' -> "its path ('CTD')". Shape evidence is a sentence
-    already ('depth increment 1.00 m is high-resolution') and is kept as it is."""
+    """Shorten evidence for `why`: 'path matches 'CTD': names CTD' -> "its path ('CTD')"."""
     m = _EVIDENCE.match(evidence)
     if m:
         return f"{_EVIDENCE_FIELDS.get(m.group(1), m.group(1))} ('{m.group(3)}')"
@@ -1097,8 +1103,8 @@ def _and(words) -> str:
 
 
 def _variable_names(columns, dataset: Optional[str] = None) -> List[str]:
-    """The Table 3a names of the measurements among `columns`, in order, once each -- only
-    those Table 3a stores in `dataset`, when one is given."""
+    """Table 3a names of the measurements in `columns`, in order and once each; with `dataset`,
+    only those it stores."""
     try:
         from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE, match_variable
         from wod_etl.reference import wod_variables
@@ -1143,9 +1149,8 @@ def classify_accession(root: str, max_files: Optional[int] = None,
                        accession: Optional[str] = None) -> Dict[str, Any]:
     """Classify every file under an accession root: a verdict per file, grouped by folder.
 
-    Reads only each file's head. Act on the per-file verdicts (`files` and the
-    `<action>_files` lists); folder verdicts are a summary. Logged to the accession's run log
-    (`accession`, or worked out from `root`).
+    Reads only each file's head. Per-file verdicts (`files`, `<action>_files`) decide; folder
+    verdicts summarise them. Logged to the accession's run log (`accession`, or from `root`).
     """
     with runlog.accession_log_for(root, accession, actor="library",
                                   arguments={"call": "classify_accession", "root": str(root)}):
@@ -1210,6 +1215,7 @@ def _classify_accession(root, max_files, peek_bytes) -> Dict[str, Any]:
     _locate_by_station_list(base, files)
     _derive_taxa(base, files)
     _combine_split_tables(base, files)
+    _combine_tracks(base, files)
     _pair_resolutions(files)
     shapes = {f: e["cross_file_shape"] for f, e in folders.items() if e["cross_file_shape"]}
     by_action = {a: [f["path"] for f in files if f["action"] == a] for a in FILE_ACTIONS}
@@ -1225,14 +1231,12 @@ def _classify_accession(root, max_files, peek_bytes) -> Dict[str, Any]:
         "exclude": [f for f, e in folders.items() if e["verdict"]["action"] == "exclude"],
         "inspect": [f for f, e in folders.items() if e["verdict"]["action"] == "inspect"],
         "stage": [f for f, e in folders.items() if e["verdict"]["action"] == "stage"],
-        "note": "Act on the per-file verdicts (`files`, `<action>_files`); the folder "
-                "verdicts summarise them. Read each folder's readme before acting -- "
-                "'inspect' means the evidence did not decide.",
-        "shape_note": ("cross_file_shapes flags folders whose files look like PARTS of one "
+        "note": "The per-file verdicts (`files`, `<action>_files`) decide; the folder "
+                "verdicts summarise them. 'inspect' means the evidence did not decide.",
+        "shape_note": ("cross_file_shapes flags folders whose files look like parts of one "
                        "cast rather than one cast each, or tables that must be pivoted. "
-                       "Processed as they stand, those produce a pile of single-level "
-                       "profiles, a set of half-empty ones, or nothing at all. Reshape "
-                       "during staging first."
+                       "Processed as they stand, those give single-level profiles, "
+                       "half-empty ones, or nothing at all: reshape them during staging."
                        if shapes else None),
     }
 
@@ -1293,9 +1297,8 @@ def _score_exclusions(haystacks) -> Dict[str, Dict[str, Any]]:
 def _find_exclusion(haystacks, columns):
     """(exclusion or None, prose flags).
 
-    An exclusion needs evidence about the file itself (path or columns); a match in prose is
-    only flagged. A column match excludes only a file with no other mappable measurement. A
-    tie between the two biological categories is reported as ambiguous.
+    An exclusion needs evidence about the file itself (path or columns); a match in prose is only
+    flagged. A tie between the two biological categories is reported as ambiguous.
     """
     profile_columns = _mappable_columns(columns)
     prose_flags: List[str] = []
@@ -1308,9 +1311,9 @@ def _find_exclusion(haystacks, columns):
             eligible[reason] = e
         elif e["columns"]:
             prose_flags.append(
-                f"{e['evidence'][0]} -- but the file also carries mappable profile columns "
+                f"{e['evidence'][0]}, but the file also carries mappable profile columns "
                 f"({', '.join(profile_columns[:4])}), so it is processed as a profile "
-                f"and the {reason} columns are dropped. Report both.")
+                f"and the {reason} columns are dropped")
 
     for field in ("header", "context"):
         text = haystacks[field][0]
@@ -1320,7 +1323,7 @@ def _find_exclusion(haystacks, columns):
                 if m:
                     prose_flags.append(
                         f"{field} matches {m.group(0)!r}: {reason} (mentioned in {field} "
-                        f"text only, not evidence about this file's own content -- check it "
+                        f"text only, not evidence about this file's own content; check it "
                         f"during triage)")
                     break
 
@@ -1379,8 +1382,7 @@ _LAT_COLUMN = re.compile(r"^lat(?:itude)?\b|latitude", re.I)
 _LON_COLUMN = re.compile(r"^lon(?:g(?:itude)?)?\b|longitude", re.I)
 
 
-# A list naming each cast's file ('File name': C145-001) is an index of casts, even when it
-# also gives a measurement per station.
+# A list naming each cast's file is an index of casts, even with a measurement per station.
 _FILE_COLUMN = re.compile(r"^(?:file[\s_-]*(?:name)?|filename|data[\s_-]*file)$", re.I)
 
 
@@ -1428,10 +1430,7 @@ def _long_format(columns) -> Optional[Dict[str, Any]]:
 
 
 def _unstorable_columns(columns) -> List[Dict[str, str]]:
-    """Columns WOD has no Table 3a code for, with the reason and what to do instead.
-
-    Delegates to `explain_column`, the registry `match_variable` uses to refuse a match.
-    """
+    """Columns WOD has no Table 3a code for, with the reason and what to do instead."""
     try:
         from wod_etl.mapping.query_wod_spec import explain_column
     except ImportError:
@@ -1542,11 +1541,10 @@ def _confidence(score: float) -> str:
 
 _TIME_UNITS = re.compile(r"^\s*(second|minute|hour|day)s?\s+since\b", re.I)
 _DAYS_PER = {"second": 1 / 86400, "minute": 1 / 1440, "hour": 1 / 24, "day": 1.0}
-# degree_north, degrees_east, degree_W -- not plain "degrees", which is a heading or a roll.
+# degree_north, degrees_east, degree_W; not plain "degrees", which is a heading or a roll.
 _POSITION_UNITS = re.compile(r"^degrees?_?(?:north|east|west|south)$|^degrees?_[nesw]$", re.I)
 _PLATFORM_ATTRS = ("MOORING", "platform_code", "platform_name", "platform", "station_name")
-# Attributes that name what recorded the file: EPIC's INST_TYPE, ACDD's instrument, the
-# instrumentType and instrumentSubtype an ADCP export writes, RBR's model.
+# Attributes naming what recorded the file (EPIC INST_TYPE, ACDD instrument, RBR model).
 _INSTRUMENT_ATTR = re.compile(r"^(?:inst_type|instrument(?:_?(?:sub)?type|_?model|_?name)?|"
                               r"make_model|model|sensor(?:_?(?:type|model))?)$", re.I)
 # Points sampled to see a record's span and whether its position moves.
@@ -1666,8 +1664,7 @@ def _nc_column(name: str, v) -> str:
 
 
 def _instrument(path) -> Dict[str, Any]:
-    """What a mooring recipe would read from one instrument's file (its variables, depth,
-    pressure, position) -- or its error."""
+    """What a mooring recipe reads from one instrument's file, or its error."""
     from wod_etl.staging.moorings import read_instrument
 
     return read_instrument(path)
@@ -1676,8 +1673,7 @@ def _instrument(path) -> Dict[str, Any]:
 def _time_series(ds, variables, np) -> Optional[Dict[str, Any]]:
     """Summarise a single-instrument time series spanning a day or more, else None.
 
-    Returns {"samples", "days", "moving"}; `moving` means a record along a track rather than
-    on a mooring.
+    Returns {"samples", "days", "moving"}; `moving` means along a track, not on a mooring.
     """
     time_name = next((n for n, v in variables.items() if len(v.dimensions) == 1
                       and _TIME_UNITS.match(str(getattr(v, "units", "")))), None)
@@ -1740,10 +1736,7 @@ _OWN_READERS = ("wod_csv", "probe_dat", "tsk_xctd", "spreadsheet")
 
 
 def _columns_from_head(head: str, fmt) -> List[str]:
-    """Best-effort column names from a file's first bytes, for triage only.
-
-    Rows of only delimiters (`,,,,,,`) are skipped, and quoted fields are split as csv does.
-    """
+    """Best-effort column names from a file's first bytes, for triage only."""
     import csv
 
     if fmt.get("reader") not in ("delimited", "fixed_width", "sea_bird_cnv"):
@@ -1778,7 +1771,7 @@ def _columns_from_head(head: str, fmt) -> List[str]:
 
 
 def _header_above_data(head: str) -> List[str]:
-    """A whitespace table's column names: the line just above its first two data rows."""
+    """A whitespace table's column names: the line above its first two data rows."""
     lines = [l.strip() for l in head.splitlines() if l.strip()]
     for i in range(1, len(lines) - 1):
         if _numeric_row(lines[i]) and _numeric_row(lines[i + 1]):
@@ -1823,7 +1816,7 @@ def _text_depth_increment(head: str, columns) -> Optional[float]:
 
 
 def _sample_column_values(head: str, fmt, columns, column: str, limit: int = 12) -> List[str]:
-    """Distinct values of one column in the sampled rows -- a long table's variable names."""
+    """Distinct values of one column in the sampled rows (a long table's variable names)."""
     import csv
 
     if column not in (columns or []) or not fmt.get("delimiter") or len(fmt["delimiter"]) != 1:
@@ -1860,9 +1853,8 @@ _NON_MEASUREMENT = re.compile(
     r"yearday|flag|qc|quality)\b", re.I)
 
 
-# Folder shapes that break one-cast-per-file, visible only across files:
-#   * one file per depth    -- identical columns, one or two rows each;
-#   * one file per variable -- disjoint measurement columns sharing a depth column.
+# Folder shapes that break one-cast-per-file, visible only across files: one file per depth
+# (identical columns, one or two rows each) or per variable (disjoint columns sharing a key).
 MIN_FILES_FOR_SHAPE_CHECK = 3
 MAX_ROWS_FOR_ONE_LEVEL_PER_FILE = 2
 
@@ -1892,9 +1884,9 @@ def _cross_file_shape(entry) -> Optional[Dict[str, Any]]:
                         f"{lf['variable_column']!r} column and hold it in "
                         f"{lf['value_column']!r}"
                         + (f"; each file holds a different variable" if per_variable else ""),
-            "action": "Pivot with wod_etl.staging.pivot_long -- pass every file together "
-                      "as a list of tables, with key_aliases for any key column spelt "
-                      "differently between them -- then split the result per cast with "
+            "action": "Pivot with wod_etl.staging.pivot_long, passing every file together "
+                      "as a list of tables (with key_aliases for any key column spelt "
+                      "differently between them), then split the result per cast with "
                       "group_rows, join positions with join_station_list, and stage each "
                       "cast. Check info['conflicts'] and info['levels_missing_variable'].",
         }
@@ -1913,9 +1905,9 @@ def _cross_file_shape(entry) -> Optional[Dict[str, Any]]:
             "evidence": f"{len(readable)} files share identical columns "
                         f"{list(column_sets[0])[:5]} and hold "
                         f"{MAX_ROWS_FOR_ONE_LEVEL_PER_FILE} rows or fewer each",
-            "action": "These are levels of ONE cast, not separate casts. Combine with "
-                      "wod_etl.staging.combine_levels, sort by depth, then stage one file. "
-                      "Left alone the output is a pile of single-level profiles.",
+            "action": "These are levels of one cast, not separate casts. Combine them with "
+                      "wod_etl.staging.combine_levels, sort by depth, then stage one file; "
+                      "otherwise each becomes a single-level profile.",
         }
 
     # One file per variable: each file has its own measurement column but they share a key.
@@ -1935,11 +1927,11 @@ def _cross_file_shape(entry) -> Optional[Dict[str, Any]]:
             "join_key": key,
             "evidence": f"{len(readable)} files share only {sorted(shared)[:4]} and each "
                         f"carries a different measurement column",
-            "action": f"These may be variables of ONE cast. Join with "
-                      f"wod_etl.staging.combine_on_key(key={key!r}) and CHECK "
-                      f"info['per_table'] -- a near-zero key overlap means they do not "
-                      f"actually share a key and the join is meaningless, which looks like "
-                      f"success. Confirm against the folder readme before joining.",
+            "action": f"These may be variables of one cast. Join them with "
+                      f"wod_etl.staging.combine_on_key(key={key!r}) and check "
+                      f"info['per_table']: a near-zero key overlap means they share no key "
+                      f"and the join, though it runs, is meaningless. Confirm against the "
+                      f"folder readme before joining.",
         }
     return None
 
@@ -2001,7 +1993,7 @@ def _column_density(head: str, fmt, columns) -> Optional[Dict[str, Any]]:
 
 
 def _folder_verdict(folder: str, entry) -> Dict[str, Any]:
-    """process / exclude / inspect, with the reason to report."""
+    """process / stage / exclude / inspect, with the reason."""
     types = entry["dataset_types"]
     excluded = entry["excluded"]
     readable = [f for f in entry["files"] if f["readable"] and not f.get("ncei_bundle")]
@@ -2013,10 +2005,10 @@ def _folder_verdict(folder: str, entry) -> Dict[str, Any]:
     if empty and len(empty) == len(readable):
         return {"action": "exclude", "empty_files": empty,
                 "reason": f"every readable file ({len(empty)}) has no measurements in its "
-                          f"sampled rows -- every measurement column is sentinel or blank "
-                          f"while the station and depth columns are full. Count real values "
-                          f"over the WHOLE file before excluding: the sample is only the "
-                          f"first few KB."}
+                          f"sampled rows: every measurement column is sentinel or blank "
+                          f"while the station and depth columns are full. The sample is only "
+                          f"the first few KB: count real values over the whole file before "
+                          f"excluding it."}
     by_action = entry.get("by_action") or {}
     # Long-format files add nothing to `types`; staged files keep the folder from 'exclude'.
     if excluded and not types and not by_action.get("stage"):
@@ -2026,7 +2018,7 @@ def _folder_verdict(folder: str, entry) -> Dict[str, Any]:
                 # Excluding a folder is not the same as having nothing to take from it.
                 "harvest": harvest or None,
                 "note": ("This folder is excluded from the profile path but still holds "
-                         "metadata for casts that ARE being written. See `harvest`."
+                         "metadata for casts that are being written: see `harvest`."
                          if harvest else None)}
     if types and (by_action.get("process") or "by_action" not in entry):
         dominant = max(types, key=types.get)
@@ -2040,9 +2032,9 @@ def _folder_verdict(folder: str, entry) -> Dict[str, Any]:
                        + ", ".join(f"{n} {t}" for t, n in sorted(types.items()))
                        + (f"; mixed, so classify per file rather than passing "
                           f"dataset_type='{dominant}' for the folder" if mixed else "")
-                       + (f". The folder ALSO holds " + ", ".join(
+                       + (f". The folder also holds " + ", ".join(
                            f"{n} to {a}" for a, n in sorted(others.items()))
-                          + " -- act on the per-file verdicts, not this summary"
+                          + "; the per-file verdicts decide, not this summary"
                           if others else "")),
             "excluded_alongside": excluded or None,
             "empty_files": empty or None,
@@ -2054,9 +2046,9 @@ def _folder_verdict(folder: str, entry) -> Dict[str, Any]:
         return {"action": "stage", "files": staged, "files_by_action": by_action,
                 "reason": f"{len(staged)} file(s) hold profile data in a shape that must be "
                           f"reshaped before processing (long format). See cross_file_shape."
-                          + (f" The folder ALSO holds " + ", ".join(
+                          + (f" The folder also holds " + ", ".join(
                               f"{n} to {a}" for a, n in sorted(others.items()))
-                             + " -- act on the per-file verdicts." if others else "")}
+                             + "; the per-file verdicts decide." if others else "")}
     return {"action": "inspect",
-            "reason": f"{len(readable)} readable file(s) but nothing names an instrument. "
-                      f"Read the folder's readme, then classify by hand."}
+            "reason": f"{len(readable)} readable file(s), but nothing names an instrument: "
+                      f"the dataset must be given by hand."}

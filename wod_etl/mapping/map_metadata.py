@@ -23,8 +23,9 @@ _NUM = r"[-+]?\d+(?:\.\d+)?"
 SECONDARY_HEADER_PATTERNS: Dict[int, str] = {
     1:  r"(?:accession(?:[_\s]*(?:no|num|number))?|nodc[_\s]*accession|ncei[_\s]*accession)",
     2:  r"(?:project|programme|program|expedition)",
-    # Not 'cruise': a cruise code names a voyage, not a vessel (see CHARACTER_DATA_PATTERNS).
-    3:  r"(?:platform|ship(?:[_\s]*name)?|vessel|callsign|call[_\s]*sign)",
+    # Not 'cruise': that names a voyage, not a vessel (character data).
+    3:  r"(?:platform(?:[_\s]*name)?|ship(?:[_\s]*name)?|vessel(?:[_\s]*name)?|callsign|"
+        r"call[_\s]*sign)",
     4:  r"(?:institut(?:e|ion)|agency|laborator(?:y|ies)|originator[_\s]*institution|data[_\s]*cent(?:er|re))",
     5:  r"(?:cast(?:[_\s]*(?:no|num|number|id))?|tow[_\s]*(?:no|num|number)|profile[_\s]*(?:no|number|id)|haul[_\s]*(?:no|number))",
     7:  r"(?:station(?:[_\s]*(?:no|num|number|id))?|stn(?:[_\s]*(?:no|id))?|originator'?s?[_\s]*station)",
@@ -88,21 +89,38 @@ SECONDARY_HEADER_PATTERNS: Dict[int, str] = {
 }
 
 # ------------------------------------------------- character data (p.30)
-# Originator identifiers that are not secondary headers: cruise code and PI (manual p.30).
+# Originator identifiers that are not secondary headers (manual p.30).
 CHARACTER_DATA_PATTERNS: Dict[str, str] = {
     "originator_cruise_id": r"(?:originator'?s?[_\s]*)?cruise(?:[_\s]*(?:id|code|name|no|"
                             r"num|number))?",
-    # ACDD's creator_name is who made the data: in an originator's NetCDF, the PI.
+    # ACDD's creator_name is the PI in an originator's NetCDF.
     "principal_investigator": r"(?:principal[_\s]*investigator|pi(?:[_\s]*name)?|"
                               r"chief[_\s]*scientist|creator[_\s]*name)",
 }
 
-# Staged-header keys that generate_field_mapping handles (coordinates, time, sources).
+# ------------------------------------------------- primary header (Table 10a)
+# The cast's country code (Appendix 1), by rank: stated country, country of origin, then a
+# creator's or institution's country (for platforms that are not ships, p.17).
+COUNTRY_PATTERNS = [
+    r"(?:country(?:[_\s]*(?:code|name))?|iso[_\s]*3166(?:[_\s]*\w+)*|nation(?:ality)?|"
+    r"ship[_\s]*country|flag[_\s]*state)",
+    r"(?:country[_\s]*of[_\s]*origin)",
+    r"(?:(?:creator|institution|publisher)[_\s]*country)",
+]
+
+# A platform name outranks a type ('research vessel'); a cruise id outranks a cruise name.
+_PLATFORM_TYPE = re.compile(
+    r"^(?:research|oceanographic|fishing|survey|naval|coast\s*guard)?\s*(?:vessel|ship|boat|"
+    r"buoy|mooring|glider|float|aircraft|auv|uav|ice\s*camp|platform)s?$|"
+    r"ships?\s+of\s+opportunity", re.IGNORECASE)
+_CRUISE_ID = re.compile(r"(?:id|code|no|num|number)$", re.IGNORECASE)
+
+# Keys generate_field_mapping parses (coordinates, time, sources).
 _NOT_METADATA_KEY = re.compile(
     r"^(?:lat|latitude|lon|long|longitude|date|time|time[_\s]*zone|tz|datetime|year|month|"
     r"day|hour|minute|source(?:[_\s]*file)?s?|history)$", re.IGNORECASE)
 
-# Sea-Bird .cnv layout and processing keys (rewritten by read_any): not originator metadata.
+# Sea-Bird .cnv layout and processing keys: not originator metadata.
 _INSTRUMENT_FILE_KEY = re.compile(
     r"^(?:nquan|nvalues|units|name\s*\d+|span\s*\d+|interval|start_time|bad_flag|file_type|"
     r"sensor\s*\d+|filename|software\s+version|system\s+upload\s+time|"
@@ -138,14 +156,14 @@ _FLAG_SUFFIX = re.compile(
 _FLAG_PREFIX = re.compile(
     r"^(?:qc|qf|q|flag|quality(?:[\s_]*flag)?)[\s_\-]+(?P<var>.+)$", re.IGNORECASE)
 
-# Column names that are a flag but name no variable -- they flag the whole level or cast.
+# Flag columns that name no variable: they flag the whole level or cast.
 _BARE_FLAG = re.compile(r"^(?:qc|qf|quality(?:[\s_]*(?:flag|control))?|flags?|"
                         r"qc[\s_]*flag|data[\s_]*quality)$", re.IGNORECASE)
 
-# Prose lines in a staged header, skipped before any key is mined out of them.
+# Prose lines in a staged header; no keys are read from them.
 _NOTE_LINE = re.compile(r"\s*#?\s*(?:note|comment|remark)s?\s*[:=]", re.IGNORECASE)
 
-# Column names that are identifiers or coordinates, never measurements or metadata values.
+# Coordinate and time columns, never metadata values.
 _SKIP_AS_METADATA = re.compile(
     r"^(?:date|time|datetime|year|month|day|hour|minute|second|lat|latitude|lon|long|"
     r"longitude|depth|pressure|z)\b", re.IGNORECASE)
@@ -159,9 +177,7 @@ def map_metadata(
 ) -> Dict[str, Any]:
     """Every non-measurement fact in a file, placed in the WOD field that holds it.
 
-    `df` is needed to read metadata column values and tell constant columns from measurements.
-    Returns secondary_headers, variable_specific_headers, metadata_columns, originator_flags,
-    character_data and unresolved (metadata that could not be placed).
+    `df` supplies metadata column values. What could not be placed is in `unresolved`.
     """
     columns = [str(c) for c in (columns or [])]
     out: Dict[str, Any] = {
@@ -170,6 +186,7 @@ def map_metadata(
         "metadata_columns": [],
         "originator_flags": [],
         "character_data": {},
+        "primary_header": {},
         "cast_level_variable_headers": {},
         "unresolved": [],
         "dataset_code": dataset_code,
@@ -178,6 +195,7 @@ def map_metadata(
     _from_header_block(header_text or "", out)
     _from_columns(columns, df, out)
     _from_column_names(columns, out)
+    _probe_model(out)
     _apply_cast_level_variable_headers(columns, out)
     _find_originator_flags(columns, out)
     _attach_code_tables(out)
@@ -186,13 +204,9 @@ def map_metadata(
 
 
 # ------------------------------------------------------------ header block
-# Delimited metadata lines, as in WOD's CSV export:
-#
-#     Bottom depth ,,              36,meters,,
-#     Instrument   ,Temperature,  464.,WOD code,CTD: SBE 37-IM MicroCAT,
-#
-# Column 0 is the key, column 2 the value, then a unit or code system and a description.
-# Column 1 names the variable: empty for cast metadata (Table 4a), set for Table 5a.
+# Delimited metadata lines, as in WOD's CSV export ('Bottom depth ,,36,meters,,'): column 0
+# is the key, 1 the variable (empty for Table 4a cast metadata), 2 the value, then a unit or
+# code system and a description.
 _DELIMITED_HEADER = re.compile(r"^\s*([^,\t]{2,48}?)\s*[,\t]\s*([^,\t]{0,48}?)\s*[,\t](.*)$")
 
 # A code system after the value ('OCL code') means the value is already a code.
@@ -203,7 +217,7 @@ _COORDINATE_KEY = re.compile(
     r"^(lat|latitude|lon|long|longitude|year|month|day|hour|minute|second|date|time|"
     r"datetime|julian|yearday|depth|pressure)\b", re.IGNORECASE)
 
-# Lines that are structural markers in a block rather than key/value pairs.
+# Structural marker lines, not key/value pairs.
 _BLOCK_MARKER = re.compile(
     r"^\s*(#|-{3,}|=|CAST\b|METADATA\b|VARIABLES\b|UNITS\b|END OF\b|Prof-Flag\b)",
     re.IGNORECASE)
@@ -240,8 +254,15 @@ def _from_header_block(header_text: str, out: Dict[str, Any]) -> None:
             spans.append((m.start(1), m.end(3)))
             placed_keys.add(_norm_key(key))
             held = out["secondary_headers"].get(str(sec_id))
+            if held is not None and sec_id == 3 \
+                    and _PLATFORM_TYPE.search(str(held.get("value", "")).strip()) \
+                    and not _PLATFORM_TYPE.search(value):
+                out["unresolved"].append({
+                    "key": held["originator_key"], "value": held["value"], "variable": None,
+                    "evidence": held.get("evidence"), "matches": "secondary header 3",
+                    "note": f"a platform type; the platform is {key} {value!r}"})
+                held = None
             if held is not None:
-                # A conflicting second key for a held header is recorded as unresolved.
                 if held.get("value") != _coerce(value, sec_id):
                     out["unresolved"].append({
                         "key": key, "value": value, "variable": None,
@@ -261,9 +282,8 @@ def _from_header_block(header_text: str, out: Dict[str, Any]) -> None:
         _from_key_value_line(line, placed_keys, out)
 
 
-# `Key: value` pairs, possibly several per line; unknown keys need ':' or '='. A value ends
-# at the next key, `;`, `|` or end of line. A comma ends it only before another key:
-# `LAT: 61.9, LON: -172.2` is two pairs, a title containing commas is one.
+# `Key: value` pairs (':' or '='), several per line. A value ends at the next key, `;`, `|`
+# or line end; a comma ends it only before another key (`LAT: 61.9, LON: -172.2`).
 _KEY_VALUE = re.compile(
     r"(?:^|[,;|]|\s{2,})\s*#?\s*([A-Za-z][A-Za-z0-9 _.'/()&-]{0,47}?)\s*[:=]\s*"
     r"(.*?)\s*(?=(?:\s{2,}|[,;|]\s*)[A-Za-z][A-Za-z0-9 _.'/()&-]{0,47}?\s*[:=]|[;|]|$)")
@@ -271,6 +291,22 @@ _KEY_VALUE = re.compile(
 
 def _norm_key(key: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+
+
+def _place_country(key: str, value: str, evidence: str, out: Dict[str, Any]) -> bool:
+    """Hold a country stated under `key`, the highest-ranked key winning. True if `key` is
+    a country key."""
+    k = key.strip().replace("_", " ")
+    rank = next((i for i, pat in enumerate(COUNTRY_PATTERNS)
+                 if re.fullmatch(pat, k, re.IGNORECASE)), None)
+    if rank is None:
+        return False
+    held = out["primary_header"].get("country")
+    if held is None or rank < held["rank"]:
+        out["primary_header"]["country"] = {"value": value, "originator_key": key,
+                                            "rank": rank, "source": "header block",
+                                            "evidence": evidence}
+    return True
 
 
 def _character_data_key(key: str) -> Optional[str]:
@@ -281,10 +317,8 @@ def _character_data_key(key: str) -> Optional[str]:
 
 
 def _from_key_value_line(line: str, placed_keys, out: Dict[str, Any]) -> None:
-    """Place each `Key: value` on a line that the secondary-header pass did not place.
-
-    Each goes to character data, a cast-level variable header, or `unresolved`.
-    """
+    """Place the `Key: value` pairs the secondary-header pass left: as the country, character
+    data, a cast-level variable header, or `unresolved`."""
     # On a station position line, `Depth:` is the bottom depth (generate_field_mapping).
     position_line = bool(re.search(r"\blat(?:itude)?\s*[:=]", line, re.IGNORECASE)
                          and re.search(r"\blon(?:g(?:itude)?)?\s*[:=]", line, re.IGNORECASE))
@@ -295,8 +329,18 @@ def _from_key_value_line(line: str, placed_keys, out: Dict[str, Any]) -> None:
                 or (position_line and key.lower() == "depth")):
             continue
         evidence = line.strip()[:120]
+        if _place_country(key, value, evidence, out):
+            continue
 
         field = _character_data_key(key)
+        held = out["character_data"].get(field) if field else None
+        if field == "originator_cruise_id" and held and _CRUISE_ID.search(key) \
+                and not _CRUISE_ID.search(held["originator_key"]):
+            out["unresolved"].append({
+                "key": held["originator_key"], "value": held["value"], "variable": None,
+                "evidence": held.get("evidence"), "matches": "character data",
+                "note": f"a cruise name; the cruise id is {key} {value!r}"})
+            del out["character_data"][field]
         if field:
             if field in out["character_data"]:
                 out["unresolved"].append({
@@ -325,8 +369,42 @@ def _from_key_value_line(line: str, placed_keys, out: Dict[str, Any]) -> None:
         out["unresolved"].append({
             "key": key, "value": value, "variable": None, "evidence": evidence,
             "matches": None,
-            "note": "no WOD field matched this key. Either it has no WOD home -- report it "
-                    "as not carried -- or a pattern is missing from map_metadata."})
+            "note": "no WOD field matched this key: WOD may not store it, or map_metadata "
+                    "lacks a pattern for it."})
+
+
+def _probe_model(out: Dict[str, Any]) -> None:
+    """A probe type stated as a model ('T-7') is two WOD fields: its category in secondary
+    header 29 (XBT) and the instrument in variable header 5 (XBT: T7)."""
+    from wod_etl.reference.code_lists import lookup_code
+
+    held = out["secondary_headers"].get("29")
+    text = str((held or {}).get("value") or "").strip()
+    if not text or re.fullmatch(r"\d+(?:\.0*)?", text) or \
+            lookup_code("secondary_header", 29, text)["status"] in ("matched", "already_a_code"):
+        return
+    model = lookup_code("variable_specific_header", 5, text)
+    if model.get("status") != "matched" or ":" not in model["label"]:
+        return
+    category = lookup_code("secondary_header", 29, model["label"].split(":", 1)[0])
+    if category.get("status") != "matched":
+        return
+    held.update(value=category["code"], originator_value=text)
+    out["cast_level_variable_headers"].setdefault("5", {
+        "name": "Instrument", "value": model["code"], "originator_key": held.get("originator_key"),
+        "source": f"probe type {text!r}: {model['label']}"})
+
+
+# Depth units as the depth-unit list (s_95) spells them.
+_DEPTH_UNITS = {"ft": "foot", "feet": "foot", "foot": "foot", "fm": "fathom",
+                "fms": "fathom", "fathoms": "fathom", "fathom": "fathom"}
+
+# XBT depth-time equation, secondary header 33: 0 original (Sippican), 1 corrected (Hanawa et
+# al. 1995 or later), manual p.61. Tried in order, so 'no correction' is 0, not 1.
+_FALL_RATE = [(re.compile(r"hanawa|kizu|cheng", re.I), 1),
+              (re.compile(r"sippican|original|manufacturer|\bold\b|uncorrected|\bno\b|"
+                          r"\bnot\b|\bnone\b", re.I), 0),
+              (re.compile(r"correct|amend|revis|\bnew\b", re.I), 1)]
 
 
 def _apply_cast_level_variable_headers(columns: List[str], out: Dict[str, Any]) -> None:
@@ -404,11 +482,11 @@ def _place_pair(pair, line, names, out) -> None:
         out["unresolved"].append({
             "key": key, "value": None, "variable": variable, "evidence": evidence,
             "matches": None,
-            "note": "the key is present in the block but its value column is empty. Nothing "
-                    "was recorded for it; if WOD needs it, it has to come from elsewhere."})
+            "note": "the key is present in the block but its value column is empty, so "
+                    "nothing was recorded for it."})
         return
 
-    # Column 1 names the variable, so a per-variable key can be attached to it directly.
+    # Column 1 names the variable, so a per-variable key attaches to it.
     if variable:
         for var_id, key_pat in VARIABLE_HEADER_PATTERNS.items():
             if not _key_matches(key, key_pat):
@@ -425,6 +503,9 @@ def _place_pair(pair, line, names, out) -> None:
                 **({"description": pair["description"]} if pair["description"] else {}),
             }
             return
+
+    if not variable and _place_country(key, value, evidence, out):
+        return
 
     field = _character_data_key(key)
     if field and not variable:
@@ -456,8 +537,7 @@ def _place_pair(pair, line, names, out) -> None:
         if held is None:
             out["secondary_headers"][str(sec_id)] = entry
             return
-        # Two keys claim one header: prefer a published code, else the first seen. The other
-        # is recorded as unresolved.
+        # Two keys claim one header: a published code wins, else the first seen.
         winner, loser = ((entry, held) if entry.get("value_is_already_a_code")
                          and not held.get("value_is_already_a_code") else (held, entry))
         out["secondary_headers"][str(sec_id)] = winner
@@ -478,14 +558,14 @@ def _place_pair(pair, line, names, out) -> None:
                 "key": key, "value": value, "variable": variable, "evidence": evidence,
                 "matches": f"variable specific second header {var_id}",
                 "note": "recognised, but nothing says which variable it applies to. Attach "
-                        "it during staging, or leave it out and say so."})
+                        "it to a variable during staging, or it is left out."})
             return
 
     out["unresolved"].append({
         "key": key, "value": value, "variable": variable, "evidence": evidence,
         "matches": None,
-        "note": "no WOD field matched this key. Either it has no WOD home -- report it as "
-                "not carried -- or the pattern is missing from SECONDARY_HEADER_PATTERNS."})
+        "note": "no WOD field matched this key: WOD may not store it, or "
+                "SECONDARY_HEADER_PATTERNS lacks it."})
 
 
 def _coerce(value: str, sec_id: int):
@@ -524,10 +604,9 @@ def _from_columns(columns: List[str], df, out: Dict[str, Any]) -> None:
             if not constant:
                 entry["value"] = None
                 entry["note"] = (
-                    f"'{col}' varies down the cast, so no single value is recorded. A "
-                    f"secondary header describes the whole cast; keep the column in the "
-                    f"staged copy and split the file per cast if the variation is between "
-                    f"casts rather than within one.")
+                    f"'{col}' varies down the cast, so no single value is recorded: a "
+                    f"secondary header describes the whole cast. If it varies between casts, "
+                    f"split the file per cast in staging and keep the column.")
             # A header-block value wins over one inferred from a column.
             existing = out["secondary_headers"].get(str(sec_id))
             if existing and existing.get("value") not in (None, ""):
@@ -598,8 +677,7 @@ def _from_column_names(columns: List[str], out: Dict[str, Any]) -> None:
 def _find_originator_flags(columns: List[str], out: Dict[str, Any]) -> None:
     """Pair each originator quality-flag column with the variable it flags.
 
-    Flags are kept verbatim, not translated to Table 12; secondary header 96 names the
-    flag set.
+    Flags are kept verbatim, not translated to Table 12; secondary header 96 names the set.
     """
     by_norm = {normalize_name(c): c for c in columns}
     # Also pair on the resolved WOD code, since flag and measurement names often differ.
@@ -615,8 +693,8 @@ def _find_originator_flags(columns: List[str], out: Dict[str, Any]) -> None:
             out["originator_flags"].append({
                 "flag_column": col, "flags_column": None, "flags_wod_code": None,
                 "scope": "level or cast",
-                "note": "names no variable, so it flags the whole level or cast. Check the "
-                        "file's own documentation before assuming which."})
+                "note": "names no variable, so it flags the whole level or cast; see the "
+                        "file's documentation for which."})
             continue
         m = _FLAG_SUFFIX.match(text) or _FLAG_PREFIX.match(text)
         if not m:
@@ -632,8 +710,8 @@ def _find_originator_flags(columns: List[str], out: Dict[str, Any]) -> None:
             "flags_wod_code": code,
             "scope": "variable" if target else "unresolved",
             "note": None if target else
-                    f"names '{target_raw}', which is not a column in this file. Keep the "
-                    f"flag anyway and say what it was called.",
+                    f"names '{target_raw}', which is not a column in this file. The flag "
+                    f"is kept.",
         })
     if out["originator_flags"] and "96" not in out["secondary_headers"]:
         out["secondary_headers"]["96"] = {
@@ -641,10 +719,9 @@ def _find_originator_flags(columns: List[str], out: Dict[str, Any]) -> None:
             "value": None,
             "source": "inferred from flag columns",
             "note": "This file carries the originator's own quality flags. WOD records "
-                    "WHICH flag set was used as secondary header 96; the set is not stated "
-                    "in the file, so it must come from the submitter or the accession "
-                    "documentation. The flag VALUES are kept verbatim and are NOT WOD "
-                    "Table 12 flags.",
+                    "which flag set was used as secondary header 96; the file does not state "
+                    "it, so it must come from the submitter or the accession documentation. "
+                    "The flag values are kept verbatim and are not WOD Table 12 flags.",
         }
 
 
@@ -675,7 +752,39 @@ def _resolve_codes(out: Dict[str, Any]) -> None:
     A value becomes a code only if it is a number or names exactly one entry; otherwise the
     originator's text is kept and `code_lookup` says why.
     """
-    from wod_etl.reference.code_lists import lookup_code
+    from wod_etl.reference import resolve_country
+    from wod_etl.reference.code_lists import (describe_lookup, lookup_code,
+                                              lookup_investigator, lookup_unit, unit_key)
+
+    fall_rate = out["secondary_headers"].get("33")
+    if fall_rate and not re.fullmatch(r"-?\d+(?:\.0*)?", str(fall_rate.get("value")).strip()):
+        code = next((c for pat, c in _FALL_RATE if pat.search(str(fall_rate["value"]))), None)
+        if code is not None:
+            fall_rate.update(originator_value=fall_rate["value"], value=code)
+    country = out["primary_header"].get("country")
+    if country:
+        r = resolve_country(country["value"])
+        country["code_lookup"] = {"status": r["status"], "field": "country_list",
+                                  "summary": (f"{r['code']} {r['label']} (Appendix 1)"
+                                              if r["code"] else
+                                              f"no WOD country code for {r['value']!r} "
+                                              f"(Appendix 1)")}
+        if r["code"]:
+            country.update(originator_value=country["value"], value=r["code"],
+                           label=r["label"])
+        else:
+            out["unresolved"].append({
+                "key": country["originator_key"], "value": country["value"], "variable": None,
+                "evidence": country.get("evidence"), "matches": "primary header country",
+                "note": "no Appendix 1 code for it: set country in decisions.toml [metadata]"})
+            del out["primary_header"]["country"]
+    pi = out["character_data"].get("principal_investigator")
+    if pi and pi.get("value"):
+        r = lookup_investigator(pi["value"])
+        pi["code_lookup"] = {"status": r["status"], "summary": describe_lookup(r)}
+        if r["status"] == "matched":
+            out["character_data"]["principal_investigator_code"] = {
+                "value": r["code"], "source": f"primary_investigator_list: {r['label']}"}
 
     for sid, entry in out["secondary_headers"].items():
         if not entry.get("is_coded") or entry.get("value") in (None, ""):
@@ -683,10 +792,29 @@ def _resolve_codes(out: Dict[str, Any]) -> None:
         result = lookup_code("secondary_header", int(sid), entry["value"])
         _apply_lookup(entry, result)
     for entry in out["variable_specific_headers"].values():
-        for vid, header in entry["headers"].items():
+        unit = entry["headers"].get("8")
+        if entry.get("wod_code") == 0 and unit:
+            # The depth axis's unit is the cast's: secondary header 95, and only when not m.
+            del entry["headers"]["8"]
+            if unit_key(unit["value"]) not in ("m", "meter", "meters", "metre", "metres") \
+                    and "95" not in out["secondary_headers"]:
+                held = {"name": "Originator's Depth unit", "value": unit["value"],
+                        "source": f"column name '{entry['raw_column']}'", "is_coded": True}
+                spelled = _DEPTH_UNITS.get(unit_key(unit["value"]), unit["value"])
+                _apply_lookup(held, lookup_code("secondary_header", 95, spelled))
+                out["secondary_headers"]["95"] = held
+    for entry in out["variable_specific_headers"].values():
+        for vid, header in list(entry["headers"].items()):
             if not header.get("code_table") or header.get("value") in (None, ""):
                 continue
-            result = lookup_code("variable_specific_header", int(vid), header["value"])
+            if vid == "8":
+                result = lookup_unit(header["value"], entry.get("wod_code"))
+                if result["status"] == "standard_unit":
+                    # Already WOD's unit: nothing to record.
+                    del entry["headers"][vid]
+                    continue
+            else:
+                result = lookup_code("variable_specific_header", int(vid), header["value"])
             _apply_lookup(header, result)
 
 

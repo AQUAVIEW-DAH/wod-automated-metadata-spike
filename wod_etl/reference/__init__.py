@@ -1,7 +1,5 @@
-"""WOD reference tables, loaded from knowledge/wod_code_tables/*.json.
-
-The tables were extracted from the WOD manual with page citations; codes are not hard-coded.
-"""
+"""WOD reference tables, loaded from knowledge/wod_code_tables/*.json (extracted from the WOD
+manual with page citations)."""
 
 from .load_tables import (
     load_table,
@@ -27,8 +25,11 @@ from .load_tables import (
     unit_constants,
     range_check_variables,
 )
+from .countries import country_codes, resolve_country
 
 __all__ = [
+    "country_codes",
+    "resolve_country",
     "load_table",
     "available_tables",
     "wod_datasets",

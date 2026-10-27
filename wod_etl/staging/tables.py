@@ -19,12 +19,9 @@ def read_table(
     """Read a delimited originator file as (columns, rows, info). Never raises on encoding.
 
     Tries `config.TEXT_ENCODINGS` in order and drops blank rows. `header_row` indexes the
-    non-blank rows (1 when a title line precedes the header). `delimiter=None` sniffs the
-    delimiter. `comment_prefix` (e.g. `"#"`) drops rows starting with it before the header
-    is located.
-
-    `info` reports the encoding, delimiter, row counts before and after cleaning, and
-    duplicate column names.
+    non-blank rows (1 when a title line precedes the header). `delimiter=None` sniffs it;
+    rows starting with `comment_prefix` are dropped before the header is located. `info`
+    gives the encoding, delimiter, row counts and duplicate column names.
     """
     path = Path(path)
     encodings = (encoding,) if encoding else TEXT_ENCODINGS
@@ -152,13 +149,8 @@ def fold_unit_row(
         time (UTC),latitude,water temperature,chlorophyll
         ,degree N,degree C,ppb
 
-    Unit detection reads only the column name, so the unit must be folded in.
-
-        cols, rows, _ = read_table(path)          # header row
-        cols = fold_unit_row(cols, rows[0])       # units row
-        rows = rows[1:]
-
-    Names that already carry a short bracketed unit, and blank unit cells, are left alone.
+    Unit detection reads only the column name, so the unit must be folded in. Names that
+    already carry a short bracketed unit, and blank unit cells, are left alone.
     """
     out = []
     for i, name in enumerate(columns):
@@ -206,15 +198,11 @@ def combine_on_key(
 ) -> Tuple[List[str], List[List[str]], Dict[str, Any]]:
     """Outer-join tables that hold different variables for the same cast or track.
 
-    `key` names the join column (e.g. depth or time) in the first table; `key_aliases` gives
-    its name in the others (`["Depth (m)", "DEPTH", "depth_m"]`).
-
-        cols, rows, info = combine_on_key([(c1, r1), (c2, r2)], key="Depth (m)")
-
-    Keys keep first-appearance order; a key in one table only keeps the rest of its row
-    empty. `info["per_table"]` gives each table's `key_column`, `matched_existing_keys`,
-    `distinct_keys` and `duplicate_keys_within_table` (a repeated key overwrites the
-    earlier row). Near-zero matches mean the tables share no key.
+    `key` names the join column (e.g. depth or time); `key_aliases` are its other spellings
+    (`["DEPTH", "depth_m"]`). Keys keep first-appearance order; a key in one table only
+    leaves the rest of its row empty. `info["per_table"]` gives each table's `key_column`,
+    `matched_existing_keys`, `distinct_keys` and `duplicate_keys_within_table` (a repeated
+    key overwrites the earlier row); near-zero matches mean the tables share no key.
 
     Keys are compared as raw text (`0` and `0.0` differ); normalise them first if the files
     format them differently.

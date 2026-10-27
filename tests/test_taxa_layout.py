@@ -1,5 +1,4 @@
-"""Reading a plankton table as Taxa-Records: column roles, units, and why a table cannot be
-written."""
+"""Plankton tables as Taxa-Records: column roles, units, and why a table cannot be written."""
 import pytest
 
 from wod_etl.staging.taxa_layout import describe_taxa_table, unit_parts

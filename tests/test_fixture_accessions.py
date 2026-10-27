@@ -1,7 +1,4 @@
-"""The two fixture accessions: every triage outcome, and files whose extension misleads.
-
-Each test works on a copy in tmp_path. Known gaps are `xfail(strict=True)`.
-"""
+"""The two fixture accessions: every triage outcome, and files whose extension misleads."""
 import shutil
 from pathlib import Path
 

@@ -7,8 +7,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
-# Unambiguous abbreviations with a fixed offset. Ambiguous ones (CST, IST, BST, AST,
-# EST/EDT, MST/MDT, PST) are left out.
+# Unambiguous abbreviations with a fixed offset; ambiguous ones (CST, IST, EST...) are left out.
 FIXED_ZONES = {"JST": 9, "KST": 9, "HKT": 8, "SGT": 8, "AWST": 8, "ACST": 9.5, "AEST": 10,
                "AEDT": 11, "NZST": 12, "NZDT": 13, "CET": 1, "CEST": 2, "EET": 2, "EEST": 3,
                "WET": 0, "WEST": 1, "PDT": -7, "AKST": -9, "AKDT": -8, "HST": -10}

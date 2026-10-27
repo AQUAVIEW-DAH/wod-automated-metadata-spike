@@ -1,6 +1,4 @@
-"""Phase 4 and orchestration: NetCDF writing, manifest, end-to-end run.
-
-Validation is tested in test_verify.py."""
+"""Phase 4 and orchestration: NetCDF writing, manifest, end-to-end run."""
 from pathlib import Path
 
 import netCDF4 as nc

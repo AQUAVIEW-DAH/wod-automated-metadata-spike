@@ -6,11 +6,11 @@ Checks that what was written is right, structurally and in its values.
 from wod_etl.verify import validate_intermediate_netcdf, audit_dataset
 ```
 
-- `validate_intermediate_netcdf` is structural: does the file obey CF and the ragged-array
-  contract? A file that fails is not output.
-- `verify_output` and `audit_dataset` are semantic: do the values make sense?
+- `validate_intermediate_netcdf` checks structure: CF and the ragged-array contract. A file
+  that fails is not output.
+- `verify_output` and `audit_dataset` check that the values make sense.
 
-Many real errors pass structural validation:
+Many errors pass structural validation:
 
 | What went wrong | Validator | Audit |
 | --- | --- | --- |
@@ -19,8 +19,6 @@ Many real errors pass structural validation:
 | A column dropped at mapping | PASS | appears in `unmapped_columns` |
 | Depth column unmapped, `z` all NaN | FAIL (all-fill `z` is an error) | `z` range empty |
 | QC misapplied to a non-profile dataset | PASS | most flags non-zero |
-
-Run both.
 
 ---
 
@@ -66,10 +64,9 @@ An unreadable file returns `status: "FAIL"` with `fatal_error`; it does not rais
 
 ## `verify_output(processed_dir, sample_levels=SAMPLE_LEVELS, paths=None)`
 
-Checks the values. `process_accession` runs it at the end of every run.
-
-It reads every written NetCDF back and compares each observation against the manual's
-acceptable range for that variable at that depth (Appendix 11), and reports findings.
+Checks the values: reads every written NetCDF back and compares each observation with the
+manual's range for that variable and depth (Appendix 11). `process_accession` runs it at the
+end of every run.
 
 ```python
 report = verify_output("data/processed/2-CTD")
@@ -108,7 +105,7 @@ means the variable cannot be what it claims.
 - Ranges are the union of all 30 ocean basins (basin assignment needs `range_area.msk` from
   the WOD website). A flagged value is outside every basin's bound; an unflagged value may
   still be wrong (nitrate's union bound reaches 500 µmol/kg).
-- It cannot see a dropped column. Use `unmapped_columns` and `audit_dataset` for that.
+- It cannot see a dropped column; `unmapped_columns` and `audit_dataset` do.
 
 `_suspect_cause` names the conversion a systematic offset resembles (~1000× for a per-litre
 column in a per-kilogram variable, ~1.8× for Fahrenheit) when the ratio matches within 15%.
@@ -137,9 +134,6 @@ print(report["text"])
 It also returns `all_missing_variables`, `missing_coordinates`, `contract_warnings`,
 `wod_dataset_routing`, and `text`, a readable summary.
 
-Look for an expected column in `unmapped_columns`, a physically wrong range (a unit error),
-and a near-total flag rate (a misapplied check).
-
 `contract_for(path, dataset_type)` returns one file's contract without auditing the set.
 
 ---
@@ -153,8 +147,8 @@ Appendix 11 range.
   summing to the records, a record with no depth range or an upper depth below its lower, a
   record with no measurement, a negative count, a "per UNIT" field with no originator's unit
   (Table 7a field 20).
-- **Warnings** (report them): records whose taxon did not resolve to a WOD variable number,
-  and key Biological Header fields not stated (`missing_biological_fields`).
+- **Warnings**: records whose taxon did not resolve to a WOD variable number, and key
+  Biological Header fields not stated (`missing_biological_fields`).
 
 ---
 
@@ -163,8 +157,7 @@ Appendix 11 range.
 - A mis-triaged folder (currents or bathymetry forced through the profile path) audits
   clean, because its numbers are internally consistent.
 - A wrong time zone shifts every cast by hours and stays inside every bound.
-- A basin-inappropriate value passes, because range checks use the union of all 30 basins.
 
-For these, cross-check against an independent source in the accession (an underway GPS
-track against station times, a station list against in-file positions). See
+These need a cross-check against an independent source in the accession, such as a station
+list against in-file positions; see
 [`knowledge/accession_field_guide.md`](../../knowledge/accession_field_guide.md).

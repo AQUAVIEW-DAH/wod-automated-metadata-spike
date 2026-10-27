@@ -5,7 +5,7 @@
     54,
     86
   ],
-  "note": "Table 11 lists WHICH variables get range checks and points to the appendix holding the numbers. The actual ranges live in Appendix 11 (p.86+) and are a function of BOTH depth (102 standard levels + one below 5500 m) AND ocean basin (16 basin columns). They are not single global min/max pairs.",
+  "note": "Which variables get range checks, and the appendix holding each one's ranges. The ranges themselves (Appendix 11, p.86+) depend on depth and ocean basin.",
   "lookup_rule": "A standard depth between two listed depths uses the nearest listed depth; if equidistant, the shallower one (e.g. 5 m uses the 0 m values).",
   "variables": [
     {
@@ -64,7 +64,7 @@
     }
   ],
   "surface_envelope_example_temperature": {
-    "warning": "Illustrative only. These are the WIDEST (0 m) bounds across basins. Using them at all depths will pass deep outliers: at 3000 m the real maximum is far below 35 °C.",
+    "warning": "Illustrative only: the widest (0 m) bounds across basins. Deep values need the deep bounds (Appendix 11).",
     "min": -2.1,
     "max": 35.0
   }

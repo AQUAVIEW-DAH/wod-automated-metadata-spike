@@ -70,14 +70,13 @@ def section(header: str, fields: Dict[str, Any], comments: Optional[List[str]] =
 
 
 def item_header(kind: str, item_id: str) -> str:
-    """`[profiles.ctd]`, `[conflicts."date:6"]` -- the table header for an item id."""
+    """The table header for an item id, e.g. `conflicts."date:6"`."""
     return f"{kind}.{toml_key(item_id)}"
 
 
 # ----------------------------------------------------------------- reading
 def load(path) -> Tuple[Dict[str, Any], Optional[str]]:
-    """(decisions, error): a missing file is empty; a malformed one is an error, so a typo
-    stops the run."""
+    """(decisions, error): a missing file is empty, a malformed one an error that stops the run."""
     p = Path(path)
     if not p.exists():
         return {}, None
@@ -103,8 +102,7 @@ def matches(pattern: str, path: str) -> bool:
 
 
 def decision_key(decisions: Dict[str, Any], path: str) -> Optional[str]:
-    """The `[files]` key that decides `path`: its own, else the matching pattern with the most
-    literal characters."""
+    """The `[files]` key deciding `path`: its own, else the most literal matching pattern."""
     entries = decisions.get("files") or {}
     if isinstance(entries.get(path), dict):
         return path
@@ -139,7 +137,7 @@ FILE_HEADER = '''\
 # Each entry decides one file, or every file its * pattern matches (a file's own entry wins):
 #   include   true: written to WOD as `dataset`; false: left out
 #   dataset   the WOD dataset: {datasets}
-#   data/why  what the file holds, and why it was decided so -- change what you disagree with
+#   data/why  what the file holds, and why it was decided so; change what you disagree with
 #   drop      variables not to write, e.g. drop = ["salinity"]
 #   metadata  header values for its casts, e.g. metadata = {{ cruise = "NABOS-08" }}
 # `wod-etl run` never rewrites this file: entries for files it has not seen go at the end.
@@ -150,7 +148,7 @@ accession = {accession_toml}
 # Section headings, in file order.
 SECTIONS = [
     ("metadata", "Header values for every cast: they override what a file states"),
-    ("check", "CHECK: what these hold could not be told -- decide them"),
+    ("check", "CHECK: what these hold could not be told; decide them"),
     ("in", "IN: written to WOD by `wod-etl confirm`"),
     ("review_out", "OUT: left out by the review"),
     ("later", "OUT: WOD takes these, but wod-etl cannot write them (why says what is missing)"),
@@ -356,8 +354,7 @@ def _name(path: str) -> str:
 
 
 def propose(triage: Dict[str, Any], decisions: Dict[str, Any]) -> List[str]:
-    """New sections for files no entry decides yet ([metadata] the first time), grouped under
-    section headings."""
+    """Sections for files no entry decides yet, under headings; [metadata] the first time."""
     files = triage.get("files", [])
     everything = [f["path"] for f in files]
     new = [f for f in files if file_decision(decisions, f["path"]) is None]
@@ -373,8 +370,7 @@ def propose(triage: Dict[str, Any], decisions: Dict[str, Any]) -> List[str]:
     return out
 
 
-# [metadata] keys (one word, so none needs quoting), their placeholder, and the WOD code list
-# each is coded against.
+# [metadata] keys (one word, so unquoted), their placeholder, and the WOD code list of each.
 METADATA_FIELDS = [
     ("platform", "<WOD platform code, or the ship's name>", ("secondary_header", 3)),
     ("institution", "<WOD institution code, or its name>", ("secondary_header", 4)),
@@ -414,8 +410,7 @@ def code_name(key: str, value: Any) -> Optional[str]:
 
 def metadata_lines(values: Dict[str, Any], proposed: Optional[Dict[str, List]] = None
                    ) -> List[str]:
-    """`[metadata]` lines: values set (codes with their names), proposals, then unset keys
-    commented out."""
+    """`[metadata]` lines: set values (codes named), proposals, then unset keys commented out."""
     lines = ["[metadata]"]
     for key, value in values.items():
         name = code_name(key, value)
@@ -439,7 +434,7 @@ def _metadata_section(triage: Dict[str, Any]) -> str:
     if found:
         sources = ", ".join(sorted({src for v in found.values() for _, src in v}))
         lines += [f"# {line}" for line in _wrap(
-            f"Proposed from the accession's ISO 19115 metadata -- check them ({sources}).", 92)]
+            f"Proposed from the accession's ISO 19115 metadata ({sources}); check them.", 92)]
     single = {k: v[0][0] for k, v in found.items() if len(v) == 1}
     several = {k: v for k, v in found.items() if len(v) > 1}
     return "\n".join(lines + metadata_lines(single, several)) + "\n"
@@ -719,6 +714,11 @@ def derive_recipes(triage: Dict[str, Any], included: set, taken: set, names: set
         if lb and not f.get("mooring") and not f.get("long_format"):
             located.setdefault((_parent(f["path"]), lb["kind"], lb["station_list"], lb["key"],
                                 lb.get("station_column"), f.get("dataset")), []).append(f)
+    # Surface tracks on one clock: one recipe for all of them.
+    streams = [f for f in files if f.get("combine_tracks")]
+    if streams:
+        recipes[unique("surface_tracks")] = {
+            "kind": "tracks", "files": [f["path"] for f in streams], "dataset_type": "SUR"}
     # Tables holding the same casts: one combine recipe per set.
     combined: Dict[Tuple[str, ...], List[Dict[str, Any]]] = {}
     for f in files:
@@ -828,7 +828,7 @@ def validate(decisions: Dict[str, Any], triage: Dict[str, Any],
         decided = [p for p in files if file_decision(decisions, p) is entry]
         if not decided:
             matched = [p for p in files if p == key or (is_pattern(key) and matches(key, p))]
-            items.append(open_item(hdr, f"{key}: decides no file -- every file it matches has "
+            items.append(open_item(hdr, f"{key}: decides no file, as every file it matches has "
                                         f"an entry of its own" if matched else
                                         f"{key}: matches no file of the accession",
                                    "nothing to do; remove it if it is no longer wanted"
@@ -856,20 +856,20 @@ def validate(decisions: Dict[str, Any], triage: Dict[str, Any],
                 items.append(open_item(hdr, f"{key}: is included, and nothing names its WOD "
                                             f"dataset: it is classified from what it holds "
                                             f"when it is processed",
-                                       "nothing to do; set dataset = one of "
-                                       + ", ".join(sorted(datasets)) + " to say which",
+                                       "nothing to do, or set dataset = one of "
+                                       + ", ".join(sorted(datasets)),
                                        blocking=False))
     for w in plan["not_written"]:
         key = decision_key(decisions, w["key"])
         items.append(open_item(item_header("files", w["key"]),
                                f"{w['key']}: included, but it cannot be written: {w['why']}",
-                               "nothing to do -- it is left out; set include = false to say so",
+                               "nothing to do: it is left out (or set include = false)",
                                blocking=False, key=item_header("files", key) if key else ""))
 
     for name, r in (decisions.get("profiles") or {}).items():
         hdr = item_header("profiles", name)
         if not isinstance(r, dict) or r.get("kind") != "script":
-            items.append(open_item(hdr, f"[profiles.{name}] is no longer read: wod-etl works "
+            items.append(open_item(hdr, f"[profiles.{name}] is not read: wod-etl works "
                                         f"out how files become casts from the files",
                                    "nothing to do; delete the section", blocking=False))
             continue
@@ -933,7 +933,7 @@ def validate(decisions: Dict[str, Any], triage: Dict[str, Any],
                                    key=""))
     for c in conflicts:
         items.append(open_item(item_header("conflicts", c["id"]),
-                               f"{c['what']} -- the station list is kept",
+                               f"{c['what']}; the station list is kept",
                                "nothing to do; the casts' notes record it", blocking=False,
                                key=""))
     return items, plan
@@ -1001,7 +1001,7 @@ def build_plan(decisions: Dict[str, Any], triage: Dict[str, Any],
         if not res or not station:
             continue
         o = overrides_by_station.setdefault(station, {"notes": []})
-        o["notes"].append(f"{c['id']}: {c['what']} -- settled as {res!r}"
+        o["notes"].append(f"{c['id']}: {c['what']}; settled as {res!r}"
                           + (f" ({entry['note']})" if entry.get("note") else ""))
         if isinstance(res, dict):
             o.update({k: v for k, v in res.items() if k in ("latitude", "longitude", "date",
@@ -1016,7 +1016,7 @@ def build_plan(decisions: Dict[str, Any], triage: Dict[str, Any],
         if c.get("station") and not ((decisions.get("conflicts") or {}).get(c["id"]) or
                                      {}).get("resolution"):
             overrides_by_station.setdefault(c["station"], {"notes": []})["notes"].append(
-                f"{c['what']} -- the station list was kept")
+                f"{c['what']}; the station list was kept")
     return {"direct": direct, "dataset_overrides": overrides, "file_options": options,
             "left_out": left_out, "not_written": not_written,
             "entries": sorted(entries.values(), key=lambda e: (not e["include"],

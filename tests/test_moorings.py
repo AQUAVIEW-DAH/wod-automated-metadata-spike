@@ -11,14 +11,13 @@ from wod_etl.staging import (deployment, depth_from_name, group_moorings, moorin
                              read_instrument, serial_key, wet_window)
 from wod_etl.staging.mooring_layout import file_serial
 
-T0 = dt.datetime(2018, 9, 3, 6, 0, tzinfo=dt.timezone.utc).timestamp()   # 06:00 UTC
+T0 = dt.datetime(2018, 9, 3, 6, 0, tzinfo=dt.timezone.utc).timestamp()
 
 
 def write_instrument(path, *, hours=78.0, step=600, temperature=None, pressure=None,
                      absolute=False, salinity=False, depth_attr=None, lat=56.84, lon=-132.36,
                      extra=None, serial="100020"):
-    """Write an RBR/Sea-Bird-style instrument record; `temperature` and `pressure` are
-    functions of hours since T0."""
+    """Write an instrument record; `temperature` and `pressure` are functions of hours since T0."""
     t = T0 + np.arange(0, hours * 3600 + 1, step)
     h = (t - T0) / 3600
     with netCDF4.Dataset(path, "w") as ds:

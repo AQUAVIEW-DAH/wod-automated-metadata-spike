@@ -3,8 +3,7 @@
 Manual §I.D, pp.17–21. Machine-readable names are in
 [`wod_code_tables/table_2_datasets.json`](wod_code_tables/table_2_datasets.json).
 
-There are exactly eleven. XCTD, STD, DBT, rosette and Niskin are instruments, not datasets, and
-must be routed to one of these.
+XCTD, STD, DBT, rosette and Niskin are instruments, not datasets, and are routed to one of these.
 
 | Code | Holds | Typical source |
 | --- | --- | --- |
@@ -33,10 +32,9 @@ Manual p.19:
 - depth increment < 2 m → CTD
 - depth increment ≥ 2 m → OSD
 
-The same rule applies to XCTD, so `dataset_type="XCTD"` returning `OSD` is correct.
-`resolve_dataset` does not guess without an increment; it returns `unresolved`. The pipeline
-measures the median positive level spacing of each cast, so routing is decided per cast, not
-per run.
+The same rule applies to XCTD, so XCTD can resolve to `OSD`. Without an increment,
+`resolve_dataset` returns `unresolved` rather than guessing. The pipeline measures each cast's
+median positive level spacing, so routing is per cast, not per run.
 
 ### The three buoy/float datasets are distinguished by motion
 
@@ -46,11 +44,10 @@ per run.
 | PFL profiling float | yes: profiles up and down | yes |
 | DRB drifting buoy | no: thermistor chain hangs below | yes |
 
-An MRB "profile" is a set of concurrent readings from instruments at different depths, not an
-instrument descending (p.17). WOD keeps moored records as daily averages: records submitted at
-15-minute intervals were "re-converted as daily averages" in 2021 (p.14, note 6). `wod-etl`
-builds one profile a day, each instrument's daily mean at its depth
-([`staging/moorings.py`](../wod_etl/staging/moorings.py)). Each instrument's depth comes from:
+WOD keeps moored records as daily averages: records submitted at 15-minute intervals were
+"re-converted as daily averages" in 2021 (p.14, note 6). `wod-etl` builds one profile a day,
+each instrument's daily mean at its depth ([`staging/moorings.py`](../wod_etl/staging/moorings.py)).
+Each instrument's depth comes from:
 
 - the pressure it records;
 - a depth its file or file name states; or
@@ -61,22 +58,21 @@ An instrument none of these places is left out, not guessed.
 
 ### Discrete samples are OSD even when collected at the surface
 
-A lab-analysed bottle sample is OSD. Reserve SUR for continuous underway sensor streams. Table
-3a stores some variables (δ¹⁸O and the transient tracers) in OSD only, so routing discrete
-surface chemistry to SUR discards them.
+A lab-analysed bottle sample is OSD; SUR is for continuous underway sensor streams. Table 3a
+stores some variables (δ¹⁸O and the transient tracers) in OSD only, so routing discrete surface
+chemistry to SUR discards them.
 
 ### Plankton is OSD, but not through the profile path
 
-Table 2 lists plankton under OSD. That is true of the dataset but not of the record structure:
-plankton lives in the Biological Header and Taxa/Biomass records, where a measurement has an
-upper and lower depth. See [`plankton_biomass.md`](plankton_biomass.md),
-[`cast_structure.md`](cast_structure.md) for where it sits in a cast, and *What the profile
-path cannot carry* in
+Table 2 lists plankton under OSD, but not as profiles: plankton lives in the Biological Header
+and Taxa/Biomass records, where a measurement has an upper and lower depth. See
+[`plankton_biomass.md`](plankton_biomass.md), [`cast_structure.md`](cast_structure.md) for
+where it sits in a cast, and *What a profile cannot carry* in
 [`wod_code_tables/standardization_rules.md`](wod_code_tables/standardization_rules.md).
 
 ## What counts as a cruise, a cast, a profile, a station
 
-Manual p.17. These definitions decide how many output files you produce.
+Manual p.17.
 
 - Cruise: ISO 3166-1 country code + a cruise number unique only within that country code. The
   country is usually the ship's flag; for a float, buoy or glider, the operating institute's

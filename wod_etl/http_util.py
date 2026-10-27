@@ -13,7 +13,6 @@ from wod_etl.config import HTTP_BACKOFF_SECONDS, HTTP_RETRIES, HTTP_TIMEOUT, USE
 
 log = logging.getLogger(__name__)
 
-# Transient statuses worth retrying.
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 

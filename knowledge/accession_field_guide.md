@@ -2,33 +2,29 @@
 
 How submissions arrive in practice. A companion to
 [`wod_code_tables/standardization_rules.md`](wod_code_tables/standardization_rules.md), which
-covers what WOD requires. Each item below is a decision made while looking at the file; the
-pipeline cannot infer it.
+covers what WOD requires. Each item below is a judgement the pipeline cannot make.
 
 ## 1. What not to add
-
-Decide this before working on a folder: wasted staging is cheap, a wrong ingest is not.
 
 | Data | Why not |
 | --- | --- |
 | Currents / ADCP | WOD does not hold currents; no Table 3a code. Keep the navigation track (§1.1). |
-| Imagery (jpg, png, gif, mp4) | Not measurements. `process_accession` skips them (`config.NON_DATA_EXTENSIONS`); say in the report that the folder was imagery rather than leaving it in `skipped`. |
+| Imagery (jpg, png, gif, mp4) | Not measurements. `process_accession` skips them (`config.NON_DATA_EXTENSIONS`). |
 | Plankton biomass / taxonomy | Belongs in WOD through the Biological Header (Table 6a) and Taxa-Records (Table 7a), not the profile path. `wod-etl` writes Taxa-Records when the hauls can be located; see [`plankton_biomass.md`](plankton_biomass.md). Record gear, tow, mesh and preservative while the accession is open; only the submitter has them. |
 | Bathymetry / soundings | Bottom depth is secondary header 10, per-cast metadata, not a measured variable. A sounding track has no profile in it. Not output, but useful (§1.1). |
 | Nitrite, ammonium, CDOM, turbidity, PAHs, microplastics, eDNA | No Table 3a code. Nitrite is deliberately excluded (manual p.49). |
 | Fish and mammal catch, seabird counts | Not ocean profile variables. |
 | Anything entirely unanalysed | Count real values per column first. A file whose every cell reads `Not analyzed` has no data, whatever its columns say. |
 
-Documentation files (readmes, cruise reports, format specs) are where coordinates, units and
-sentinel legends are defined. Read them before deciding a dataset cannot be staged.
+Documentation files (readmes, cruise reports, format specs) are not data, but they define the
+coordinates, units and sentinel legends.
 
 ### 1.1 "Not a dataset" is not "not useful"
 
-These folders produce no profile of their own, but can be the best evidence about the casts
-you are adding. `classify_dataset` puts a `harvest` field on every exclusion, and
-`classify_accession` collects it per folder. Nothing is harvested automatically: matching two
-files on position and time is a judgement made during staging, with the source file cited in
-`notes`.
+These folders produce no profile, but can be the best evidence about the casts being added.
+`classify_dataset` puts a `harvest` field on every exclusion, and `classify_accession` collects
+it per folder. Nothing is harvested automatically: matching two files on position and time is a
+judgement made during staging, with the source file cited in `notes`.
 
 | Folder | What it can supply |
 | --- | --- |
@@ -117,11 +113,10 @@ fixed-width levels with no column names or units. Before staging:
   count; a mismatch means a truncated file.
 - An out-of-family value under a flag is a sentinel: `-5.00` in a 24–28 °C surface layer is
   not a measurement. Blank the value; keep the level and the flag.
-- Undocumented flags stay untranslated. If neither the readme nor the cruise report defines the
-  originator's flag alphabet, do not map it onto Table 12; flag codes are not standardised
-  between submitters. Carry the column through staging verbatim so it lands in
-  `unmapped_columns` and is reported, quote the per-cast distribution in `notes`, and let the
-  pipeline compute WOD's own flags independently.
+- Undocumented flags stay untranslated: flag codes are not standardised between submitters, so
+  an alphabet neither the readme nor the cruise report defines is not mapped onto Table 12.
+  Carry the column through verbatim (it lands in `unmapped_columns` and is reported) and quote
+  its per-cast distribution in `notes`. WOD's own flags are computed separately.
 
 ### Metadata blocks, separated by blank lines or not at all
 
@@ -146,8 +141,8 @@ the last rows of the sheet or in the readme. `clean_sentinels` handles the known
 `extra=` for the rest.
 
 `*DL` and `**ND` carry real information: the value lies below a stated threshold. Table 12 has
-no observed-level flag for this, so they still become missing, but quantify the loss in the
-report and never substitute the detection limit.
+no observed-level flag for this, so they become missing; `clean_sentinels` counts them, and
+the detection limit is never substituted.
 
 ## 4. One cast, many files
 
@@ -164,9 +159,8 @@ cols, rows, info = combine_on_key([(c1, r1), (c2, r2)], key="Depth (m)",
                                   key_aliases=["DEPTH", "depth_m"])
 ```
 
-Check `info["per_table"]`. A `matched_existing_keys` near zero means the files do not share a
-key: the join produced disjoint blocks instead of merged levels, which looks like success. A
-high match rate is what justifies the join.
+A `matched_existing_keys` near zero in `info["per_table"]` means the files share no key: the
+join produced disjoint blocks, not merged levels, which looks like success.
 
 The reverse, one file holding many casts, needs `group_rows`. A `Station` column with hundreds
 of rows is the sign.
@@ -190,9 +184,8 @@ few hundred metres. Before trusting a match, check that the track moves across t
 compared, and that the cast time is not inside a gap in the track.
 
 **A track test proves a shared clock, not the zone.** Both files may share the same non-UTC
-clock. When nothing in the accession names a zone, say so in `notes` and in the report, state
-which convention you recorded (for example, UTC as an assumption), and give the evidence you
-have.
+clock. When nothing in the accession names a zone, say so in `notes` and the report, with the
+convention recorded (for example, UTC as an assumption) and the evidence.
 
 **A four-digit `HHMM` beside a date corrupts silently.** `strptime` reads `2102` under
 `%H%M%S` as 21:00:02 instead of failing. `staging.parse_timestamp` punctuates 4- and 6-digit
@@ -221,10 +214,9 @@ per-observation time.
 `read_any` reads NetCDF and HDF5, with or without an extension: one profile per file, many
 profiles per file (Argo), and CF ragged arrays.
 
-If a file seems to have no metadata, check its variables. Originators often store metadata as
-variables, not attributes: a `station`, `cruise`, `platform` or `date` array of length
-`n_casts` beside the data. A reader that only walks `ncattrs()` drops it. Check both; a scalar
-or all-identical variable is usually metadata, not a measurement.
+Originators often store metadata as variables, not attributes: a `station`, `cruise`,
+`platform` or `date` array of length `n_casts` beside the data, which a reader walking only
+`ncattrs()` drops. A scalar or all-identical variable is usually metadata, not a measurement.
 
 ## 7. The intermediate format, and the single conversion routine
 
@@ -252,6 +244,6 @@ must be told:
 - Depth is not a variable: `z` is the vertical axis. WOD code 25 is Pressure, a separate
   measurement that may also be present.
 
-Not yet done: interpolation to standard levels (Reiniger-Ross, p.56), the density check that
+Not done: interpolation to standard levels (Reiniger-Ross, p.56), the density check that
 would set depth flag 2, and basin-aware range bounds. See *Known limitations* in the top-level
 README.

@@ -3,10 +3,6 @@
 The table lists serial numbers with a stated depth or a position along the line from a
 reference point. A position becomes a depth only where a pressure-recording instrument on
 the same line fixes the reference point; anything that cannot be placed says why.
-
-    from wod_etl.staging.mooring_layout import find_layout, place_instruments
-    layout = find_layout(folder_files, members)
-    placed = place_instruments(layout, members)          # {file name: {"depth", "how", ...}}
 """
 import csv
 import io
@@ -34,14 +30,14 @@ _UNIT = re.compile(r"[\(\[]\s*([^\)\]]*)\s*[\)\]]")
 _FEET = {"ft", "feet", "foot"}
 _SEPARATOR = re.compile(r"^\s*\|?[\s\-+:=|]*-[\s\-+:=|]*\|?\s*$")
 _TEXT_SUFFIXES = {".txt", ".md", ".org", ".rst", ".csv", ".tsv", ".text", ""}
-# A depth in a file name: `T_45m.nc`, `SBE56-12.5m_SN1234.csv`.
+# A depth in a file name: `T_45m.nc`.
 _NAME_DEPTH = re.compile(r"(?:^|[_\-. ])(\d{1,5}(?:\.\d+)?)\s?m(?=$|[_\-. ])", re.I)
 _FILE_SERIAL = re.compile(r"(?:^|[_\-. ])(?:sn|s/n|serial)[_\-. ]?0*(\d+)", re.I)
 
 
 def serial_key(text: Any) -> Optional[str]:
     """A serial number as compared: its last run of two or more digits, without leading
-    zeros -- '07819', 'SN07819' and '37SM56061-7819' are one instrument."""
+    zeros ('07819', 'SN07819' and '37SM56061-7819' are one instrument)."""
     runs = re.findall(r"\d{2,}", str(text or ""))
     return str(int(runs[-1])) if runs else None
 
@@ -182,8 +178,7 @@ def read_layout(path, name: Optional[str] = None) -> Dict[str, Any]:
 def find_layout(candidates: Sequence[Tuple[str, Any]], members: Sequence[Dict[str, Any]]
                 ) -> Optional[Dict[str, Any]]:
     """Of `(name, path)` text files, the instrument table naming the most of `members` (each
-    `{"serial"}`), when it names at least two of them -- or one, when the mooring is that
-    one instrument."""
+    `{"serial"}`), if it names at least two (one, for a single-instrument mooring)."""
     serials = {m.get("serial") for m in members if m.get("serial")}
     best, score = None, 0
     for name, path in candidates:
@@ -242,7 +237,7 @@ def place_instruments(layout: Dict[str, Any], members: Sequence[Dict[str, Any]]
     file states) or None, and `label` how the sentences name it (else `name`).
 
     Returns `{"placed": {name: {"depth", "how", "detail", "short"}}, "unplaced": {name:
-    why}, "problems": [...]}` -- `how` is "stated", "position" or "beside"; `detail` says
+    why}, "problems": [...]}`. `how` is "stated", "position" or "beside"; `detail` says
     where it came from in a sentence, `short` in a few words."""
     source = layout["file"]
     rows = layout["rows"]
@@ -395,7 +390,7 @@ def place_instruments(layout: Dict[str, Any], members: Sequence[Dict[str, Any]]
                 del wanted[row]
 
     # Each placement must sit between the instruments listed above and below it that know
-    # their depth -- a table read wrong puts one out of order.
+    # their depth; a table read wrong puts one out of order.
     if order is not None:
         for name, p in list(placed.items()):
             row = next(r for r, m in member_of.items() if m["name"] == name)

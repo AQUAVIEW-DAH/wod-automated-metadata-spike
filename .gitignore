@@ -1,6 +1,4 @@
-# Working data — provenance and outputs of a run, not source.
-# No placeholders needed: config.py creates raw/, staging/, processed/ and
-# staging/manifests/ at import, so a fresh clone builds them itself.
+# Working data, not source; config.py creates its folders at import.
 /data/
 
 .venv/

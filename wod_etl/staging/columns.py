@@ -1,11 +1,8 @@
 """Rename staged columns without changing the WOD code, unit or scale the name carries.
 
 A column name is the only source of its variable code, unit and scale, so a rename that
-drops any of them is refused by default. For a vendor name that recurs, add an alias to
+drops any of them is refused by default. A vendor name that recurs belongs in
 `VARIABLE_ALIASES` instead.
-
-    from wod_etl.staging import rename_columns
-    cols, audit = rename_columns(cols, {"latitude": "Latitude"})
 """
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,9 +23,9 @@ def rename_columns(
     `resolve_column`. Each rename must keep the WOD code, the unit (when `require_unit`)
     and the scale, and must not collide with another column.
 
-    `strict=True` returns the columns unchanged if any rename fails. `strict=False` applies
-    all non-colliding renames and sets `applied_with_problems`; use it for naming headerless
-    `col_0 ... col_N` columns. `audit["renames"]` records every rename, applied or refused.
+    `strict=True` returns the columns unchanged if any rename fails; `strict=False` applies
+    all non-colliding renames and sets `applied_with_problems`. `audit["renames"]` records
+    every rename, applied or refused.
     """
     original = list(columns)
     entries: List[Dict[str, Any]] = []
@@ -53,8 +50,8 @@ def rename_columns(
 
     if failed and strict:
         audit["note"] = (f"{len(failed)} of {len(entries)} rename(s) would change what a "
-                         f"column means, so nothing was applied. Fix them, or pass "
-                         f"strict=False if you accept the loss and will record it.")
+                         f"column means, so nothing was applied; strict=False applies "
+                         f"them anyway.")
         return original, audit
 
     # Unresolved queries and collisions are never applied, even with strict=False.
@@ -146,7 +143,7 @@ def suggest_column_names(columns: List[str],
     by_code: Dict[int, List[str]] = {}
     out: List[Dict[str, Any]] = []
 
-    # Index the original header: the units row is positionally aligned to it, blanks included.
+    # The units row aligns with the header by position, blanks included.
     for i, col in enumerate(columns):
         if not col or not col.strip():
             continue
@@ -166,7 +163,7 @@ def suggest_column_names(columns: List[str],
     for entry in out:
         if entry["wod_code"] in collisions and entry["suggested"] is None:
             entry["why"] = (f"WOD code {entry['wod_code']} is claimed by "
-                            f"{collisions[entry['wod_code']]} -- a primary and secondary "
+                            f"{collisions[entry['wod_code']]}, a primary and secondary "
                             f"sensor. No single canonical name keeps both.")
 
     return {"columns": out,

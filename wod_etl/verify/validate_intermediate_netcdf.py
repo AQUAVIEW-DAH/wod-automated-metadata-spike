@@ -15,7 +15,7 @@ REQUIRED_GLOBALS = ["Conventions", "featureType", "wod_dataset_type", "WOD_versi
 
 
 def validate_intermediate_netcdf(nc_file_path: str) -> Dict[str, Any]:
-    """Return a pass/fail report with explicit error and warning lists."""
+    """A pass/fail report with error and warning lists."""
     errors: List[str] = []
     warnings: List[str] = []
     checks: List[str] = []
@@ -109,7 +109,7 @@ def _check_coordinates(ds, errors, warnings, checks):
         # An all-fill depth axis makes the file useless; usually the depth column did not map.
         if z.size and finite.size == 0:
             errors.append("'z' is entirely missing: the file has no usable depth axis. "
-                          "The depth column probably did not map -- check the contract's "
+                          "The depth column probably did not map; check the contract's "
                           "unmapped_columns and missing_required_coordinates.")
         elif np.any(np.isnan(z)):
             warnings.append(f"'z' is missing for {int(np.isnan(z).sum())} of {z.size} level(s)")
@@ -141,7 +141,7 @@ def _check_ragged(ds, errors, warnings, checks):
             warnings.append(f"'{name}' is entirely missing: the source column held no "
                             f"usable values")
 
-    # Every measured variable and z must live on the SAME observation dimension.
+    # Every measured variable and z must share one observation dimension.
     offenders = []
     for name in data_vars + (["z"] if "z" in ds.variables else []):
         dims = ds.variables[name].dimensions

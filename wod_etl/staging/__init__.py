@@ -1,7 +1,6 @@
 """Phase 0 — Staging: build pipeline-ready copies of files that cannot be read as they are.
 
-Primitives for joining station lists, folding header rows, deriving depth and splitting
-tables per station. Compose them per accession; `wod-etl run` uses them for common shapes.
+Primitives composed per accession; `wod-etl run` uses them for common shapes.
 """
 from wod_etl.staging.parse import parse_coordinate, parse_timestamp, pressure_to_depth
 from wod_etl.staging.tables import (read_table, clean_sentinels, group_rows,

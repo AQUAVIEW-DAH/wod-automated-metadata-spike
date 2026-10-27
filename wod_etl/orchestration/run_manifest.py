@@ -125,7 +125,7 @@ def mark(manifest: Dict[str, Any], key: str, status: str, **fields) -> Dict[str,
 
 
 def summarize(manifest: Dict[str, Any]) -> Dict[str, Any]:
-    """Counts, failure rate, and the failures themselves -- what a run should report."""
+    """Counts, failure rate, outputs and failures of a run."""
     items = list(manifest["items"].values())
     counts: Dict[str, int] = {}
     for it in items:

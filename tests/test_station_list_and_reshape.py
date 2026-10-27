@@ -94,7 +94,7 @@ class TestReadStationList:
         p.write_text("Station,Lat,Lon,Date\nA1,10,20,2020-01-01\nA1,10.1,20,2020-01-05\n")
         stations, info = read_station_list(p)
         assert set(stations) == {"a1", "a1#2"}
-        assert info["duplicates"] and "AND date" in info["note"]
+        assert info["duplicates"] and "station and date" in info["note"]
 
     def test_a_zone_in_the_header_is_recorded(self, tmp_path):
         p = tmp_path / "s.csv"
@@ -186,7 +186,6 @@ class TestMeltMatrix:
         assert len(rows) == 8 and info["blank_policy"] == "zero"
 
 
-# ------------------------------------------------------------ reconciliation
 from wod_etl.staging import check_track, distance_km, reconcile_stations  # noqa: E402
 
 LINE = {str(i): {"station": str(i), "latitude": 21.0 - 0.5 * (i - 1),
@@ -252,7 +251,6 @@ class TestCheckTrack:
         assert distance_km(0, 0, 1, 0) == pytest.approx(111.19, abs=0.05)
 
 
-# ------------------------------------------------------------------ PDF tables
 from pathlib import Path  # noqa: E402
 
 from wod_etl.staging import extract_pdf_rows, write_staged_table  # noqa: E402

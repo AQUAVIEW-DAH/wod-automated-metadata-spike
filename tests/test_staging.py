@@ -209,7 +209,6 @@ class TestCombineOnKey:
         assert rows == [["0", "3.2", "320"]]
 
     def test_disjoint_keys_are_visible_in_the_report(self):
-        """A join that shares no keys must show in the report."""
         _, rows, info = combine_on_key([
             (["Depth (m)", "Temp"], [["0", "3.2"]]),
             (["Depth (m)", "Oxygen"], [["999", "320"]]),
@@ -286,8 +285,6 @@ class TestCompactTimeFields:
 
 
 class TestReadTableDelimiters:
-    """read_table defaults to commas and sniffs other delimiters when asked."""
-
     def test_comma_is_still_the_default(self, tmp_path):
         p = tmp_path / "c.csv"
         p.write_text("Depth (m),Temp (deg C)\n0,12.1\n10,11.4\n")
@@ -308,7 +305,7 @@ class TestReadTableDelimiters:
         """Pins the comma default."""
         p = tmp_path / "c.dat"
         p.write_text("Depth (m)\tTemp (deg C)\n0\t12.1\n10\t11.4\n")
-        cols, _, _ = read_table(p)                      # default comma
+        cols, _, _ = read_table(p)
         assert len(cols) == 1
 
 

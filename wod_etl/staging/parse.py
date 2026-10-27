@@ -1,13 +1,13 @@
-"""Parsing helpers for the forms coordinates, times and depths actually arrive in."""
+"""Parse coordinates and timestamps as originators write them, and depth from pressure."""
 import math
 import re
 from typing import Any, Optional
 
-# 62.16 | -170.5 | "62.16 N" | "33.5 S"
+# 62.16 | "33.5 S"
 _DECIMAL = re.compile(r"^\s*([-+]?\d+(?:\.\d+)?)\s*([NSEW])?\s*$", re.I)
-# "62 9.6 N" | "170 30.01 W"
+# "62 9.6 N"
 _DEG_MIN_SPACE = re.compile(r"^\s*([-+]?\d+)[\s:]+(\d+(?:\.\d+)?)\s*([NSEW])?\s*$", re.I)
-# "64-05.8454N" | "170-30.01 W" | "62-09.60"
+# "64-05.8454N"
 _DEG_MIN_DASH = re.compile(r"^\s*([-+]?\d+)\s*-\s*(\d+(?:\.\d+)?)\s*([NSEW])?\s*$", re.I)
 # "62 09 36 N" degrees, minutes, seconds
 _DMS = re.compile(r"^\s*([-+]?\d+)[\s:]+(\d+)[\s:]+(\d+(?:\.\d+)?)\s*([NSEW])?\s*$", re.I)
@@ -44,9 +44,6 @@ def _signed(magnitude: float, sign_source: Any, hemisphere: Optional[str]) -> fl
 def parse_coordinate(value: Any, minutes: Any = None, hemisphere: Any = None) -> Optional[float]:
     """Return signed decimal degrees, or None if the value cannot be read.
 
-    Accepted forms:
-
-        parse_coordinate(62.16)                  ->   62.16
         parse_coordinate("170 30.01 W")          -> -170.500167
         parse_coordinate("64-05.8454N")          ->   64.097423
         parse_coordinate("62 09 36 N")           ->   62.16
@@ -121,8 +118,7 @@ def _normalise_month_text(text: str) -> str:
 
 
 def _punctuate_time(t: str) -> str:
-    """'2102' -> '21:02', '031903' -> '03:19:03', '08 30' -> '08:30'. Anything else is
-    returned untouched."""
+    """'2102' -> '21:02', '031903' -> '03:19:03', '08 30' -> '08:30'; anything else as is."""
     m = re.fullmatch(r"(\d{1,2})\s+(\d{2})(?:\s+(\d{2}))?", t)
     if m:
         return ":".join(x.zfill(2) for x in m.groups() if x)
@@ -138,8 +134,7 @@ def parse_timestamp(value: Any, time_value: Any = None, year: Any = None):
     """Return a datetime, or None. `time_value` is a separate time column.
 
     Accepts single-digit months and days ('2023/6/1') and month names ('Nov. 09, 2015').
-    `year` is appended when the date has no four-digit year: `parse_timestamp("Nov. 09",
-    year=2015)`.
+    `year` is appended when the date has no four-digit year.
     """
     import datetime as dt
 
@@ -171,7 +166,7 @@ def parse_timestamp(value: Any, time_value: Any = None, year: Any = None):
 def pressure_to_depth(pressure_dbar: float, latitude_deg: float) -> float:
     """Pressure in decibars to depth in metres (UNESCO 1983, Fofonoff & Millard).
 
-    Depends on latitude through gravity, so pass the cast's latitude.
+    Gravity depends on latitude, so pass the cast's own.
     """
     x = math.sin(math.radians(latitude_deg)) ** 2
     gravity = 9.780318 * (1.0 + (5.2788e-3 + 2.36e-5 * x) * x) + 1.092e-6 * pressure_dbar

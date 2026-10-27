@@ -1,15 +1,8 @@
 """Reshape tables whose layout is not one row per level and one column per variable.
 
 `pivot_long` turns long format (`StNo, parm, depth, value`) into one column per variable;
-`melt_matrix` turns a matrix sheet (taxa by samples) into one row per cell.
-
-    from wod_etl.staging import read_table, pivot_long, melt_matrix
-
-    tables = [read_table(p)[:2] for p in files]
-    cols, rows, info = pivot_long(tables, keys=["StNo", "depth"], variable="parm",
-                                  value="value", key_aliases={"depth": ["dep"]})
-
-Neither raises. Both return `(columns, rows, info)`; `info` reports conflicts and blanks.
+`melt_matrix` turns a matrix sheet (taxa by samples) into one row per cell. Neither raises;
+both return `(columns, rows, info)`.
 """
 import collections
 import re
@@ -50,11 +43,11 @@ def pivot_long(
     key_aliases: Optional[Dict[str, List[str]]] = None,
     columns: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[str], List[List[str]], Dict[str, Any]]:
-    """Pivot long-format rows -- one row per (keys, variable) -- into one row per key.
+    """Pivot long-format rows (one per key and variable) into one row per key.
 
     `tables` is one `(columns, rows)` pair or a list of them (e.g. one file per variable).
     `keys` names the columns identifying a level (`["StNo", "depth"]`); `key_aliases` gives
-    their other spellings (`{"depth": ["dep"]}`). Numeric keys are compared as numbers.
+    their other spellings. Numeric keys are compared as numbers.
 
     `columns` maps a variable's cell text to its column name, which is where the unit goes:
     `{"Temperature": "Temperature (deg C)"}`. Unnamed variables keep their cell text.
@@ -130,7 +123,7 @@ def pivot_long(
         "identical_repeats": repeats,
         "per_table": per_table,
         "note": ("Two different values for the same level and variable: the first was "
-                 "kept. Find out which is right before staging." if conflicts else None),
+                 "kept, and `conflicts` lists both." if conflicts else None),
     }
 
 
@@ -152,11 +145,10 @@ def melt_matrix(
         Calanoida,Acartiidae,Acartia danae,adult,,8,,                  <- data
         Calanoida,,Acartia negligens,adult,100,16,,84
 
-    `header_rows` is the number of header rows; `label_columns` names the leading label
-    columns (`["Order", "Family", "Taxon", "Stage"]`); `header_names` names what each header
-    row holds (`["Station", "Mesh"]`). `fill_across` carries a header value right over
-    blanks (merged cells); `fill_down` names label columns whose blank means "same as above".
-    `thousands` strips a thousands separator from values (`"1,700"`).
+    `label_columns` names the leading label columns (`["Order", "Family", "Taxon", "Stage"]`)
+    and `header_names` what each header row holds (`["Station", "Mesh"]`). `fill_across`
+    carries a header value right over blanks (merged cells); `fill_down` names label columns
+    whose blank means "same as above". `thousands` strips a separator from values (`"1,700"`).
 
     A blank value cell usually means "not found", not zero: `blank="absent"` writes no row
     and counts it in `info["blank_cells"]`; `blank="zero"` writes 0.
@@ -224,6 +216,6 @@ def melt_matrix(
             info["cells_written"] += 1
     if blank == "absent":
         info["note"] = (f"{info['blank_cells']} blank cell(s) were read as 'not found in "
-                        f"this sample' and written as no row. If the readme says a blank is "
-                        f"'not counted', that is different -- say which.")
+                        f"this sample' and written as no row. That is wrong if the readme "
+                        f"says a blank means 'not counted'.")
     return out_cols, out_rows, info

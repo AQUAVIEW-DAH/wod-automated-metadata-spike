@@ -21,13 +21,13 @@ The two steps:
                               included file as WOD NetCDF, and verify the output.
 
 exit codes:
-  0    run: decisions written for review -- confirm: written and verified, or nothing to
+  0    run: decisions written for review; confirm: written and verified, or nothing to
        write
-  1    a stage failed, or a file could not be written -- the message says what, why and how
-       to fix it
-  2    confirm: decisions needed -- edit decisions.toml (or run again), then confirm again
+  1    a stage failed, or a file could not be written (the message says what, why and how
+       to fix it)
+  2    confirm: decisions needed; edit decisions.toml (or run again), then confirm again
   3    confirm: written, but verification flagged the output (see report.md)
-  130  interrupted -- run the same command again to continue
+  130  interrupted; run the same command again to continue
 
 Each command logs to data/runs/<accession>/run.log (and events.jsonl) and summarises the run
 in report.md. Running a command again continues from where it stopped.
@@ -48,8 +48,8 @@ def _print_problems(problems, out=sys.stdout) -> None:
             print(textwrap.indent(textwrap.fill(f"why: {p['why']}", 92), "     "), file=out)
         print(textwrap.indent(textwrap.fill(f"fix: {p['how_to_fix']}", 92), "     "), file=out)
     if len(blocking) > MAX_PRINTED:
-        print(f"\n  ... and {len(blocking) - MAX_PRINTED} more -- all of them are in "
-              f"report.md", file=out)
+        print(f"\n  ... and {len(blocking) - MAX_PRINTED} more (all of them are in "
+              f"report.md)", file=out)
     if other:
         print(f"\n  also ({len(other)} not blocking): "
               + "; ".join(p["what"] for p in other[:6])
@@ -105,7 +105,7 @@ def cmd_run(args) -> int:
         print(f"\nDecisions written: {paths.get('decisions')}")
         print(f"  {plan.get('included_files', 0)} file(s) to include, "
               f"{len((plan.get('plan') or {}).get('left_out') or [])} to leave out.")
-        print("Review each entry -- what the file holds, include or not, and why -- and change "
+        print("Review each entry (what the file holds, include or not, and why) and change "
               "any you\ndisagree with.")
         blocking = [p for p in result["problems"] if p.get("blocking")]
         if blocking:
@@ -228,7 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_status)
     w = sub.add_parser("web", help="run and confirm accessions in a browser")
     w.add_argument("--host", default="127.0.0.1",
-                   help="address to serve on (default 127.0.0.1: this machine only -- there "
+                   help="address to serve on (default 127.0.0.1: this machine only; there "
                         "is no login)")
     w.add_argument("--port", type=int, default=8000, help="port (default 8000)")
     w.set_defaults(func=cmd_web)

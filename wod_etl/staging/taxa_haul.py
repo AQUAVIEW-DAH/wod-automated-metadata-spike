@@ -30,9 +30,8 @@ log = logging.getLogger(__name__)
 
 HAUL_MARKER = "Record type: WOD taxa-records"
 
-# Taxa-Record columns, by Table 7a field id. The column name is matched case-insensitively
-# with any bracketed unit removed. Field 1 (variable number) is not a column: it is resolved
-# from the taxon name.
+# Taxa-Record columns by Table 7a field id, matched on the lower-cased name without its
+# bracketed unit. Field 1 (variable number) is resolved from the taxon name.
 RECORD_COLUMNS: Dict[int, str] = {
     2: r"upper[\s_]*depth|depth[\s_]*(?:from|top|min)",
     3: r"lower[\s_]*depth|depth[\s_]*(?:to|bottom|max)",

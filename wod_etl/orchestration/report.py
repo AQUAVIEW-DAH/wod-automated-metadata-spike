@@ -109,7 +109,7 @@ def _wod_qc() -> bool:
 
 
 def _items(value: Any, limit: int = 12) -> List[str]:
-    """A dict or list as indented bullet lines, longest-first for counts, capped at `limit`."""
+    """A dict or list as indented bullet lines, largest count first, capped at `limit`."""
     if isinstance(value, dict):
         entries = list(value.items())
         if all(isinstance(v, int) for _, v in entries):
@@ -131,7 +131,7 @@ def _cell(text: Any) -> str:
 
 def render(report: Dict[str, Any]) -> str:
     cmd = report["command"]
-    lines = [f"# Accession {report['accession']} -- {report['status']}", "",
+    lines = [f"# Accession {report['accession']} — {report['status']}", "",
              f"Input: `{report['input']}`  ",
              f"Last command: `wod-etl {cmd}`, {report.get('updated_at')} (invocation "
              f"{report.get('invocation')}, git {report.get('git')}, code {report.get('code')}), "
@@ -158,7 +158,7 @@ def render(report: Dict[str, Any]) -> str:
     if other:
         lines += ["## Notes and warnings (they do not stop anything)", ""]
         for p in other:
-            lines.append(f"- {p['what']} -- {p['how_to_fix']}")
+            lines.append(f"- {p['what']}; {p['how_to_fix']}")
         lines.append("")
 
     lines += _render_decisions(report)
@@ -350,7 +350,7 @@ def _render_output(report: Dict[str, Any]) -> List[str]:
                     f"values are possible (Appendix 11 ranges, fill, copies, depth axis).",
                   "- WOD quality control (Table 12 flags): "
                   + ("run here." if report.get("wod_qc") else
-                     "not run here -- no WOD flags are set; WOD applies its own QC "
+                     "not run here, so no WOD flags are set; WOD applies its own QC "
                      "downstream (set WOD_RUN_QC=1 to run it here). The originator's own "
                      "flags, where the source has them, are carried verbatim."), ""]
         if v.get("variables"):
@@ -366,7 +366,7 @@ def _render_output(report: Dict[str, Any]) -> List[str]:
             lines.append("")
         for f in v.get("findings") or []:
             lines.append(f"- [{f['severity']}] {f.get('variable') or f.get('file')}: "
-                         f"{f['evidence']} -- {f['action']}")
+                         f"{f['evidence']}; {f['action']}")
         if v.get("findings"):
             lines.append("")
     return lines

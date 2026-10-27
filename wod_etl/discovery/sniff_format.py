@@ -1,8 +1,7 @@
 """Identify a file's format from its bytes rather than its name.
 
-`reader` names the strategy `read_any` dispatches to; `format_family` describes the file, and
-several families can share one reader. Never raises: an unreadable file comes back with
-`readable: False`.
+`reader` names the `read_any` strategy; `format_family` describes the file (several families
+share a reader). Never raises: an unreadable file has `readable: False`.
 """
 import csv
 import re
@@ -14,18 +13,18 @@ from wod_etl.config import TEXT_ENCODINGS
 # Leading bytes that identify a container outright.
 MAGIC = [
     (b"\x89HDF\r\n\x1a\n", "netcdf4_hdf5", "netcdf",
-     "HDF5 container -- NetCDF-4 and plain HDF5 share it"),
+     "HDF5 container (NetCDF-4 and plain HDF5 share it)"),
     (b"CDF\x01", "netcdf_classic", "netcdf", "NetCDF classic (CDF-1)"),
     (b"CDF\x02", "netcdf_64bit_offset", "netcdf", "NetCDF 64-bit offset (CDF-2)"),
     (b"CDF\x05", "netcdf_64bit_data", "netcdf", "NetCDF 64-bit data (CDF-5)"),
     (b"PK\x03\x04", "zip_container", "spreadsheet",
-     "ZIP container: .xlsx/.ods are ZIPs, but so is an actual archive -- see `note`"),
+     "ZIP container: .xlsx/.ods are ZIPs, but so is an actual archive"),
     (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "ole2_container", "spreadsheet",
      "OLE2 container: legacy .xls/.doc"),
     (b"%PDF", "pdf", "none", "PDF document"),
-    (b"\x1f\x8b", "gzip", "none", "gzip stream -- decompress before reading"),
-    (b"BZh", "bzip2", "none", "bzip2 stream -- decompress before reading"),
-    (b"\xfd7zXZ\x00", "xz", "none", "xz stream -- decompress before reading"),
+    (b"\x1f\x8b", "gzip", "none", "gzip stream: decompress before reading"),
+    (b"BZh", "bzip2", "none", "bzip2 stream: decompress before reading"),
+    (b"\xfd7zXZ\x00", "xz", "none", "xz stream: decompress before reading"),
     (b"SQLite format 3\x00", "sqlite", "none", "SQLite database"),
     (b"\x00\x01\x00\x00Standard Jet DB", "access_db", "none", "MS Access database"),
     # Images are documentation, never a table.
@@ -39,33 +38,28 @@ MAGIC = [
 
 SNIFF_BYTES = 65536
 
-# Sea-Bird .cnv markers. Its header carries the column names:
-# `# name 0 = prDM: Pressure, Digiquartz [db]`.
+# Sea-Bird .cnv markers; column names are in `# name 0 = prDM: Pressure, Digiquartz [db]` lines.
 _CNV_MARKERS = ("*END*", "# name 0 =", "* Sea-Bird", "* SBE ")
 
-# Delimiters to test, in tie-break order. Whitespace is handled separately because it also
-# separates fixed-width columns.
+# Delimiters in tie-break order. Whitespace is handled apart: it also separates fixed-width columns.
 _DELIMITERS = [(",", "comma"), ("\t", "tab"), (";", "semicolon"), ("|", "pipe")]
 
-# Two data rows is the fewest that can agree on a shape. Fixed-width needs more, since
-# column boundaries inferred from few rows are noise.
+# Two rows are the fewest that can agree on a shape; fixed-width boundaries from few rows are noise.
 MIN_CONSISTENT_ROWS = 2
 MIN_ROWS_FOR_FIXED_WIDTH = 4
 
 # Below this share of numeric fields, a block of lines is prose (readme, log), not a table.
 MIN_NUMERIC_FIELD_FRACTION = 0.5
 
-# A delimited table gets a lower bar: a station list mixes ids, coordinates such as
-# '49-46.9858S' and dates, of which only some parse as floats.
+# Lower bar for delimited tables: a station list mixes ids, coordinates ('49-46.9858S') and dates.
 MIN_NUMERIC_FIELD_FRACTION_DELIMITED = 0.2
 
 
 def sniff_format(path: str, num_bytes: int = SNIFF_BYTES) -> Dict[str, Any]:
     """Identify a file's format from its content.
 
-    Returns {"format_family", "reader", "confidence", "readable", "evidence", ...}.
-    `reader` is one of: "netcdf", "spreadsheet", "delimited", "fixed_width", "sea_bird_cnv",
-    "none". "none" means there is no tabular data to read, not that the file is broken.
+    Returns {"format_family", "reader", "confidence", "readable", "evidence", ...}. A `reader`
+    of "none" means there is no table to read, not that the file is broken.
     """
     p = Path(path)
     if not p.exists():
@@ -103,7 +97,6 @@ def sniff_format(path: str, num_bytes: int = SNIFF_BYTES) -> Dict[str, Any]:
     return {**_sniff_text(text, size), "encoding": encoding, "size_bytes": size}
 
 
-# ----------------------------------------------------------------- text
 def _sniff_text(text: str, size: int) -> Dict[str, Any]:
     lines = [l for l in text.splitlines() if l.strip()]
     if not lines:
@@ -130,7 +123,7 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
         return _result("sea_bird_cnv", "sea_bird_cnv", "high",
                        evidence=[f"Sea-Bird marker {m!r}" for m in _CNV_MARKERS if m in text],
                        note="Column names live in the '# name N = ' header lines, not in a "
-                            "header row. Units are in that header too -- fold them into the "
+                            "header row. Units are in that header too; fold them into the "
                             "name so unit detection can see them.")
 
     structured = _structured_text(text)
@@ -150,14 +143,14 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
                            delimiter=char, delimiter_name=name, row_consistency=1.0,
                            single_data_row=True,
                            note="One data row. If the folder holds many files like this, "
-                                "they are levels of one cast rather than one cast each -- "
+                                "they are levels of one cast rather than one cast each: "
                                 "combine them before staging.")
 
     if len(body) < MIN_CONSISTENT_ROWS:
         return _result("unstructured_text", "none", "medium", readable=False,
                        evidence=[f"only {len(body)} line(s) look like data rows"],
-                       note="Readme, log or metadata. It may still hold coordinates or a "
-                            "sentinel legend -- read it during triage, do not process it.")
+                       note="Readme, log or metadata: not processed, but it may hold "
+                            "coordinates or a sentinel legend.")
 
     delim = _best_delimiter(body)
     numeric = (_numeric_field_fraction(body, delim[0]) if delim else _numeric_fraction(body))
@@ -180,9 +173,9 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
                                  f"their fields are numeric",
                                  "no delimiter splits them consistently" if not delim
                                  else f"delimiter {delim[1]} found but the content is prose"],
-                       note="Prose with numbers in it -- a readme, a cruise log, a station "
-                            "narrative. Read it during triage: coordinates and sentinel "
-                            "legends live in files like this. Do not process it as data.")
+                       note="Prose with numbers in it (a readme, a cruise log, a station "
+                            "narrative): not data, but it may hold coordinates or sentinel "
+                            "legends.")
 
     fw = _fixed_width_columns(body)
     if fw:
@@ -192,8 +185,8 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
                        colspecs=fw,
                        note="Boundaries are inferred from where every sampled row has a "
                             "space. Verify them against the accession's format description "
-                            "before trusting the split -- a column that is full in the "
-                            "sample and empty later will shift every field after it.")
+                            "before trusting the split: a column that is full in the "
+                            "sample and empty later shifts every field after it.")
 
     return _result("ragged_text", "delimited", "low",
                    evidence=["numeric rows, but no delimiter and no stable column boundary"],
@@ -220,12 +213,11 @@ def _structured_text(text: str) -> Optional[Dict[str, Any]]:
             return _result("json", "none", "medium", readable=False,
                            evidence=["parses as JSON, or carries quoted keys"],
                            note="Metadata sidecar, or data in a shape only its own "
-                                "submitter documents. Read the keys, then stage a table "
-                                "from it.")
+                                "submitter documents: stage a table from it to process it.")
     if lead == "<":
         family = "xml"
-        note = ("XML. In an NCEI accession this is usually ISO 19115 metadata -- read it "
-                "for coordinates, instrument and time coverage, not for measurements.")
+        note = ("XML. In an NCEI accession this is usually ISO 19115 metadata: a source of "
+                "coordinates, instrument and time coverage, not of measurements.")
         return _result(family, "none", "medium", readable=False,
                        evidence=["text begins with an XML/SGML tag"], note=note)
     return None
@@ -248,10 +240,7 @@ def _numeric_fraction(rows: List[str]) -> float:
 
 
 def _numeric_field_fraction(rows: List[str], char: str) -> float:
-    """Share of delimited fields that are numbers or coordinates, splitting as csv does.
-
-    Coordinates such as `142°18'E` or `49-46.9858S` count as numeric.
-    """
+    """Share of csv-split fields that are numbers or coordinates such as `49-46.9858S`."""
     from wod_etl.staging.parse import parse_coordinate
 
     total = numeric = 0
@@ -418,8 +407,7 @@ def _disambiguate_zip(path: Path) -> Dict[str, Any]:
                     "not process the archive itself."}
 
 
-# Families that are documentation or containers by nature, which callers skip. Any other
-# unreadable file is a failure, not a silent skip.
+# Documentation and container families, which callers skip; any other unreadable file is a failure.
 DOCUMENT_FAMILIES = {"pdf", "gzip", "bzip2", "xz", "sqlite", "access_db", "archive_zip",
                      "json", "xml", "zip_container", "image", "word_document", "presentation"}
 

@@ -1,7 +1,4 @@
-"""Format sniffing, multi-format reading, and classifying a file's dataset from its content.
-
-Files that cannot become a WOD profile are skipped with a stated reason.
-"""
+"""Format sniffing, multi-format reading, and classifying a file's dataset from its content."""
 import numpy as np
 import pytest
 
@@ -12,7 +9,6 @@ from wod_etl.orchestration import process_accession
 netCDF4 = pytest.importorskip("netCDF4")
 
 
-# --------------------------------------------------------------- fixtures
 @pytest.fixture
 def mixed(tmp_path):
     """One accession holding four instruments and three things WOD cannot store."""
@@ -63,7 +59,6 @@ def argo_file(tmp_path):
     return path
 
 
-# ----------------------------------------------------------- sniff_format
 class TestSniffReadsBytesNotExtensions:
     def test_netcdf_is_recognised_without_an_extension(self, argo_file, tmp_path):
         renamed = tmp_path / "cast_007"
@@ -105,7 +100,6 @@ class TestSniffReadsBytesNotExtensions:
         assert len(result["colspecs"]) == 3
 
 
-# --------------------------------------------------------------- read_any
 class TestReadAnyProducesTheSameShapeForEveryFormat:
     def test_argo_profile_x_level_becomes_one_cast_per_profile(self, argo_file):
         casts, info = read_any(str(argo_file))
@@ -158,12 +152,11 @@ class TestReadAnyProducesTheSameShapeForEveryFormat:
         p.write_text("   0.0   11.42   34.51\n  10.0   11.38   34.52\n"
                      "  25.0   11.02   34.55\n  50.0   10.31   34.58\n")
         casts, info = read_any(str(p))
-        assert len(casts[0]["df"]) == 4          # not 3
+        assert len(casts[0]["df"]) == 4
         assert list(casts[0]["df"].columns) == ["col_0", "col_1", "col_2"]
         assert any("col_0" in w for w in info["warnings"])
 
 
-# -------------------------------------------------------- classify_dataset
 class TestClassifyDataset:
     @pytest.mark.parametrize("path,expected", [
         ("2-CTD/cast_01.cnv", "CTD"),
@@ -223,7 +216,6 @@ class TestClassifyDataset:
         assert low["dataset_type"] == "OSD"
 
 
-# ------------------------------------------------------ classify_accession
 class TestClassifyAccession:
     def test_each_folder_gets_its_own_verdict(self, mixed):
         report = classify_accession(str(mixed))
@@ -241,7 +233,6 @@ class TestClassifyAccession:
         assert report["folders"]["2-xbt"]["verdict"]["dataset_types"] == {"XBT": 1}
 
 
-# ----------------------------------------------------- end-to-end routing
 class TestProcessAccessionWithoutBeingToldTheDataset:
     def test_a_mixed_accession_routes_each_folder_to_its_own_dataset(self, mixed, tmp_path):
         res = process_accession(str(mixed), output_dir=str(tmp_path / "out"),
@@ -374,10 +365,7 @@ class TestCrossFileShapeIsDetected:
         assert result["single_data_row"] is True
 
 
-# ------------------------------------------------ scored exclusions, per-file triage
 class TestExclusionsAreScoredNotOrdered:
-    """Every matching exclusion rule is scored; rule order does not decide the label."""
-
     def test_camel_case_file_names_are_read(self):
         """`\\btrawl\\b` cannot match inside 'TrawlInfo'."""
         v = classify_dataset(path="0-data/SHU1505_TrawlInfo.csv",
@@ -497,8 +485,6 @@ class TestPerFileTriage:
 
 
 class TestBinaryFilesAreOpenedNotAskedAbout:
-    """Triage opens binary files (NetCDF, images) instead of asking a reviewer about them."""
-
     @staticmethod
     def _triage(root):
         return {f["path"]: f for f in classify_accession(str(root))["files"]}
