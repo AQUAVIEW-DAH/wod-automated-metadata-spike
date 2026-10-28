@@ -20,6 +20,8 @@ from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE
 
 OBS_DIM = "z_obs"
 CAST_DIM = "casts"
+VARIABLE_DIM = "wod_variables"
+INT_FILL = np.int32(-2147483647)
 # Marks files this writer made: a rerun replaces only those.
 TITLE = "WOD Intermediate Standardized Ocean Profile"
 
@@ -131,7 +133,7 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
         _describe_time(tv, times)
 
         # Separate date and time of day, as in WOD, so a date-only cast has no implied midnight.
-        dv = ds.createVariable("date", "i4", (CAST_DIM,), fill_value=np.int32(-2147483647))
+        dv = ds.createVariable("date", "i4", (CAST_DIM,), fill_value=INT_FILL)
         dv.long_name = "cast date, YYYYMMDD (UTC when the time of day is known)"
         dv[:] = np.array(times["date"], dtype="i4")
         gv = ds.createVariable("GMT_time", "f4", (CAST_DIM,), fill_value=NETCDF_FILL_VALUE)
@@ -164,6 +166,8 @@ def write_ragged_profiles(casts: List[Dict[str, Any]], output_nc_path: str) -> D
         for i, code in enumerate(_dataset_codes(casts)):
             dv_[i] = code
 
+        write_wod_numbers(ds)
+        _write_variable_codes(ds, casts, plan)
         _write_varying_secondary_headers(ds, casts)
 
         # ---- observation (per-level) variables -----------------------------
@@ -747,6 +751,43 @@ def _write_primary_header(ds, casts) -> None:
     _shared_or_per_cast(ds, "country", codes, "WOD country code (manual Appendix 1)")
     _shared_or_per_cast(ds, "country_name", [str(e.get("label") or "") for e in entries],
                         "country name (manual Appendix 1)")
+
+
+def write_wod_numbers(ds) -> None:
+    """WOD's unique cast number and cruise number (Table 10a fields 5 and 8), as fill: NCEI
+    assigns both when the casts are loaded into WOD."""
+    for name, field, long_name, extra in (
+            ("wod_unique_cast", 5, "WOD unique cast number", ""),
+            ("wod_cruise_number", 8, "WOD cruise number",
+             "; with the country code it forms the WOD cruise identifier (manual p.17)")):
+        v = ds.createVariable(name, "i4", (CAST_DIM,), fill_value=INT_FILL)
+        v.long_name = f"{long_name} (Table 10a field {field})"
+        v.comment = "assigned by NCEI when the cast is loaded into WOD; fill until then" + extra
+
+
+def _write_variable_codes(ds, casts, plan) -> None:
+    """Each cast's number of variables and their Table 3a codes (Table 10a fields 18 and 20),
+    for the variables it has at least one value for. The codes are a contiguous ragged list:
+    the count is each cast's row size."""
+    present = []
+    for c in casts:
+        codes = []
+        for var in plan:
+            col = _raw_col(c, var["wod_code"])
+            if col is not None and pd.to_numeric(c["df"][col], errors="coerce").notna().any():
+                codes.append(var["wod_code"])
+        present.append(codes)
+    n = ds.createVariable("wod_number_of_variables", "i4", (CAST_DIM,))
+    n.long_name = "number of variables in this cast (Table 10a field 18)"
+    n[:] = np.array([len(codes) for codes in present], dtype="i4")
+    flat = [code for codes in present for code in codes]
+    if not flat:
+        return
+    n.sample_dimension = VARIABLE_DIM
+    ds.createDimension(VARIABLE_DIM, len(flat))
+    v = ds.createVariable("wod_variable_codes", "i4", (VARIABLE_DIM,))
+    v.long_name = "Table 3a codes of each cast's variables, cast after cast (Table 10a field 20)"
+    v[:] = np.array(flat, dtype="i4")
 
 
 def _write_character_data(ds, casts) -> None:

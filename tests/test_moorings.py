@@ -395,3 +395,15 @@ class TestTriagePlacesAMooring:
         assert m["deployment"] == "record" and "first and last day" in f["why"]
         first, last = m["deployed"]
         assert first == (T0 // 86400 + 1) * 86400 and last < (T0 // 86400 + 5) * 86400
+
+
+class TestDeclaredIdentity:
+    def test_an_epic_code_identifies_a_variable_its_name_does_not(self, tmp_path):
+        from helpers import write_mooring_nc
+
+        p = tmp_path / "m.nc"
+        write_mooring_nc(p, variables=(("X1", "", "C"),))
+        with netCDF4.Dataset(p, "a") as ds:
+            ds["X1"].epic_code = np.int32(20)
+        assert [(v["code"], v["column"]) for v in read_instrument(p)["variables"]] == [
+            (1, "Temperature (C)")]

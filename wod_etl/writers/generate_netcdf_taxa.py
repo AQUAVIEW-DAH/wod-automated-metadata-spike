@@ -15,7 +15,8 @@ from wod_etl.reference import biological_headers, taxa_biomass_variables
 from wod_etl.writers.generate_netcdf_ragged import (
     CAST_DIM, _cast_ids, _cast_times, _cast_var, _coord, _describe_time,
     _write_character_data, _write_provenance, _write_shared_secondary_headers,
-    _write_time_zones, _write_varying_secondary_headers, cf_safe_name, split_coded_value)
+    _write_time_zones, _write_varying_secondary_headers, cf_safe_name, split_coded_value,
+    write_wod_numbers)
 
 OBS_DIM = "taxa_obs"
 INT_FILL = np.int32(-2147483647)
@@ -86,6 +87,7 @@ def write_taxa_netcdf(hauls: List[Dict[str, Any]], output_path: str) -> Dict[str
         rs.long_name = "number of Taxa-Records in this haul"
         rs.sample_dimension = OBS_DIM
         rs[:] = np.array(sizes, dtype="i4")
+        write_wod_numbers(ds)
         _write_varying_secondary_headers(ds, casts)
 
         _write_biological_header(ds, hauls, t6a)

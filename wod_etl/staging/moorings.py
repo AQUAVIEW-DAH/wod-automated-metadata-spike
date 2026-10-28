@@ -14,15 +14,6 @@ from wod_etl.staging.mooring_layout import file_serial, serial_key
 from wod_etl.staging.parse import parse_coordinate, pressure_to_depth
 
 # CF standard names of what a moored instrument measures in the water, as Table 3a codes.
-_STANDARD_NAMES = {
-    "sea_water_temperature": 1, "sea_surface_temperature": 1,
-    "sea_water_practical_salinity": 2, "sea_water_salinity": 2,
-    "sea_water_pressure": 25, "sea_water_pressure_due_to_sea_water": 25,
-    "moles_of_oxygen_per_unit_mass_in_sea_water": 3,
-    "mole_concentration_of_dissolved_molecular_oxygen_in_sea_water": 3,
-    "mass_concentration_of_chlorophyll_in_sea_water": 11,
-    "mass_concentration_of_chlorophyll_a_in_sea_water": 11,
-}
 # What a name matcher would read as temperature, pressure or oxygen and is not a measurement
 # of the water: the instrument's own temperature, the air, a derived quantity, a saturation.
 _NOT_OF_THE_WATER_STANDARD = {
@@ -141,7 +132,8 @@ def read_instrument(path) -> Dict[str, Any]:
     to decibars by `factor`, less `offset` (the atmosphere in an absolute pressure)."""
     import netCDF4
 
-    from wod_etl.mapping.query_wod_spec import match_variable
+    from wod_etl.mapping.query_wod_spec import (STANDARD_NAME_LABELS, declared_label,
+                                                match_variable, prefer_declared)
     from wod_etl.reference import wod_variables
 
     p = Path(path)
@@ -201,14 +193,15 @@ def read_instrument(path) -> Dict[str, Any]:
                          else long_name)
                 std = str(getattr(v, "standard_name", "")).lower()
                 if std in _NOT_OF_THE_WATER_STANDARD or \
-                        (std not in _STANDARD_NAMES and _NOT_OF_THE_WATER.search(
+                        (std not in STANDARD_NAME_LABELS and _NOT_OF_THE_WATER.search(
                             _words(name, long_name))):
                     out["not_stored"].append(f"{label} (not a measurement of the water)")
                     continue
-                code = _STANDARD_NAMES.get(std)
-                by_name = code is None
-                if by_name:
-                    code = match_variable(label) or match_variable(name)
+                # A declared standard_name or EPIC code outranks the name.
+                by_name = declared_label(v) is None
+                if not by_name:
+                    label = prefer_declared(label, v, units)
+                code = match_variable(label) or (match_variable(name) if by_name else None)
                 if code in (30, 31, 32) or std in ("latitude", "longitude") or \
                         code not in stored:
                     out["not_stored"].append(label)

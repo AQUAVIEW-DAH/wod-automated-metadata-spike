@@ -25,7 +25,8 @@ VARIABLE_ALIASES = {
     11: ["chlorophyll", "chl", "chla", "chl_a", "chlorophyll_a",
          "flsp", "flspp", "flecoafl", "flc", "fleco_afl", "chl_fluorescence"],
     17: ["alkalinity", "alk", "talk", "ta", "total_alkalinity"],
-    20: ["pco2", "xco2", "partial_pressure_co2"],
+    20: ["pco2", "xco2", "partial_pressure_co2", "partial_pressure_of_co2",
+         "partial_pressure_of_carbon_dioxide"],
     21: ["dic", "tco2", "dissolved_inorganic_carbon"],
     24: ["transmissivity", "beam_attenuation", "transmission"],
     25: ["pressure", "press", "pres", "dbar", "prdm", "prsm", "prdb", "prm", "pr"],
@@ -81,6 +82,21 @@ NOT_STORED = {
                  "pressure and salinity) and record the conversion. It is never mapped to "
                  "code 1: with both columns present the cast would claim Temperature twice, "
                  "and with theta alone it would report the wrong quantity.",
+    },
+    "conservative_temperature": {
+        "aliases": ["conservative_temperature", "cons_temp", "conservative_temp"],
+        "patterns": [r"(?:^|_)conservative_?temp"],
+        "reason": "Conservative temperature (TEOS-10) is derived from in-situ temperature, "
+                  "salinity and pressure. Table 3a code 1 is in-situ temperature.",
+        "route": "Not written; an in-situ temperature column is written as code 1.",
+    },
+    "teos10_salinity": {
+        "aliases": ["absolute_salinity", "reference_salinity", "preformed_salinity", "abs_sal"],
+        "patterns": [r"(?:^|_)(?:absolute|reference|preformed)_?sal"],
+        "reason": "A TEOS-10 salinity in g/kg, not the practical salinity Table 3a code 2 "
+                  "stores.",
+        "route": "Not written. A practical salinity column is written as code 2; with only "
+                 "this one, convert it to practical salinity during staging.",
     },
     "size_fractionated_chlorophyll": {
         "aliases": [],
@@ -142,6 +158,83 @@ NOT_STORED = {
 _NOT_STORED_BY_ALIAS = {a: k for k, v in NOT_STORED.items() for a in v["aliases"]}
 _NOT_STORED_PATTERNS = [(re.compile(p), k)
                         for k, v in NOT_STORED.items() for p in v.get("patterns", [])]
+
+# What a NetCDF variable declares it holds, as the term the matcher resolves. A quantity WOD
+# does not store resolves to its NOT_STORED entry. CF standard names:
+# https://cfconventions.org/Data/cf-standard-names/current/build/cf-standard-name-table.html
+STANDARD_NAME_LABELS = {
+    **dict.fromkeys(["sea_water_temperature", "sea_surface_temperature"], "Temperature"),
+    "sea_water_potential_temperature": "Potential temperature",
+    "sea_water_conservative_temperature": "Conservative temperature",
+    **dict.fromkeys(["sea_water_salinity", "sea_water_practical_salinity",
+                     "sea_surface_salinity"], "Salinity"),
+    "sea_water_absolute_salinity": "Absolute salinity",
+    "sea_water_reference_salinity": "Reference salinity",
+    "sea_water_preformed_salinity": "Preformed salinity",
+    **dict.fromkeys(["mole_concentration_of_dissolved_molecular_oxygen_in_sea_water",
+                     "moles_of_oxygen_per_unit_mass_in_sea_water",
+                     "volume_fraction_of_oxygen_in_sea_water",
+                     "mass_concentration_of_oxygen_in_sea_water"], "Oxygen"),
+    "fractional_saturation_of_oxygen_in_sea_water": "Oxygen saturation",
+    **dict.fromkeys(["mole_concentration_of_phosphate_in_sea_water",
+                     "moles_of_phosphate_per_unit_mass_in_sea_water"], "Phosphate"),
+    **dict.fromkeys(["mole_concentration_of_silicate_in_sea_water",
+                     "moles_of_silicate_per_unit_mass_in_sea_water"], "Silicate"),
+    **dict.fromkeys(["mole_concentration_of_nitrate_in_sea_water",
+                     "moles_of_nitrate_per_unit_mass_in_sea_water"], "Nitrate"),
+    **dict.fromkeys(["mole_concentration_of_nitrate_and_nitrite_in_sea_water",
+                     "moles_of_nitrate_and_nitrite_per_unit_mass_in_sea_water"],
+                    "Nitrate + Nitrite"),
+    **dict.fromkeys(["mole_concentration_of_nitrite_in_sea_water",
+                     "moles_of_nitrite_per_unit_mass_in_sea_water"], "Nitrite"),
+    **dict.fromkeys(["mole_concentration_of_ammonium_in_sea_water",
+                     "moles_of_ammonium_per_unit_mass_in_sea_water"], "Ammonium"),
+    "sea_water_ph_reported_on_total_scale": "pH",
+    **dict.fromkeys(["mass_concentration_of_chlorophyll_in_sea_water",
+                     "mass_concentration_of_chlorophyll_a_in_sea_water"], "Chlorophyll"),
+    **dict.fromkeys(["sea_water_alkalinity_expressed_as_mole_equivalent",
+                     "sea_water_alkalinity_per_unit_mass_expressed_as_mole_equivalent"],
+                    "Alkalinity"),
+    **dict.fromkeys(["partial_pressure_of_carbon_dioxide_in_sea_water",
+                     "surface_partial_pressure_of_carbon_dioxide_in_sea_water"], "pCO2"),
+    **dict.fromkeys(["mole_concentration_of_dissolved_inorganic_carbon_in_sea_water",
+                     "moles_of_dissolved_inorganic_carbon_per_unit_mass_in_sea_water"],
+                    "Dissolved inorganic carbon"),
+    "volume_beam_attenuation_coefficient_of_radiative_flux_in_sea_water": "Beam attenuation",
+    **dict.fromkeys(["sea_water_pressure", "sea_water_pressure_due_to_sea_water"], "Pressure"),
+    "depth": "Depth",
+    "air_temperature": "Air temperature",
+    **dict.fromkeys(["air_pressure", "air_pressure_at_mean_sea_level"], "Air pressure"),
+    "latitude": "Latitude",
+    "longitude": "Longitude",
+    **dict.fromkeys(["mole_concentration_of_cfc11_in_sea_water",
+                     "moles_of_cfc11_per_unit_mass_in_sea_water"], "CFC-11"),
+    **dict.fromkeys(["mole_concentration_of_cfc12_in_sea_water",
+                     "moles_of_cfc12_per_unit_mass_in_sea_water"], "CFC-12"),
+    **dict.fromkeys(["mole_concentration_of_cfc113_in_sea_water",
+                     "moles_of_cfc113_per_unit_mass_in_sea_water"], "CFC-113"),
+    "sea_water_electrical_conductivity": "Conductivity",
+    "sea_water_sigma_t": "Sigma-t",
+    "sea_water_sigma_theta": "Sigma-theta",
+    "sea_water_density": "Density",
+    "speed_of_sound_in_sea_water": "Sound velocity",
+    "sea_water_turbidity": "Turbidity",
+}
+
+# PMEL EPIC codes (epic.key, https://www.pmel.noaa.gov/epic/) for the same purpose. Units come
+# from the variable's own `units`, as some EPIC unit labels are ambiguous ('MG AT/L').
+EPIC_CODE_LABELS = {
+    1: "Pressure", 3: "Depth", 9: "Air pressure", 915: "Air pressure",
+    **dict.fromkeys([20, 25, 28, 32], "Temperature"), 21: "Air temperature",
+    **dict.fromkeys([40, 41, 42], "Salinity"), **dict.fromkeys([50, 51], "Conductivity"),
+    55: "Beam attenuation", **dict.fromkeys([60, 65], "Oxygen"), 62: "Oxygen saturation",
+    70: "Sigma-t", 71: "Sigma-theta", 80: "Sound velocity",
+    **dict.fromkeys([152, 182, 282], "Nitrate"), **dict.fromkeys([154, 184, 284], "Nitrite"),
+    185: "Nitrate + Nitrite", **dict.fromkeys([156, 186, 286], "Phosphate"),
+    **dict.fromkeys([158, 181, 188, 288], "Silicate"), **dict.fromkeys([189, 289], "Ammonium"),
+    159: "pH", **dict.fromkeys([901, 903, 931, 935, 3031], "Fluorescence"),
+    **dict.fromkeys([906, 932, 937], "Chlorophyll"), 1701: "CFC-11", 1702: "CFC-12",
+}
 
 
 def normalize_name(name: str) -> str:
@@ -256,7 +349,8 @@ _FLUOR_NAME = re.compile(r"(?:^|_)(?:chl_?)?fluor(?:escence|ometer|o)?(?:_|$)|^f
 SEABIRD_FLUOR_CHANNELS = {"flsp", "flspp", "flecoafl", "fleco_afl", "flc", "flscufa",
                           "flspr", "wetstar", "chl_fluorescence"}
 _MASS_CONCENTRATION = re.compile(
-    r"^(?:[µu]g\s*/\s*l|[µu]g\s*l-?1|mg\s*/\s*m\s*\^?\s*3|mg\s*m-?3|ppb|[µu]g/dm3)$", re.I)
+    r"^(?:(?:[µu]|micro)g(?:rams?)?\s*/\s*l(?:it(?:er|re))?|[µu]g\s*l-?1|mg\s*/\s*m\s*\^?\s*3|"
+    r"mg\s*m-?3|ppb|[µu]g/dm3)$", re.I)
 # Non-chlorophyll fluorophores, which may share chlorophyll's units; the rule skips them.
 _OTHER_FLUOROPHORE = re.compile(
     r"(?:^|_)(?:cdom|fdom|dom|phyco\w*|rhodamine|rwt|uranine|fluorescein|oil|crude|"
@@ -311,6 +405,37 @@ def explain_column(column_name: str) -> Optional[Dict[str, Any]]:
     entry = NOT_STORED[key]
     return {"column": column_name, "variable": key, "reason": entry["reason"],
             "route": entry["route"], "do_not_alias": True}
+
+
+def declared_label(attrs) -> Optional[str]:
+    """The WOD term a NetCDF variable's attributes declare: its CF `standard_name`, else its
+    EPIC code (`epic_code`, or an `epic_key` such as 'T_20'). `attrs` is a dict or a variable."""
+    get = attrs.get if isinstance(attrs, dict) else (lambda k: getattr(attrs, k, None))
+    label = STANDARD_NAME_LABELS.get(str(get("standard_name") or "").strip().lower())
+    if label:
+        return label
+    epic = get("epic_code")
+    if epic is None:
+        m = re.search(r"_(\d+)$", str(get("epic_key") or "").strip())
+        epic = m.group(1) if m else None
+    try:
+        return EPIC_CODE_LABELS.get(int(str(epic).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def prefer_declared(label: str, attrs, units: str = "") -> str:
+    """`label`, unless the variable declares a different quantity: then the declared term
+    with `units`. The declaration states what the originator measured."""
+    declared = declared_label(attrs)
+    if not declared:
+        return label
+    declared = f"{declared} ({units})" if units else declared
+    return label if _identity(label) == _identity(declared) else declared
+
+
+def _identity(label: str):
+    return match_variable(label), (explain_column(label) or {}).get("variable")
 
 
 # Shorter aliases match only a whole name, not a token ('t' would match 'sigma_t').

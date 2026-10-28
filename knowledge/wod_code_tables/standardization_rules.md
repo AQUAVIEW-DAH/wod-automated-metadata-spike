@@ -60,7 +60,8 @@ Table 3a is the whole list. A file whose only measurements are outside it is not
 | Bottom depth, soundings | Secondary header 10 (Bottom Depth), cast metadata |
 | Nitrite | Excluded from the online database (p.49). Code 8 is nitrate and nitrate+nitrite. |
 | Ammonium, CDOM, turbidity, PAHs, microplastics, eDNA, currents | No WOD code |
-| Conductivity, sigma-t, sound velocity, potential temperature | No WOD code. Potential temperature is derived and is never code 1. |
+| Conductivity, sigma-t, sound velocity, potential and conservative temperature | No WOD code. Potential and conservative temperature are derived and are never code 1. |
+| Absolute, reference or preformed salinity (TEOS-10) | Not the practical salinity code 2 stores. |
 | Size-fractionated chlorophyll | Only total chlorophyll maps to code 11 |
 
 `explain_column()` in `wod_etl.mapping` lists every such column and why.

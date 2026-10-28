@@ -32,9 +32,27 @@ class TestRaggedWriter:
         p = tmp_path / "out.nc"
         write_ragged_profiles([make_cast(dic=True)], str(p))
         with nc.Dataset(p) as ds:
-            assert set(ds.dimensions) == {"casts", "z_obs"}
+            assert {d for d in ds.dimensions if d.endswith("_obs")} == {"z_obs"}
             for v in ("z", "temperature", "dissolved_inorganic_carbon"):
                 assert ds.variables[v].dimensions == ("z_obs",)
+
+    def test_each_cast_lists_its_variables(self, tmp_path):
+        """Table 10a fields 18 and 20: a cast's variable count and codes, as a ragged list."""
+        p = tmp_path / "out.nc"
+        write_ragged_profiles([make_cast(dic=True), make_cast(lat=62.4)], str(p))
+        with nc.Dataset(p) as ds:
+            assert ds["wod_number_of_variables"][:].tolist() == [2, 1]
+            assert ds["wod_number_of_variables"].sample_dimension == "wod_variables"
+            assert ds["wod_variable_codes"][:].tolist() == [1, 21, 1]
+        assert validate_intermediate_netcdf(str(p))["status"] == "PASS"
+
+    def test_cast_and_cruise_numbers_are_left_for_ncei(self, tmp_path):
+        p = tmp_path / "out.nc"
+        write_ragged_profiles([make_cast()], str(p))
+        with nc.Dataset(p) as ds:
+            for name in ("wod_unique_cast", "wod_cruise_number"):
+                assert np.ma.getmaskarray(ds[name][:]).all()
+                assert "assigned by NCEI" in ds[name].comment
 
     def test_row_sizes_sum_to_the_observation_dimension(self, tmp_path):
         p = tmp_path / "multi.nc"

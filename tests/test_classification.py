@@ -667,6 +667,34 @@ class TestTriageSaysWhatEachFileIsAndWhy:
         assert f["data"] == "MBT profiles: temperature"
         assert "salinity is computed from sound speed" in f["why"] and f["drop"] == ["salinity"]
 
+    def test_a_declared_standard_name_or_epic_code_outranks_the_name(self, tmp_path):
+        z = np.arange(12, dtype=float)
+        variables = self._profile_vars()[:4] + [
+            ("TEMP", ("profile", "z"),
+             {"units": "degree_C", "standard_name": "sea_water_potential_temperature"},
+             (20 - z / 10).reshape(1, 12)),
+            ("X_1", ("profile", "z"), {"units": "C", "epic_code": 28},
+             (20.5 - z / 10).reshape(1, 12))]
+        self._nc(tmp_path / "ctd.nc", {"title": "CTD profiles"}, None, variables)
+        casts, _ = read_any(str(tmp_path / "ctd.nc"))
+        assert {"Potential temperature (degree_C)", "Temperature (C)"} <= set(casts[0]["df"])
+        assert "'X_1' is read as 'Temperature (C)' by its EPIC code" in casts[0]["header_block"]
+        f = self._triage(tmp_path)["ctd.nc"]
+        assert f["data"] == "CTD profiles: temperature"
+        assert "not written: potential temperature" in f["why"]
+
+    def test_two_sensors_declaring_one_quantity_keep_their_own_columns(self, tmp_path):
+        """The second sensor must not overwrite the first under a shared label."""
+        attrs = {"units": "mg/m^3", "long_name": "Chlorophyll Concentration by Fluorometer",
+                 "standard_name": "mass_concentration_of_chlorophyll_in_sea_water"}
+        variables = self._profile_vars()[:4] + [
+            ("CPHLPR01", ("profile", "z"), attrs, np.full((1, 12), 0.5)),
+            ("CPHLPR02", ("profile", "z"), attrs, np.full((1, 12), np.nan))]
+        self._nc(tmp_path / "ctd.nc", {"title": "CTD profiles"}, None, variables)
+        df = read_any(str(tmp_path / "ctd.nc"))[0][0]["df"]
+        assert df["Chlorophyll (mg/m^3)"].tolist() == [0.5] * 12
+        assert df["CPHLPR02 (mg/m^3)"].isna().all()
+
     def test_a_variable_that_copies_another_is_proposed_as_dropped(self, tmp_path):
         z = np.arange(12, dtype=float)
         self._nc(tmp_path / "ctd_ship.nc", {"title": "CTD profiles"}, None,

@@ -128,6 +128,7 @@ class TestProcessTaxa:
             assert ds["t_20_originator_s_unit"][0] == "number per sample"
             assert ds["b_7_gear_code"][0] == "101"
             assert ds["b_7_gear_code_originator_text"][0] == "NORPAC Net"
+            assert np.ma.getmaskarray(ds["wod_unique_cast"][:]).all()
             assert ds["b_4_type_of_tow"][0] == "2"
             assert float(ds["b_3_mesh_size"][0]) == 100.0
             assert ds["taxa_row_size"][0] == 5

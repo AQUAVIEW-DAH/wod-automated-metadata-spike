@@ -1665,11 +1665,15 @@ def _attr_text(value) -> str:
 
 
 def _nc_column(name: str, v) -> str:
+    from wod_etl.mapping.query_wod_spec import prefer_declared
+
     label = str(getattr(v, "long_name", "") or getattr(v, "standard_name", "") or name).strip()
     units = str(getattr(v, "units", "") or "").strip()
     if units and "since" not in units and f"({units.lower()})" not in label.lower():
         label = f"{label} ({units})"
-    return label
+    if hasattr(v, "flag_values") or hasattr(v, "flag_meanings"):
+        return label
+    return prefer_declared(label, v, "" if "since" in units else units)
 
 
 def _instrument(path) -> Dict[str, Any]:

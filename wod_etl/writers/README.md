@@ -94,7 +94,7 @@ variable's `per_cast_attributes`), and originator flag schemes
 | Primary header | `country` (Appendix 1 code) and `country_name`, when the source states a country |
 | Character data | `originator_cruise_id`, `principal_investigator`, `principal_investigator_code` (manual p.30); global when shared, per cast otherwise |
 | Secondary headers | one `secondary_header_<id>_<name>` attribute per Table 4a entry, plus `<same>_code_table` where WOD publishes a code list; a coded value that is not a code goes to `<same>_originator_text` with `<same>_code_lookup` instead (below) |
-| Per cast (`casts`) | `lat`, `lon`, `time` (days since 1770-01-01), `date` (YYYYMMDD), `GMT_time` (hours, fill when not stated), `cast_id` (`cf_role=profile_id`), `z_row_size` (`sample_dimension=z_obs`), `dataset` (the WOD dataset), and any secondary header that differs between casts |
+| Per cast (`casts`) | `lat`, `lon`, `time` (days since 1770-01-01), `date` (YYYYMMDD), `GMT_time` (hours, fill when not stated), `cast_id` (`cf_role=profile_id`), `z_row_size` (`sample_dimension=z_obs`), `dataset` (the WOD dataset), `wod_number_of_variables` and `wod_variable_codes` (Table 10a fields 18 and 20: the Table 3a codes a cast has values for, as a ragged list on `wod_variables`), `wod_unique_cast` and `wod_cruise_number` (fields 5 and 8, fill: NCEI assigns them), and any secondary header that differs between casts |
 | Per level (`z_obs`) | `z` (`positive=down`, `axis=Z`), `z_qc` when WOD QC ran, one variable per WOD code, and per variable `<var>_qc` and/or `<var>_qc_originator` |
 
 Each measured variable carries:
@@ -181,7 +181,7 @@ Plankton counts and biomass have their own layout, sharing the profile writer's 
 
 | Dimension | Variables |
 | --- | --- |
-| `casts` (one per haul) | `lat`, `lon`, `time`, `date`, `GMT_time`, `cast_id`, `taxa_row_size` (CF ragged count, `sample_dimension = "taxa_obs"`), Biological Header fields `b_<id>_<name>`, and secondary headers and character data as for a profile |
+| `casts` (one per haul) | `lat`, `lon`, `time`, `date`, `GMT_time`, `cast_id`, `wod_unique_cast` and `wod_cruise_number` (fill, as for a profile), `taxa_row_size` (CF ragged count, `sample_dimension = "taxa_obs"`), Biological Header fields `b_<id>_<name>`, and secondary headers and character data as for a profile |
 | `taxa_obs` (one per Taxa-Record) | `t_1_variable_number` (ITIS TSN, or a negative WOD code; fill if unresolved), `taxon_name_originator` (always), `taxon_resolution`, `t_30_plankton_grouping_code`, `t_2_upper_depth`, `t_3_lower_depth`, coded qualifiers (`t_5_taxon_life_stage` + `_originator_text`), measurements (`t_10_taxon_count`...), `t_20_originator_s_unit` |
 
 Coded Biological Header fields follow the coded-field rule above. The global

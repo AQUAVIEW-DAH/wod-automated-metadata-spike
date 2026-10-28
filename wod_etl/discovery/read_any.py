@@ -601,6 +601,7 @@ def _read_netcdf(path, fmt, profile):
                                if flattened else
                                _netcdf_rectangular(variables, level_dim, profile_dim))
         upward = _upward_labels(variables)
+        renamed = _renamed(variables)
 
     _depth_from_height(casts, upward, warnings)
     undated: Dict[str, List[Any]] = {}
@@ -613,7 +614,7 @@ def _read_netcdf(path, fmt, profile):
                 undated.setdefault(name, []).append(when)
                 when = None
             times[name] = when
-        c["header_block"] = _header_block(global_attrs, scalars, times)
+        c["header_block"] = "\n".join([_header_block(global_attrs, scalars, times)] + renamed)
         c["source_note"] = f"NetCDF ({fmt['format_family']})"
     # Warn once per variable: a wrong epoch is wrong for every cast.
     for name, whens in undated.items():
@@ -626,7 +627,8 @@ def _read_netcdf(path, fmt, profile):
 
 def _upward_labels(variables) -> set:
     """Labels of vertical coordinates measured upward (CF `positive = "up"`)."""
-    return {_label(n, v, variables) for n, v in variables.items()
+    labels = _labels(variables)
+    return {labels[n] for n, v in variables.items()
             if str(getattr(v, "positive", "")).strip().lower() == "up"
             and (str(getattr(v, "axis", "")).upper() == "Z"
                  or re.search(r"^(?:z|depth|height|altitude|elevation)$",
@@ -698,6 +700,7 @@ def _ragged_spec(variables):
 
 
 def _netcdf_ragged(ds, variables, spec):
+    labels = _labels(variables)
     counts = [int(x) for x in variables[spec["count_var"]][:]]
     sample_dim, instance_dim = spec["sample_dim"], spec["instance_dim"]
 
@@ -711,7 +714,7 @@ def _netcdf_ragged(ds, variables, spec):
         if n <= 0:
             start += max(n, 0)
             continue
-        df = pd.DataFrame({_label(name, v, variables): _column(v[start:start + n])
+        df = pd.DataFrame({labels[name]: _column(v[start:start + n])
                            for name, v in level_vars.items()})
         casts.append({"cast_id": str(i), "df": df,
                       "_scalars": {name: _scalar(v[i]) for name, v in inst_vars.items()}})
@@ -753,6 +756,8 @@ def _netcdf_flattened(ds, variables, level_dim, keys):
     are there, upcasts are not written: WOD stores the downcast."""
     import numpy as np
 
+    labels = _labels(variables)
+
     instance = {}
     for name in keys:
         v = ds.variables[name]
@@ -763,9 +768,9 @@ def _netcdf_flattened(ds, variables, level_dim, keys):
     starts = list(np.flatnonzero(text.ne(text.shift()).any(axis=1).to_numpy())) + [len(frame)]
     level_vars = {n: v for n, v in variables.items()
                   if v.dimensions == (level_dim,) and n not in keys and _kind(v) not in "SUO"}
-    table = pd.DataFrame({_label(n, v, variables): _column(v[:]) for n, v in level_vars.items()})
+    table = pd.DataFrame({labels[n]: _column(v[:]) for n, v in level_vars.items()})
     clocks = [n for n, v in level_vars.items() if _is_clock(v)]
-    schemes = {_label(n, v, variables): {"flag_values": _scalar(v.getncattr("flag_values"))
+    schemes = {labels[n]: {"flag_values": _scalar(v.getncattr("flag_values"))
                               if "flag_values" in v.ncattrs() else None,
                               "flag_meanings": str(v.getncattr("flag_meanings"))}
                for n, v in level_vars.items() if "flag_meanings" in v.ncattrs()}
@@ -795,6 +800,7 @@ def _netcdf_flattened(ds, variables, level_dim, keys):
 
 def _netcdf_rectangular(variables, level_dim, profile_dim):
     """One cast per profile index, or a single cast when there is no profile dimension."""
+    labels = _labels(variables)
     warnings = []
     level_vars, per_profile, scalars = {}, {}, {}
     for name, v in variables.items():
@@ -834,7 +840,7 @@ def _netcdf_rectangular(variables, level_dim, profile_dim):
                 n_profiles = v.shape[v.dimensions.index(profile_dim)]
                 break
 
-    schemes = {_label(name, v, variables): {"flag_values": _scalar(v.getncattr("flag_values"))
+    schemes = {labels[name]: {"flag_values": _scalar(v.getncattr("flag_values"))
                                  if "flag_values" in v.ncattrs() else None,
                                  "flag_meanings": str(v.getncattr("flag_meanings"))}
                for name, v in level_vars.items() if "flag_meanings" in v.ncattrs()}
@@ -844,7 +850,7 @@ def _netcdf_rectangular(variables, level_dim, profile_dim):
         for name, v in level_vars.items():
             data = v[:] if v.dimensions == (level_dim,) else (
                 v[i, :] if v.dimensions[0] == profile_dim else v[:, i])
-            columns[_label(name, v, variables)] = _column(data)
+            columns[labels[name]] = _column(data)
         df = pd.DataFrame(columns).dropna(how="all")
         if df.empty:
             continue
@@ -899,18 +905,53 @@ def _pick_dim(ds, variables, hints, exclude=None, prefer=None):
     return None
 
 
-def _label(name: str, v, variables=None) -> str:
+def _renamed(variables) -> List[str]:
+    """`Note:` lines for variables read under another name, so the originator's stays on
+    record (they reach the output's `comment`)."""
+    from wod_etl.mapping.query_wod_spec import STANDARD_NAME_LABELS, declared_label
+
+    out = []
+    for name, label in _labels(variables).items():
+        v = variables[name]
+        if label.endswith("_QC") or label == _label(name, v, variables, own_name=True):
+            continue
+        declared = declared_label(v)
+        how = ("its long_name" if not declared or not label.startswith(declared) else
+               "its CF standard_name"
+               if str(getattr(v, "standard_name", "") or "").strip().lower()
+               in STANDARD_NAME_LABELS else "its EPIC code")
+        out.append(f"Note: NetCDF variable '{name}' is read as '{label}' by {how}")
+    return out
+
+
+def _labels(variables) -> Dict[str, str]:
+    """Every variable's column label, in file order. When two would share a label (two sensors
+    of one quantity), the later keeps its own name, so neither overwrites the other."""
+    out: Dict[str, str] = {}
+    taken = set()
+    for name, v in variables.items():
+        label = _label(name, v, variables)
+        if label in taken:
+            label = _label(name, v, variables, own_name=True)
+        out[name] = label
+        taken.add(label)
+    return out
+
+
+def _label(name: str, v, variables=None, own_name: bool = False) -> str:
     """Column label carrying its unit, since unit detection reads only the name.
 
-    A name WOD does not recognise (e.g. TEMPS901) is replaced by a long_name it does. A flag
-    named in a variable's `ancillary_variables` becomes '<that variable>_QC'.
+    A name WOD does not recognise (e.g. TEMPS901) is replaced by a long_name it does, and a
+    name that disagrees with the variable's standard_name or EPIC code by the declared term. A
+    flag named in a variable's `ancillary_variables` becomes '<that variable>_QC'.
     """
     flagged = next((d for d, dv in (variables or {}).items()
                     if name in str(getattr(dv, "ancillary_variables", "") or "").split()
                     and d != name), None)
     if flagged:
-        return f"{_base_name(flagged, variables[flagged])}_QC"
-    name = _base_name(name, v)
+        return f"{flagged if own_name else _base_name(flagged, variables[flagged])}_QC"
+    if not own_name:
+        name = _base_name(name, v)
     units = getattr(v, "units", None) or getattr(v, "unit", None)
     if units and str(units).strip() and "since" not in str(units) \
             and f"({str(units).strip().lower()})" not in name.lower():
@@ -919,13 +960,21 @@ def _label(name: str, v, variables=None) -> str:
 
 
 def _base_name(name: str, v) -> str:
-    from wod_etl.mapping.query_wod_spec import match_variable
+    from wod_etl.mapping.query_wod_spec import declared_label, match_variable, prefer_declared
 
     long_name = str(getattr(v, "long_name", "") or "").strip()
-    if long_name and not re.search(r"flag|quality|\bqc\b", f"{name} {long_name}", re.I) \
-            and "flag_meanings" not in getattr(v, "ncattrs", lambda: [])() \
-            and match_variable(name) is None and match_variable(long_name) is not None:
-        return long_name
+    if re.search(r"flag|quality|\bqc\b", f"{name} {long_name}", re.I) \
+            or "flag_meanings" in getattr(v, "ncattrs", lambda: [])():
+        return name
+    if long_name and match_variable(name) is None and match_variable(long_name) is not None:
+        name = long_name
+    # A declared standard_name or EPIC code outranks a name that says otherwise.
+    declared = declared_label(v)
+    if declared:
+        units = str(getattr(v, "units", None) or getattr(v, "unit", None) or "").strip()
+        label = f"{name} ({units})" if units else name
+        if prefer_declared(label, v, units) != label:
+            return declared
     return name
 
 

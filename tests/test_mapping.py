@@ -491,6 +491,48 @@ class TestEachCoordinateIsCheckedOnItsOwnCode:
         assert contract["ready_for_transform"] is False
 
 
+class TestDeclaredIdentity:
+    """A NetCDF variable's CF standard_name or EPIC code outranks its name."""
+
+    @pytest.mark.parametrize("attrs,label", [
+        ({"standard_name": "sea_water_temperature"}, "Temperature"),
+        ({"standard_name": "sea_water_potential_temperature"}, "Potential temperature"),
+        ({"standard_name": "moles_of_nitrate_and_nitrite_per_unit_mass_in_sea_water"},
+         "Nitrate + Nitrite"),
+        ({"epic_code": 28}, "Temperature"), ({"epic_code": "41"}, "Salinity"),
+        ({"epic_key": "OST_62"}, "Oxygen saturation"),
+        ({"standard_name": "sea_water_temperature status_flag"}, None),
+        ({"epic_code": 99999}, None), ({}, None)])
+    def test_declared_label(self, attrs, label):
+        from wod_etl.mapping.query_wod_spec import declared_label
+        assert declared_label(attrs) == label
+
+    @pytest.mark.parametrize("label,attrs,units,code", [
+        ("TEMP (degC)", {"standard_name": "sea_water_potential_temperature"}, "degC", None),
+        ("X_1 (C)", {"epic_code": 20}, "C", 1),
+        ("Oxygen (%)", {"standard_name": "fractional_saturation_of_oxygen_in_sea_water"},
+         "%", None),
+        ("FLUOR (mg m-3)",
+         {"standard_name": "mass_concentration_of_chlorophyll_a_in_sea_water"}, "mg m-3", 11)])
+    def test_the_declaration_decides_the_code(self, label, attrs, units, code):
+        from wod_etl.mapping.query_wod_spec import prefer_declared
+        assert match_variable(prefer_declared(label, attrs, units)) == code
+
+    def test_a_name_that_agrees_keeps_the_originators_name(self):
+        from wod_etl.mapping.query_wod_spec import prefer_declared
+        assert prefer_declared("PSAL", {"standard_name": "sea_water_practical_salinity"}) \
+            == "PSAL"
+
+    @pytest.mark.parametrize("col,code,refused", [
+        ("Partial pressure of carbon dioxide (uatm)", 20, None),
+        ("Absolute Salinity (g/kg)", None, "teos10_salinity"),
+        ("Conservative Temperature (degC)", None, "conservative_temperature")])
+    def test_names_that_resolved_to_the_wrong_variable(self, col, code, refused):
+        from wod_etl.mapping import explain_column
+        assert match_variable(col) == code
+        assert (explain_column(col) or {}).get("variable") == refused
+
+
 MICRO = "\u00b5"      # micro sign, common in CSVs
 GREEK_MU = "\u03bc"   # Greek small letter mu, from Word and PDFs
 MINUS = "\u2212"      # minus sign, in pasted exponents

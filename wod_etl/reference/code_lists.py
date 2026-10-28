@@ -297,6 +297,7 @@ def unit_key(text: Any) -> str:
     s = re.sub(r"\bper\s*mill?e\b|\u2030|\bper\s*mil\b", "permille", s)
     for word, short in (("micromol(?:e)?s?", "umol"), ("nanomol(?:e)?s?", "nmol"),
                         ("picomol(?:e)?s?", "pmol"), ("millimol(?:e)?s?", "mmol"),
+                        ("(?:micro|u)grams?", "ug"), ("(?:milli|m)grams?", "mg"),
                         ("kilograms?", "kg"), ("lit(?:er|re)s?", "l"), (r"degrees?\s*", "deg")):
         s = re.sub(rf"\b{word}\b", short, s)
     s = re.sub(r"\s*\bper\b\s*", "/", s)

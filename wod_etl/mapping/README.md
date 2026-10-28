@@ -326,7 +326,8 @@ refused. These stay unmapped:
 | Column | Why it has no code |
 | --- | --- |
 | conductivity, sigma-t/sigma-theta, sound velocity | not in Table 3a |
-| potential temperature | derived, not measured |
+| potential temperature, conservative temperature | derived, not measured |
+| absolute, reference or preformed salinity (TEOS-10, g/kg) | not the practical salinity code 2 stores |
 | nitrite | excluded from the online database (manual p.49); code 8 is nitrate and nitrate+nitrite, a different measurement |
 | ammonium, turbidity | not in Table 3a |
 | CDOM absorption (m⁻¹) | not code 24; transmissivity/beam attenuation is a different measurement |
@@ -351,6 +352,13 @@ Matching normalises first: bracketed units and anything after a comma or semicol
 dropped and the rest lowercased to underscore-separated words, so `Temp (C)` and
 `Temperature [deg C]` reach `temp`/`temperature`. An exact alias wins, else the longest
 whole-word alias, so `Air_Temperature` is code 26, not `temp`.
+
+A NetCDF variable's own declaration outranks its name: a CF `standard_name`, else a PMEL EPIC
+code (`epic_code`, or an `epic_key` such as `T_20`). `declared_label` turns it into the term
+the matcher resolves (`STANDARD_NAME_LABELS`, `EPIC_CODE_LABELS`), and the readers use that
+term when the name says something else: `TEMP` declared `sea_water_potential_temperature` is
+refused as potential temperature, and an opaque `X_1` with EPIC code 28 is Temperature. A name
+that agrees with its declaration is kept.
 
 ### Unit conversions are inferred from the column name
 
