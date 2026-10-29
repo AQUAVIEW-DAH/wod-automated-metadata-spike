@@ -348,6 +348,17 @@ For a real WOD variable, add an alias to `VARIABLE_ALIASES` in
 Sea-Bird names (`T090C`, `Sal00`, `PrDM`; trailing digits are the sensor index) are already
 aliased; other vendors' are not. An unmapped depth column yields a file with no depth axis.
 
+Older Seasoft ASCII exports name columns with no unit (`Pr T068 Sal00 OxML/L`); the name
+itself says what the matcher needs:
+
+| Name | Read as |
+| --- | --- |
+| `T068`, `T168`, `t068C`, `Tv268C` / `T090`, `t090C` | Temperature, scale IPTS-68 / ITS-90 (Table 5a header 3), not converted |
+| `OxML/L`, `OxMg/L`, `Sbeox0Mg/L`; `Sbeox0Mm/Kg`; `Sbeox0Mm/L` | Oxygen in ml/l, mg/l; µmol/kg (`Mm` is micromoles); µmol/l, converted to µmol/kg |
+| `t090F` (Fahrenheit); raw sensor channels `OxC`, `OxTC`, `sbeox0V`, `V0`… | not written |
+| `sbeox0PS`, `oxsatML/L`, `Potemp068`, `C0mS/cm` | refused with a reason: saturation, potential temperature, conductivity |
+| `WetChConc`, `Xmiss` | not written: an absorption meter's channel, and percent transmission (code 24 is attenuation, m⁻¹) |
+
 Matching normalises first: bracketed units and anything after a comma or semicolon are
 dropped and the rest lowercased to underscore-separated words, so `Temp (C)` and
 `Temperature [deg C]` reach `temp`/`temperature`. An exact alias wins, else the longest

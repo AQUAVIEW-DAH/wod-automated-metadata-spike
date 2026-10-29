@@ -76,12 +76,15 @@ def _staged_hauls(source: Path) -> List[str]:
                    if is_staged_haul(p)))
 
 
-def _checked_haul(path: str, probe: Path) -> Dict[str, Any]:
-    """Map, write and validate one haul on its own: `{"haul", ...}` or `{"stage", "error"}`."""
+def _checked_haul(path: str, probe: Path, source: str) -> Dict[str, Any]:
+    """Map, write and validate one haul on its own: `{"haul", ...}` or `{"stage", "error"}`.
+
+    `source` is what the haul records as `source_file`, not the staged file's local path."""
     try:
         haul = map_haul(read_staged_haul(path))
     except Exception as e:                              # noqa: BLE001 - unattended run
         return {"stage": "map_haul", "error": f"{type(e).__name__}: {e}"}
+    haul["contract"]["source"] = source
     if not haul["records"]:
         return {"stage": "map_haul", "error": "no Taxa-Records"}
     w = write_taxa_netcdf([haul], str(probe))
@@ -108,7 +111,7 @@ def assemble_taxa(staged_dir, processed_dir, accession: str) -> Dict[str, Any]:
     with tempfile.TemporaryDirectory() as tmp:
         for f in files:
             key = Path(f).relative_to(src).as_posix()
-            res = _checked_haul(f, Path(tmp) / "haul.nc")
+            res = _checked_haul(f, Path(tmp) / "haul.nc", f"staged/{key}")
             if "haul" not in res:
                 failures.append({"file": key, **res})
                 continue
@@ -185,7 +188,7 @@ def _process_taxa(source, output_dir) -> Dict[str, Any]:
         # Relative path, so same-named files in different folders do not collide.
         key = Path(f).name if src.is_file() else Path(f).relative_to(src).as_posix()
         out = out_dir / f"{_output_stem(key)}.nc"
-        res = _checked_haul(f, out)
+        res = _checked_haul(f, out, key)
         if "haul" not in res:
             failures.append({"file": f, **res})
             continue

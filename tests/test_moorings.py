@@ -407,3 +407,26 @@ class TestDeclaredIdentity:
             ds["X1"].epic_code = np.int32(20)
         assert [(v["code"], v["column"]) for v in read_instrument(p)["variables"]] == [
             (1, "Temperature (C)")]
+
+
+class TestAFillTheFileDoesNotDeclare:
+    """EPIC files mark a missing value with 1e35 and may not declare it (0306185)."""
+
+    def test_a_record_of_fill_is_no_variable_and_one_fill_is_no_value(self, tmp_path):
+        from helpers import write_mooring_nc
+
+        p = tmp_path / "16bs4b_sc_0011m.cf.nc"
+        write_mooring_nc(p, days=3, variables=(("T_20", "TEMPERATURE (C)", "C"),
+                                               ("S_41", "SALINITY (PSU)", "PSU"),
+                                               ("P_1", "PRESSURE (DB)", "dbar")))
+        with netCDF4.Dataset(p, "a") as ds:
+            ds["P_1"][:] = 1e35                     # the pressure sensor recorded nothing
+            ds["S_41"][5, 0, 0, 0] = 1e35
+        info = read_instrument(p)
+        assert [v["name"] for v in info["variables"]] == ["T_20", "S_41"]
+        assert info["pressure"] is None
+        assert "PRESSURE (DB) (dbar) (every sample is fill: no value)" in info["not_stored"]
+        # placed by its nominal pressure, not by 1e35 dbar
+        assert info["depth"] == pytest.approx(pressure_to_depth(20.0, 62.19), abs=0.01)
+        daily = mooring_days([p], [info])["daily"][0]
+        assert {round(d["means"][2], 6) for d in daily.values()} == {5.0}

@@ -342,6 +342,10 @@ built["profiles"]   # [{"day": "2018-09-04", "levels": [{"depth", "means": {code
 built["left_out"]   # instrument-days whose variables covered too little of the day
 ```
 
+- **Fill the file does not declare.** EPIC files mark a missing value with 1e35, often with
+  no `_FillValue`. Any value of magnitude 1e30 or more is read as missing, and a variable
+  with no other value (a sensor that recorded nothing) is not read: it is listed as "every
+  sample is fill", so a dead pressure sensor does not place its instrument.
 - **Depth.** An instrument with pressure is placed by its daily mean pressure (UNESCO 1983
   at the mooring's latitude; kPa, bar etc. converted; absolute pressure minus atmosphere; a
   gauge `sea_pressure` preferred). Otherwise by its file (`instrument_depth`, a depth

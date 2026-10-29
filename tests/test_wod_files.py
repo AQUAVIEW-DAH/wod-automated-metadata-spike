@@ -186,7 +186,7 @@ class TestProcessAccessionWritesWodFiles:
         [problem] = second["assembly"]["problems"]
         assert problem["file"] == f"wod_ctd_2015_{ACC}.nc" and "left as it is" in problem["error"]
         with nc.Dataset(first["outputs"][0]) as ds:          # still the first run's casts
-            assert "/ship/" in ds.source_file
+            assert ds.source_file == "ship/cast.csv"          # from the accession's folder
 
     def test_files_of_input_with_no_accession_are_named_for_its_folder(self, tmp_path):
         src = tmp_path / "my_cruise"
@@ -488,7 +488,7 @@ class TestARunWritesOnlyWhatItAnswersFor:
         assert Path(out).name == "wod_ctd_2015_cruiseB.nc"
         with nc.Dataset(out) as ds:
             assert float(ds["lat"][0]) == pytest.approx(30.0)
-            assert "/cruiseB/" in ds.source_file
+            assert ds.source_file == "cast.csv"                # not a local path
 
     def test_a_folder_name_with_no_usable_character_still_scopes_the_names(self, tmp_path):
         src = tmp_path / "航次"

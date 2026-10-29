@@ -9,14 +9,14 @@ Recomputes the mapping contract for each staged file and reads back every writte
 """
 import collections
 import glob
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from wod_etl.discovery import fetch_and_peek_file, load_tabular, profile_raw_data
+from wod_etl.discovery import accession_for, fetch_and_peek_file, load_tabular, profile_raw_data
 from wod_etl.mapping import generate_field_mapping, query_wod_spec
+from wod_etl.writers.wod_files import accession_subpath, folder_scope, is_output_file_name
 
 
 def _depth_increment(df) -> Optional[float]:
@@ -84,16 +84,20 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
     empty: collections.Counter = collections.Counter()
     text_vars: Dict[str, set] = collections.defaultdict(set)
     sources: set = set()
+    # The scope the run named this folder's files with (process_accession).
+    scope = accession_for(str(staged_dir)) or folder_scope(str(staged_dir))
 
     for path in ncs:
         with nc.Dataset(path) as ds:
             casts += len(ds.dimensions["casts"])
             obs += len(ds.dimensions["z_obs"])
-            # A WOD file holds casts of many sources, so record which sources were written.
-            if "source_file" in ds.variables:
-                sources.update(str(x) for x in ds.variables["source_file"][:])
-            elif "source_file" in ds.ncattrs():
-                sources.add(str(ds.source_file))
+            # A WOD file holds casts of many sources, so record which sources were written;
+            # a file of another folder or accession is not this one's.
+            if is_output_file_name(Path(path).name, scope):
+                if "source_file" in ds.variables:
+                    sources.update(str(x) for x in ds.variables["source_file"][:])
+                elif "source_file" in ds.ncattrs():
+                    sources.add(str(ds.source_file))
             for name, var in ds.variables.items():
                 if name.endswith("_qc"):
                     vals, counts = np.unique(np.asarray(var[:]).astype(int), return_counts=True)
@@ -118,9 +122,12 @@ def audit_dataset(staged_dir, dataset_type: str, processed_dir) -> Dict[str, Any
                 r["max"] = max(r["max"], float(finite.max()))
                 r["n"] += int(finite.size)
 
-    # Match by resolved path, so a same-named file in another folder does not count.
-    written = {os.path.realpath(x) for x in sources if "://" not in x}
-    staged_without_casts = [Path(p).name for p in staged if os.path.realpath(p) not in written]
+    # Sources are named from the accession's folder down, as the run named them; a same-named
+    # file in another folder does not count.
+    prefix = accession_subpath(staged_dir, accession_for(str(staged_dir)))
+    staged_without_casts = [Path(p).name for p in staged
+                            if prefix + Path(p).relative_to(staged_dir).as_posix()
+                            not in sources]
 
     flag_summary = {}
     for name, counter in flags.items():

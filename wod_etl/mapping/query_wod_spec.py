@@ -13,11 +13,14 @@ from wod_etl.reference import wod_datasets, wod_secondary_headers, wod_variables
 VARIABLE_ALIASES = {
     # Not potential temperature, which is derived (see NOT_STORED).
     1: ["temperature", "temp", "t", "temp_c", "t_deg_c", "sst", "water_temperature",
-        "t090c", "t190c", "t068c", "t168c", "tv290c", "t090", "t190"],
+        "t090c", "t190c", "t068c", "t168c", "tv290c", "tv268c", "t090", "t190", "t068", "t168"],
     2: ["salinity", "sal", "psal", "psu", "practical_salinity", "sal00", "sal11", "psal00", "psal11",
         "salnty"],
+    # Sea-Bird names carry their unit; `seabird_unit` spells it out for conversion.
     3: ["oxygen", "o2", "doxy", "oxy", "dissolved_oxygen", "do",
-        "sbeox0ml_l", "sbeox1ml_l", "sbeox0mm_kg", "sbeox1mm_kg", "sbox0ml_l", "sbox1ml_l"],
+        "sbeox0ml_l", "sbeox1ml_l", "sbeox0mm_kg", "sbeox1mm_kg", "sbox0ml_l", "sbox1ml_l",
+        "sbeox0mg_l", "sbeox1mg_l", "sbeox0mm_l", "sbeox1mm_l",
+        "oxml_l", "oxmg_l", "oxmm_kg", "oxmm_l"],
     4: ["phosphate", "po4", "phos"],
     6: ["silicate", "sio3", "sio4", "sio2", "silicic_acid", "si"],
     8: ["nitrate", "no3", "nitrate_nitrite", "no2_no3", "nitrate_and_nitrite"],
@@ -74,7 +77,8 @@ NOT_STORED = {
         "aliases": ["potential_temperature", "pot_temp", "pot_t", "ptmp", "ptemp", "theta",
                     "potemp", "potential_temp", "theta0", "tpot"],
         # Patterns catch spellings the alias list misses.
-        "patterns": [r"^(?:pot|poten|potential)_?.*temp", r"^theta(_|$)", r"_theta$"],
+        "patterns": [r"^(?:pot|poten|potential)_?.*temp", r"^potemp", r"^theta(_|$)",
+                     r"_theta$"],
         "reason": "Potential temperature is derived, not measured. Table 3a code 1 is "
                   "in-situ temperature; there is no code for theta.",
         "route": "If the file also has in-situ temperature, that is written and this is not. "
@@ -108,15 +112,19 @@ NOT_STORED = {
     },
     "oxygen_saturation": {
         "aliases": ["oxygen_saturation", "o2_saturation", "o2sat", "oxy_sat", "oxsat",
-                    "doxy_sat", "do_sat", "percent_oxygen_saturation"],
+                    "doxy_sat", "do_sat", "percent_oxygen_saturation",
+                    "sbeox0ps", "sbeox1ps", "oxps"],
+        # Sea-Bird 'oxsatML/L' and 'oxsolML/L' are the saturation concentration.
         "patterns": [r"(?:^|_)(?:o2|oxy|oxygen|doxy|do)_?sat(?:uration)?(?:_|$)",
-                     r"(?:^|_)saturation(?:_|$)"],
-        "reason": "Percent saturation is derived from the oxygen concentration, temperature "
-                  "and salinity. WOD stores the concentration (code 3).",
+                     r"(?:^|_)saturation(?:_|$)", r"^ox(?:sat|sol)"],
+        "reason": "Oxygen saturation, as a percentage or as the saturation concentration, is "
+                  "derived from temperature and salinity. WOD stores the measured "
+                  "concentration (code 3).",
         "route": "Not written; the concentration column is written as code 3.",
     },
     "conductivity": {
-        "aliases": ["conductivity", "cond", "c0s_m", "c1s_m", "c0ms_cm", "condwat", "cndc"],
+        "aliases": ["conductivity", "cond", "c0s_m", "c1s_m", "c0ms_cm", "c1ms_cm", "c0us_cm",
+                    "c1us_cm", "condwat", "cndc"],
         "reason": "WOD stores salinity, not conductivity. No Table 3a code.",
         "route": "Not written. Salinity is usually already derived in the same file; if it "
                  "is not, derive it during staging (it needs temperature and pressure).",
@@ -281,7 +289,20 @@ def extract_unit(name: str) -> Optional[str]:
     tail = re.split(r"[,;]", raw)
     if len(tail) > 1 and _looks_like_unit(tail[-1].strip()):
         return tail[-1].strip()
-    return None
+    seabird = _SEABIRD_OXYGEN_UNIT.match(raw)
+    return seabird.group(1) if seabird else None
+
+
+# Sea-Bird oxygen short names end in their unit: 'Sbeox0ML/L', 'OxMg/L', 'Sbeox0Mm/Kg'.
+# 'Mm' is micromoles.
+_SEABIRD_OXYGEN_UNIT = re.compile(r"^(?:sbe?ox\d?|ox)(ml/l|mg/l|mm/kg|mm/l)$", re.I)
+_SEABIRD_UNITS = {"ml/l": "ml/l", "mg/l": "mg/l", "mm/kg": "umol/kg", "mm/l": "umol/l"}
+
+
+def seabird_unit(name: str) -> Optional[str]:
+    """A Sea-Bird oxygen short name's unit in the usual spelling: 'Sbeox0Mm/Kg' -> 'umol/kg'."""
+    m = _SEABIRD_OXYGEN_UNIT.match(str(name).strip())
+    return _SEABIRD_UNITS[m.group(1).lower()] if m else None
 
 
 # Measurement scales in a column header: variable specific second header 3 (Appendix 3.1).
@@ -298,12 +319,19 @@ _SCALE_PATTERNS = [
 ]
 
 
+# Sea-Bird temperature short names give the scale in their digits: t068C is IPTS-68.
+_SEABIRD_TEMPERATURE = re.compile(r"^t(?:0|1|v2)(68|90)c?$")
+
+
 def extract_scale(name: str) -> Optional[str]:
     """The measurement scale a column header names, e.g. 'ITS-90' or 'PSS-78'."""
     raw = str(name).lower()
     for pattern, label in _SCALE_PATTERNS:
         if re.search(pattern, raw):
             return label
+    seabird = _SEABIRD_TEMPERATURE.match(normalize_name(name).split("_")[0])
+    if seabird:
+        return "IPTS-68" if seabird.group(1) == "68" else "ITS-90"
     return None
 
 

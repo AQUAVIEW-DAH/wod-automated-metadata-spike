@@ -38,7 +38,7 @@ from wod_etl.qc_transforms import apply_qc_auditing, convert_units_and_types
 from wod_etl.verify import validate_intermediate_netcdf, verify_output
 from wod_etl.writers import group_by_file, is_wod_file_name, write_ragged_profiles
 from wod_etl.writers.generate_netcdf_ragged import TITLE as WRITER_TITLE
-from wod_etl.writers.wod_files import folder_scope
+from wod_etl.writers.wod_files import accession_subpath, folder_scope
 from wod_etl.orchestration import run_manifest as mf
 from wod_etl import runlog
 
@@ -72,6 +72,7 @@ def process_accession(
     file_options: Optional[Dict[str, Dict[str, Any]]] = None,
     per_file_dir: Optional[str] = None,
     assemble: bool = True,
+    source_prefix: str = "",
 ) -> Dict[str, Any]:
     """Process every data file in an accession into WOD files, one per dataset and year.
 
@@ -88,6 +89,7 @@ def process_accession(
     file_options   -- {key: {"drop": [...], "metadata": {...}}} from the reviewed decisions.
     per_file_dir   -- results go in `<per_file_dir>/<run_id>/`; default `<output_dir>/per_file/`.
     assemble       -- write the WOD files at the end; False leaves it to `assemble_profiles`.
+    source_prefix  -- put before each file's key in its casts' `source_file` (`staged/`).
 
     Returns the run summary: `outputs` (WOD files), `per_file_outputs` (each source file's
     NetCDF), `per_file_casts` (cached casts), `failures` and `assembly`.
@@ -127,6 +129,7 @@ def _process_accession(
     file_options: Optional[Dict[str, Dict[str, Any]]] = None,
     per_file_dir: Optional[str] = None,
     assemble: bool = True,
+    source_prefix: str = "",
 ) -> Dict[str, Any]:
     """The body of `process_accession`, run inside the accession's log."""
     out_dir = Path(output_dir) if output_dir else PROCESSED_DIR
@@ -147,7 +150,9 @@ def _process_accession(
     candidates = [i for i in listing.get("items", []) if not i["is_dir"]]
     include_missing = None
     root0 = listing.get("source") or url_or_path
-    present = {_norm_source(i["path"]) for i in candidates}
+    source_prefix = source_prefix or accession_subpath(root0, accession
+                                                       or accession_for(url_or_path))
+    present = {_item_key(root0, i["path"], i["name"]) for i in candidates}
     if include is not None:
         wanted = {str(k).replace("\\", "/").strip("/") for k in include}
         candidates = [i for i in candidates
@@ -156,7 +161,6 @@ def _process_accession(
         include_missing = sorted(wanted - found) or None
     # Files this call answers for: listed and included, even past `limit`.
     listed = {_item_key(root0, i["path"], i["name"]) for i in candidates}
-    answered = {_norm_source(i["path"]) for i in candidates}
     if limit:
         candidates = candidates[:limit]
     if not candidates:
@@ -223,7 +227,8 @@ def _process_accession(
                                       dataset_overrides=dataset_overrides,
                                       process_unidentified_as=process_unidentified_as,
                                       run_qc=qc, accession=accession,
-                                      options=(file_options or {}).get(key))
+                                      options=(file_options or {}).get(key),
+                                      source_prefix=source_prefix)
         except Exception as e:                       # noqa: BLE001 - unattended run
             result = {"ok": False, "stage": "unexpected",
                       "error": f"{type(e).__name__}: {e}",
@@ -297,15 +302,15 @@ def _process_accession(
         summary["assembly"] = {"skipped": f"limit={limit}: a trial run is not assembled; "
                                           f"its per-file results are per_file_outputs"}
     elif assemble:
-        _remove_old_layout(manifest, out_dir)
+        _remove_old_layout(manifest, out_dir, source_prefix)
         scope = accession or accession_for(url_or_path) or folder_scope(root)
-        base = _norm_source(root).rstrip("/\\")
 
         def owns(source: str) -> bool:
             """Whether this call may replace a source's casts: covered, or gone from root."""
-            src = _norm_source(source)
-            under = src.startswith(base + "/") or src.startswith(base + os.sep)
-            return src in answered or (under and src not in present)
+            if not source.startswith(source_prefix):
+                return False
+            key = source[len(source_prefix):]
+            return key in listed or key not in present
         assembly = assemble_profiles(summary["per_file_casts"], out_dir, scope, owns=owns)
         summary["outputs"] = [f["path"] for f in assembly["files"]]
         summary["assembly"] = assembly
@@ -478,12 +483,6 @@ def _holds_only(path: Path, owns: Callable[[str], bool]) -> bool:
     return sources is not None and all(owns(s) for s in sources)
 
 
-def _norm_source(source: str) -> str:
-    """A comparable source: a URL as is, a path resolved (symlinks, relative paths)."""
-    text = str(source)
-    return text if "://" in text else os.path.realpath(text)
-
-
 def _load_casts(path: Path) -> Dict[str, Any]:
     with open(path, "rb") as f:
         payload = pickle.load(f)
@@ -502,13 +501,14 @@ def _save_casts(path: Path, key: str, source: str, built: List[Dict[str, Any]]) 
     os.replace(tmp, path)
 
 
-def _remove_old_layout(manifest: Dict[str, Any], out_dir: Path) -> None:
+def _remove_old_layout(manifest: Dict[str, Any], out_dir: Path, source_prefix: str) -> None:
     """Remove this package's old-layout `<stem>.nc` files, which duplicate the WOD files' casts."""
     for key, item in manifest["items"].items():
         old = out_dir / f"{_output_stem(key)}.nc"
         if not old.is_file() or is_wod_file_name(old.name):
             continue
-        if _sources_of(old) != [str(item.get("url"))]:
+        # Files written before sources were accession-relative hold the full path.
+        if _sources_of(old) not in ([source_prefix + key], [str(item.get("url"))]):
             continue
         old.unlink()
         runlog.event(log, logging.INFO, f"removed {old.name}: one source file's output as "
@@ -525,12 +525,14 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
                      run_qc: Optional[bool] = None,
                      accession: Optional[str] = None,
                      options: Optional[Dict[str, Any]] = None,
-                     stem: Optional[str] = None) -> Dict[str, Any]:
+                     stem: Optional[str] = None,
+                     source_prefix: str = "") -> Dict[str, Any]:
     """Run every phase on one file. Returns {"ok": bool, ...}; never raises.
 
-    `key` is the path relative to the accession root (default: basename). `accession` is
-    written into casts that name none; `options` holds the reviewed `drop` and `metadata`;
-    `stem` names the result files (default: from `key`).
+    `key` is the path relative to the accession root (default: basename); `source_prefix`
+    plus `key` is what its casts record as `source_file`. `accession` is written into casts
+    that name none; `options` holds the reviewed `drop` and `metadata`; `stem` names the
+    result files (default: from `key`).
     """
     out_dir = Path(out_dir)
     key = key or os.path.basename(url.rstrip("/")) or url
@@ -571,8 +573,8 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
     unstorable: List[Dict[str, str]] = []
     for cast in casts:
         cast.setdefault("local_path", local)
-        # The file as it is in the accession, not the working copy it was read from.
-        cast.setdefault("origin", url)
+        # The file as the accession names it: not a local path, nor the working copy.
+        cast.setdefault("origin", source_prefix + key)
         if accession and not re.search(r"^\s*#?\s*accession\b", cast.get("header_block") or "",
                                        re.IGNORECASE | re.MULTILINE):
             cast["header_block"] = (cast.get("header_block") or "") + f"\nACCESSION: {accession}"

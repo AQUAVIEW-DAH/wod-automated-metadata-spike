@@ -246,6 +246,42 @@ class TestInstrumentExportNames:
         """No Table 3a code; potential temperature must not map onto Temperature."""
         assert match_variable(column) is None
 
+    @pytest.mark.parametrize("column,code,scale", [
+        ("T068", 1, "IPTS-68"), ("T168", 1, "IPTS-68"), ("t068C", 1, "IPTS-68"),
+        ("T090", 1, "ITS-90"), ("OxML/L", 3, None), ("OxMg/L", 3, None),
+    ])
+    def test_old_seasoft_names_map_with_their_scale(self, column, code, scale):
+        """Accession 0054244's ASCII exports name columns 'Pr T068 Sal00 OxML/L'."""
+        from wod_etl.mapping.query_wod_spec import extract_scale
+
+        assert match_variable(column) == code
+        assert extract_scale(column) == scale
+
+    @pytest.mark.parametrize("column,conversion", [
+        ("OxML/L", "ml_per_l_to_umol_per_kg"), ("Sbeox0Mg/L", "mg_per_l_to_umol_per_kg"),
+        ("Sbeox0Mm/Kg", "none"),                 # Sea-Bird 'Mm' is micromoles
+        ("Sbeox0Mm/L", "molar_rescale"),          # per volume to per mass
+    ])
+    def test_a_sea_bird_oxygen_name_carries_its_unit(self, column, conversion):
+        from wod_etl.mapping.generate_field_mapping import _detect_unit_conversion
+
+        assert match_variable(column) == 3
+        assert _detect_unit_conversion(column, 3) == conversion
+        assert extract_unit(column) == column[-5:].lstrip("0x")
+
+    @pytest.mark.parametrize("column,refused", [
+        ("OxC", None), ("OxTC", None), ("sbeox0V", None),      # sensor current, temperature, volts
+        ("t090F", None),                                         # Fahrenheit: not converted
+        ("Xmiss", None), ("WetChConc", None),
+        ("sbeox0PS", "oxygen_saturation"), ("oxsatML/L", "oxygen_saturation"),
+        ("Potemp068", "potential_temperature"), ("C1mS/cm", "conductivity"),
+    ])
+    def test_raw_and_derived_seasoft_channels_are_not_written(self, column, refused):
+        from wod_etl.mapping.query_wod_spec import explain_column
+
+        assert match_variable(column) is None
+        assert (explain_column(column) or {}).get("variable") == refused
+
     @pytest.mark.parametrize("column,code", [
         ("TA (µmol kg−1)", 17), ("SiO2 (µmol L−1)", 6), ("δ18O(‰)", 43),
     ])

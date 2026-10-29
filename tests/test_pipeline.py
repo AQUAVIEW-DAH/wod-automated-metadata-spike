@@ -159,6 +159,25 @@ class TestConfirmWritesWhatIsIncluded:
         assert "finished: output written and verified" in report
         assert "## Verification" in report and "| temperature | 1 | degree_C |" in report
 
+    def test_sources_are_named_as_the_accession_names_them_not_as_local_paths(self, env,
+                                                                                tmp_path):
+        import netCDF4 as nc
+
+        run_pipeline(str(env))
+        assert confirm_pipeline(ACC)["exit_code"] == EXIT_OK
+        [path] = Workspace(ACC).processed_dir.glob("wod_*.nc")
+        with nc.Dataset(path) as ds:
+            assert sorted({str(x) for x in ds["source_file"][:]}) == [
+                "data/ctd/cast_direct.csv", "staged/x1_ctd/1.csv", "staged/x1_ctd/2.csv",
+                "staged/x1_ctd/3.csv"]
+            assert "data/0-data/X1_CTD_Salinity.csv; data/0-data/X1_CTD_Temp.csv; " \
+                   "data/0-data/X1_StationInfo.csv" in {str(x) for x in ds["source_files_raw"][:]}
+            texts = [str(ds.getncattr(k)) for k in ds.ncattrs()]
+            texts += [str(v.getncattr(k)) for v in ds.variables.values() for k in v.ncattrs()]
+            texts += [str(x) for v in ds.variables.values() if v.dtype is str for x in v[:]]
+        local = (str(tmp_path), os.path.realpath(tmp_path))
+        assert not [t for t in texts if any(p in t for p in local)]
+
     def test_a_file_left_out_is_not_written(self, env):
         run_pipeline(str(env))
         ws = Workspace(ACC)

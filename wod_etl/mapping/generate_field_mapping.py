@@ -16,6 +16,7 @@ from wod_etl.mapping.query_wod_spec import (
     extract_unit,
     match_variable,
     normalize_name,
+    seabird_unit,
     wod_secondary_headers,
     wod_variables,
 )
@@ -314,9 +315,16 @@ def parse_header_block(raw_header_text: str) -> Dict[str, Any]:
     return _parse_header_block(raw_header_text)
 
 
+def _unit_text(raw_col_name: str) -> str:
+    """A column name as the unit patterns read it, with a Sea-Bird name's unit spelled out."""
+    name = canonical_unit_text(raw_col_name).lower()
+    unit = seabird_unit(raw_col_name)
+    return f"{name} ({unit})" if unit else name
+
+
 def _molar_source(raw_col_name: str):
     """The `(prefix, basis)` of a molar unit in a raw column name, or None."""
-    name = canonical_unit_text(raw_col_name).lower()
+    name = _unit_text(raw_col_name)
     return next(((prefix, basis) for prefix, basis, pattern in _MOLAR_UNIT_PATTERNS
                  if re.search(pattern, name)), None)
 
@@ -351,7 +359,7 @@ def molar_to_mass(raw_col_name: str, wod_code: int) -> bool:
 
 def _detect_unit_conversion(raw_col_name: str, wod_code: int) -> str:
     """The conversion the units in a raw column name imply ('Temp (deg F)', 'Depth [ft]')."""
-    name = canonical_unit_text(raw_col_name).lower()
+    name = _unit_text(raw_col_name)
     for label, pattern in _UNIT_PATTERNS:
         if re.search(pattern, name):
             if label == "ml_per_l_to_umol_per_kg":

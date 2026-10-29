@@ -140,7 +140,7 @@ class TestRenameNeverCorrupts:
 class TestRenamePreservesTheContract:
     @pytest.mark.parametrize("columns,renames", [
         (["LAT", "LON", "Depth (m)", "T090C"], {"latitude": "Latitude"}),
-        (["LAT", "LON", "Depth (m)", "T090C"], {"temperature": "Temperature (deg C)"}),
+        (["LAT", "LON", "Depth (m)", "T090C"], {"temperature": "Temperature [ITS-90, deg C]"}),
         (["LAT", "LON", "DepSM", "Sal00"], {"depth": "Depth (m)"}),
     ])
     def test_codes_and_conversions_survive(self, columns, renames):

@@ -679,7 +679,7 @@ def stage_process(run: Run, changed: bool) -> Dict[str, Any]:
                      if r.get("dataset_type")}
         runs["staged"] = process_accession(
             str(staged_root), run_id=f"{ws.accession}_staged", include=staged,
-            dataset_overrides=overrides or None, **common)
+            dataset_overrides=overrides or None, source_prefix=STAGED_PREFIX, **common)
     taxa_root = ws.staging_dir / "taxa"
     hauls_staged = taxa_root.is_dir() and any(taxa_root.rglob("*.csv"))
     if not runs and not hauls_staged:

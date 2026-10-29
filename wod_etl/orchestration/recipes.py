@@ -25,6 +25,14 @@ def _safe(text: Any) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", str(text)).strip("-") or "x"
 
 
+def _in_accession(root: Path, path) -> str:
+    """A source file as the accession names it (`data/0-data/x.csv`), not a local path."""
+    try:
+        return Path(path).relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def _station_lookup(root: Path, recipe: Dict[str, Any]):
     stations, info = read_station_list(root / recipe["station_list"],
                                        station=recipe.get("station_column"),
@@ -213,7 +221,7 @@ def _run_mooring(name: str, recipe: Dict[str, Any], root: Path, out: Path, acces
             metadata=_metadata(accession, plan.get("metadata") or {},
                                {**recipe, "metadata": metadata}, mooring, mooring),
             notes=notes + [f"Daily means of {len(profile['levels'])} instrument(s): {levels}."],
-            sources=[str(p) for p in paths])
+            sources=[_in_accession(root, p) for p in paths])
         written.append(str(path))
     for gap in built["left_out"]:
         skipped.append({"cast": f"{gap['file']} {gap['day']}",
@@ -269,8 +277,7 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
     skip = {str(c) for c in recipe.get("skip_casts") or []}
     base_notes = list(recipe.get("notes") or []) + [
         f"Staged by `wod-etl confirm`: recipe {name} (kind = {kind})."]
-    sources = [f"{root / f}" for f in recipe.get("files") or []] + [
-        str(root / recipe["station_list"])]
+    sources = list(recipe.get("files") or []) + [recipe["station_list"]]
     written, skipped = [], []
 
     if kind == "long":
@@ -340,7 +347,7 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
                                    entry["station"], f"{name}_{_safe(cast)}"),
                 notes=base_notes + [f"Position and date from {entry['source']}."]
                       + override_notes,
-                sources=[str(root / f), str(root / recipe["station_list"])])
+                sources=[f, recipe["station_list"]])
             written.append(str(path))
     elif kind == "by_station":
         for f in recipe.get("files") or []:
@@ -363,7 +370,7 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
                                        entry["station"], f"{name}_{_safe(cast)}"),
                     notes=base_notes + [f"Position and date from {entry['source']}."]
                           + override_notes,
-                    sources=[str(root / f), str(root / recipe["station_list"])])
+                    sources=[f, recipe["station_list"]])
                 written.append(str(path))
     else:
         raise ValueError(f"unknown profile recipe kind {kind!r}")
@@ -391,7 +398,7 @@ def _run_combine(name: str, recipe: Dict[str, Any], root: Path, out: Path, acces
             time=c.get("time"),
             metadata=_metadata(accession, plan.get("metadata") or {}, recipe, c["station"],
                                f"{name}_{_safe(c['station'])}_{c['date']}"),
-            notes=notes, sources=c["sources"])
+            notes=notes, sources=[_in_accession(root, p) for p in c["sources"]])
         written.append(str(path))
     return {"recipe": name, "written": written, "skipped": [],
             "in_one_file_only": info["in_one_file_only"]}
@@ -427,7 +434,7 @@ def _run_tracks(name: str, recipe: Dict[str, Any], root: Path, out: Path, access
             notes=[f"Staged by `wod-etl confirm`: recipe {name} (kind = tracks).",
                    f"One SUR cast from {len(sources)} file(s) on one clock, merged on time: "
                    f"{', '.join(sources)}."],
-            sources=[str(root / f) for f in sources])
+            sources=list(sources))
         written.append(str(path))
     return {"recipe": name, "written": written, "skipped": skipped}
 
@@ -685,8 +692,7 @@ def run_taxa_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir, acces
             metadata=_metadata(accession, plan.get("metadata") or {}, recipe,
                                where.get("station") or "", f"{name}_{stem}"),
             notes=notes + [f"Position and date from {where['source']}."] + override_notes,
-            sources=[str(root / source)] + ([str(root / recipe["station_list"])]
-                                            if recipe.get("station_list") else []))
+            sources=[source] + ([recipe["station_list"]] if recipe.get("station_list") else []))
         written.append(str(path))
         for m in res.get("missing_biological_fields") or []:
             missing_bio[m] = missing_bio.get(m, 0) + 1

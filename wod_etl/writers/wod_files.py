@@ -7,6 +7,7 @@ import hashlib
 import math
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from wod_etl.writers.generate_netcdf_ragged import cast_time, cast_year
@@ -64,6 +65,21 @@ def folder_scope(path_or_url: str) -> str:
         text = text.split("?", 1)[0]
     parts = [p for p in re.split(r"[\\/]+", text) if p not in ("", ".", "..")]
     return parts[-1] if parts else "local"
+
+
+def accession_subpath(root: str, accession: Optional[str]) -> str:
+    """Where a local input folder sits inside its accession's folder: `ship/` for
+    `.../0287423/ship`, '' for that folder itself or one outside it. Source files are recorded
+    from the accession's folder down (`ship/cast.csv`), never as local paths."""
+    if not accession or "://" in str(root):
+        return ""
+    parts = Path(os.path.realpath(root)).parts
+    for i in range(len(parts) - 1, -1, -1):
+        same = parts[i] == accession or (parts[i].isdigit() and str(accession).isdigit()
+                                         and int(parts[i]) == int(accession))
+        if same:
+            return "".join(f"{p}/" for p in parts[i + 1:])
+    return ""
 
 
 def _accession_token(accession: Optional[str]) -> str:

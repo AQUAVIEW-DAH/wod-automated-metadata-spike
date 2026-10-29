@@ -39,6 +39,17 @@ _SERIAL_ATTRS = ("serial_number", "serialnumber", "serialnumbertemperature", "se
 CHUNK = 1_000_000
 MIN_DAY_FRACTION = 0.8           # of a day's hours a variable must cover for a daily mean
 DAY = 86400.0
+# No measurement comes near this: a fill the file does not declare, such as EPIC's 1e35.
+UNDECLARED_FILL = 1e30
+# Samples read to tell whether a variable holds any value.
+SAMPLE = 20000
+
+
+def _floats(v, cut) -> np.ndarray:
+    """A variable's values as floats: fill, declared or not, and non-numbers as NaN."""
+    x = np.ma.filled(np.ma.asarray(v[cut], dtype="float64"), np.nan).ravel()
+    x[np.abs(x) >= UNDECLARED_FILL] = np.nan
+    return x
 
 
 def _attr(ds, names) -> Optional[str]:
@@ -206,6 +217,11 @@ def read_instrument(path) -> Dict[str, Any]:
                         code not in stored:
                     out["not_stored"].append(label)
                     continue
+                every = tuple(slice(None, None, max(1, n // SAMPLE)) if d == tdim else 0
+                              for d in v.dimensions)
+                if not np.isfinite(_floats(v, every)).any():
+                    out["not_stored"].append(f"{label} (every sample is fill: no value)")
+                    continue
                 entry = {"name": name, "code": code, "column": label, "units": units,
                          "factor": 1.0, "offset": 0.0}
                 gauge = False
@@ -275,8 +291,7 @@ def _chunks(ds, entries: Sequence[Dict[str, Any]]):
     n = len(tvar)
 
     def read(v, start, stop):
-        cut = tuple(slice(start, stop) if d == tdim else 0 for d in v.dimensions)
-        return np.ma.filled(np.ma.asarray(v[cut], dtype="float64"), np.nan).ravel()
+        return _floats(v, tuple(slice(start, stop) if d == tdim else 0 for d in v.dimensions))
 
     for start in range(0, n, CHUNK):
         stop = min(n, start + CHUNK)
@@ -308,10 +323,9 @@ def in_water(path, info: Dict[str, Any]) -> Dict[str, Any]:
         return none
     with netCDF4.Dataset(str(path)) as ds:
         v = ds.variables[entry["name"]]
-        step = max(1, (info.get("samples") or 1) // 20000)
+        step = max(1, (info.get("samples") or 1) // SAMPLE)
         cut = tuple(slice(None, None, step) if i == 0 else 0 for i in range(v.ndim))
-        sample = np.ma.filled(np.ma.asarray(v[cut], dtype="float64"), np.nan).ravel()
-        sample = sample * entry["factor"] - entry["offset"]
+        sample = _floats(v, cut) * entry["factor"] - entry["offset"]
         # Median of readings above 0.5 dbar, so time spent on deck is ignored.
         under = sample[np.isfinite(sample) & (sample > 0.5)]
         if under.size == 0:

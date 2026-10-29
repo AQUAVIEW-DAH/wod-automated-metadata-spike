@@ -138,7 +138,7 @@ it with `WOD_PROJECT_ROOT`.
 | Standard levels | No interpolation to standard depths; output is at observed levels. |
 | Pressure → depth | Automatic for pressure in dbar. Other units need a staging script. |
 | Station lists | Joined when a delimited list names each cast's file or station; a workbook-only list is not read. Positions only in a PDF or readme prose need a staging script. |
-| Unlabelled columns | Files with unnamed columns (bare XBT/CTD exports) are left out. Use a staging script. |
+| Unlabelled columns | XCTD and XBT files with a `# XCTD <cruise> <date> <time> <lat> <lon>` header line, and Tsurumi-Seiki XCTD exports, are read. Other files with unnamed columns, such as bare depth and temperature pairs, are left out; use a staging script. |
 | Time zones | Offsets, fixed names (JST, NZST) and US regional zones (ET, PT) are converted to UTC. Ambiguous names (CST, EST, MST, IST, BST) are not. |
 | Surface data | Written at 0 m (manual p.20), a year-day per observation. Streams logged on one clock are one SUR cast; separate tracks stay separate casts, and casts over WOD's 24,000-observation split are not split. |
 | Metadata lookups | Country, platform, institute, project, probe, instrument, units and PI are coded from WOD's lists when one entry matches; otherwise the originator's text is kept and the report says why. |
