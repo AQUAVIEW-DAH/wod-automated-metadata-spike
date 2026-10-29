@@ -586,3 +586,55 @@ class TestLongFormatFilesAreLocatedByTheirStationList:
         f = self._triage(tmp_path)["data/X1_CTD_Temp.csv"]
         assert f["long_format"]["station_list"] == "data/X1_StationInfo.csv"
         assert f["include"] is True and "located by X1_StationInfo.csv" in f["why"]
+
+
+class TestWhenNCEIDoesNotAnswer:
+    """An accession run by number falls back to its earlier download when NCEI cannot list
+    it, and asks NCEI again on the next run."""
+
+    @staticmethod
+    def _listing(env, calls, answer):
+        source = f"https://www.ncei.noaa.gov/data/oceans/archive/arc0000/{ACC}/"
+
+        def fake(src, recursive=False, **_kw):
+            calls.append(src)
+            if not answer["up"]:
+                return {"source": src, "total_items": 0, "items": [],
+                        "error": "ReadTimeout: The read operation timed out"}
+            files = sorted(p for p in env.rglob("*") if p.is_file())
+            return {"source": source, "total_items": len(files),
+                    "items": [{"name": p.name, "path": source + p.relative_to(env).as_posix(),
+                               "is_dir": False, "size_bytes": p.stat().st_size,
+                               "last_modified": None} for p in files]}
+        return fake
+
+    def test_the_download_is_used_then_ncei_is_asked_again(self, env, monkeypatch):
+        from wod_etl import config, discovery
+
+        shutil.copytree(env, config.RAW_DIR / ACC)
+        calls, answer = [], {"up": False}
+        monkeypatch.setattr(discovery, "list_remote_directory",
+                            self._listing(env, calls, answer))
+        r = run_pipeline(ACC)
+        assert r["exit_code"] == EXIT_OK
+        resolve = r["stages"]["resolve"]
+        assert resolve["outputs"]["mode"] == "downloaded"
+        assert "using the 5 files downloaded earlier" in resolve["summary"]
+        [note] = [p for p in r["problems"] if p["kind"] == "offline"]
+        assert not note["blocking"] and "Run again when NCEI answers" in note["how_to_fix"]
+        assert '[files."data/ctd/cast_direct.csv"]' in Workspace(ACC).decisions_path.read_text()
+
+        answer["up"] = True
+        r = run_pipeline(ACC)
+        assert r["exit_code"] == EXIT_OK and len(calls) == 2
+        assert r["stages"]["resolve"]["outputs"]["mode"] == "remote"
+        assert run_pipeline(ACC)["exit_code"] == EXIT_OK and len(calls) == 2    # reused
+
+    def test_without_a_download_the_run_still_fails(self, env, monkeypatch):
+        from wod_etl import discovery
+
+        monkeypatch.setattr(discovery, "list_remote_directory",
+                            self._listing(env, [], {"up": False}))
+        r = run_pipeline(ACC)
+        assert r["exit_code"] == EXIT_FAILED
+        assert "NCEI did not answer" in r["problems"][0]["how_to_fix"]

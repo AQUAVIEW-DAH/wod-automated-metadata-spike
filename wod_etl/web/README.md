@@ -19,6 +19,18 @@ uv run wod-etl web                 # http://127.0.0.1:8000  (--host, --port)
  Activity · report.md · run.log
 ```
 
+Clicking an output file replaces the three panels with its preview (Close or Esc returns):
+
+```
++ wod_ctd_2017_0302596.nc  17 casts ----------------------- [Download] [Close] +
+| [filter casts]   | > File: attributes · variables · dimensions              |
+|  cast id         | cast id · time · position · dataset · levels             |
+|  time · position | [x var] against [z]   # | z | temperature | ..._qc ...   |
+|  ...             |   profile plot          1 | 0 | 28.09       | 0          |
+|                  | > Cast fields: lat, lon, time, secondary headers, ...    |
++------------------+-----------------------------------------------------------+
+```
+
 The app is [`server.py`](server.py) (FastAPI) plus the static front end in
 [`static/`](static/).
 
@@ -29,7 +41,13 @@ The app is [`server.py`](server.py) (FastAPI) plus the static front end in
 - **Safe saving.** A save is parsed as TOML first and never overwrites a file that changed on
   disk. Run and Confirm save unsaved edits first.
 - **Local only.** Binds to 127.0.0.1, has no login, and serves only the accession's own
-  output files for download.
+  output files for download and preview.
+- **Preview.** [`preview.py`](preview.py) reads a file by its CF ragged counts
+  (`sample_dimension`), not by the writer's variable names, so new fields show up without
+  changes. Reads run in a worker process, like the commands keep HDF5 off the server's
+  threads. A cast's levels load in one request and the table shows them 500 at a time; the
+  plot uses level number when depth does not vary (a surface track). Plankton files show
+  each haul's Taxa-Records, with no plot.
 
 API:
 
@@ -38,4 +56,6 @@ API:
 - `GET /api/status|files|decisions|outputs|report|log/<acc>`
 - `PUT /api/decisions/<acc> {"text", "mtime"}`
 - `GET /api/outputs/<acc>/<file>`
+- `GET /api/preview/<acc>/<file>` (attributes, dimensions, variables, cast index)
+- `GET /api/preview/<acc>/<file>/casts/<i>` (one cast's fields and levels)
 - `GET /api/accessions`

@@ -348,6 +348,11 @@ async function refreshOutputs() {
   const r = await api(`/api/outputs/${ui.acc}`);
   const list = $("output-list");
   $("outputs-count").textContent = r.files.length ? String(r.files.length) : "";
+  if (pv.name) {                              // reread a previewed file a command rewrote
+    const f = r.files.find((x) => x.name === pv.name);
+    if (f) openPreview(f.name, f.kind, pv.index ?? 0);
+    else closePreview();
+  }
   if (!r.files.length) {
     list.innerHTML = `<p class="empty">Confirm writes the WOD files here.</p>`;
     return;
@@ -359,9 +364,9 @@ async function refreshOutputs() {
     r.verified === false ? `<div class="verified bad">NOT verified: see the problems above</div>` : "";
   list.innerHTML = verified + r.files.map((f) => {
     const meta = (f.kind === "taxa" ?
-      ["OSD Taxa-Records", f.year, f.hauls != null ? `${f.hauls} hauls` : null,
-       f.records != null ? `${f.records} records` : null, fmtSize(f.size)] :
-      [f.dataset, f.year, f.casts != null ? `${f.casts} casts` : null, fmtSize(f.size)])
+      ["OSD Taxa-Records", f.year, f.hauls != null ? count(f.hauls, "haul") : null,
+       f.records != null ? count(f.records, "record") : null, fmtSize(f.size)] :
+      [f.dataset, f.year, f.casts != null ? count(f.casts, "cast") : null, fmtSize(f.size)])
       .filter(Boolean).join(" · ");
     const resolution = f.kind === "taxa" && f.records != null ?
       `<div class="meta">taxa: ${f.resolved} resolved · ${f.higher_rank} one rank up · ` +
@@ -369,8 +374,9 @@ async function refreshOutputs() {
     const from = f.sources.length ?
       `<div class="meta" title="${esc(f.sources.join("\n"))}">from ${esc(f.sources.slice(0, 3)
         .map(base).join(", "))}${f.sources.length > 3 ? ` and ${f.sources.length - 3} more` : ""}</div>` : "";
-    return `<div class="out"><a href="/api/outputs/${encodeURIComponent(ui.acc)}/` +
-      `${encodeURIComponent(f.name)}" download>${esc(f.name)}</a>` +
+    return `<div class="out"><a class="dl" href="${esc(outputUrl(f.name))}" download>download</a>` +
+      `<a class="preview" href="#" data-name="${esc(f.name)}" data-kind="${esc(f.kind)}" ` +
+      `title="Preview">${esc(f.name)}</a>` +
       `<div class="meta">${esc(meta)}</div>${resolution}${from}</div>`;
   }).join("") +
     (r.taxa_list_unavailable ? `<p class="meta warn">Taxa list unavailable: names kept as ` +
@@ -378,16 +384,294 @@ async function refreshOutputs() {
       `--from process</p>` : "") +
     (r.taxa_not_stated ? `<p class="meta warn" title="${esc(r.taxa_not_stated.join("\n"))}">` +
       `${esc(r.taxa_not_stated.length)} Biological Header field(s) not stated: ask the ` +
-      `submitter</p>` : "") +
-    `<p class="meta">In ${esc(r.folder)}` +
-    (r.written_at ? `, written ${esc(r.written_at)}` : "") + "</p>";
+      `submitter</p>` : "");
 }
+
+// ------------------------------------------------------------------ preview
+const PAGE = 500;                    // level rows added to the table at a time
+const pv = { name: null, kind: null, file: null, index: null, cast: null, token: 0,
+             x: null, y: null, fieldsOpen: true };
+const outputUrl = (name) => `/api/outputs/${encodeURIComponent(ui.acc)}/${encodeURIComponent(name)}`;
+const previewUrl = (name) => `/api/preview/${encodeURIComponent(ui.acc)}/${encodeURIComponent(name)}`;
+const words = () => pv.kind === "taxa" ? { one: "haul", many: "hauls", row: "record" }
+                                        : { one: "cast", many: "casts", row: "level" };
+const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const coord = (v, pos, neg) => v == null ? "?" : `${Math.abs(v).toFixed(4)}°${v < 0 ? neg : pos}`;
+const position = (c) => c.lat == null && c.lon == null ? null :
+  `${coord(c.lat, "N", "S")} ${coord(c.lon, "E", "W")}`;
+
+async function openPreview(name, kind, index = 0) {
+  const token = ++pv.token;
+  if (name !== pv.name) Object.assign(pv, { x: null, y: null });
+  Object.assign(pv, { name, kind, file: null, index: null, cast: null });
+  document.body.classList.add("previewing");
+  $("preview-name").textContent = name;
+  $("preview-count").textContent = "";
+  $("preview-download").href = outputUrl(name);
+  $("cast-filter").placeholder = `Filter ${words().many}`;
+  $("cast-list").innerHTML = `<p class="empty">Reading…</p>`;
+  $("file-info").innerHTML = $("cast-view").innerHTML = "";
+  let file;
+  try {
+    file = await api(previewUrl(name));
+  } catch (e) {
+    if (token === pv.token) $("cast-list").innerHTML = `<p class="msg bad">${esc(e.message)}</p>`;
+    return;
+  }
+  if (token !== pv.token) return;
+  pv.file = file;
+  $("preview-count").textContent = count(file.casts.length, words().one);
+  renderFileInfo();
+  renderCastList();
+  if (file.casts.length) showCast(Math.min(index, file.casts.length - 1));
+}
+
+function closePreview() {
+  pv.token++;
+  pv.name = null;
+  document.body.classList.remove("previewing");
+}
+
+function kvTable(rows) {
+  return `<table class="kv">` + rows.map(([key, value, title, units]) => {
+    const none = value == null || (Array.isArray(value) && !value.length);
+    const text = none ? "—" : Array.isArray(value) ? value.join(", ") : String(value);
+    return `<tr><th${title ? ` title="${esc(title)}"` : ""}>${esc(key)}</th>` +
+      `<td class="${none ? "none" : ""}">${esc(text)}` +
+      (units && !none ? ` <span class="unit">${esc(units)}</span>` : "") + "</td></tr>";
+  }).join("") + "</table>";
+}
+
+function renderFileInfo() {
+  const f = pv.file;
+  const dims = Object.entries(f.dimensions).map(([k, n]) => `${k} ${n}`).join(" · ");
+  $("file-info").innerHTML = `<details class="section"><summary>File: ` +
+    `${Object.keys(f.attributes).length} attributes · ${f.variables.length} variables · ` +
+    `${esc(dims)}</summary><h4>Global attributes</h4>` + kvTable(Object.entries(f.attributes)) +
+    `<h4>Variables</h4>` + f.variables.map((v) =>
+      `<details class="var"><summary><code>${esc(v.name)}</code> <span class="meta">` +
+      `(${esc(v.dimensions.join(", "))}) ${esc(v.type)}` +
+      (v.attributes.long_name ? ` · ${esc(v.attributes.long_name)}` : "") + "</span></summary>" +
+      kvTable(Object.entries(v.attributes)) + "</details>").join("") + "</details>";
+}
+
+function renderCastList() {
+  if (!pv.file) return;
+  const q = $("cast-filter").value.trim().toLowerCase();
+  const shown = pv.file.casts.filter((c) => !q ||
+    [c.id, c.time, c.dataset].join(" ").toLowerCase().includes(q));
+  $("cast-list").innerHTML = shown.map((c) =>
+    `<div class="cast${c.index === pv.index ? " active" : ""}" data-index="${c.index}">` +
+    `<span class="name">${esc(c.id)}</span><div class="meta">` +
+    esc([c.time, position(c), c.size != null ? count(c.size, words().row) : null]
+      .filter(Boolean).join(" · ")) + "</div></div>").join("") ||
+    `<p class="empty">Nothing matches.</p>`;
+}
+
+async function showCast(index) {
+  const token = pv.token;
+  pv.index = index;
+  for (const el of $("cast-list").querySelectorAll(".cast")) {
+    el.classList.toggle("active", +el.dataset.index === index);
+    if (+el.dataset.index === index) el.scrollIntoView({ block: "nearest" });
+  }
+  let cast;
+  try {
+    cast = await api(`${previewUrl(pv.name)}/casts/${index}`);
+  } catch (e) {
+    if (token === pv.token && pv.index === index) {
+      $("cast-view").innerHTML = `<p class="msg bad">${esc(e.message)}</p>`;
+    }
+    return;
+  }
+  if (token !== pv.token || pv.index !== index) return;
+  pv.cast = cast;
+  renderCast();
+}
+
+function renderCast() {
+  const c = pv.file.casts[pv.index], cast = pv.cast, w = words();
+  const head = `<div class="cast-head"><strong>${esc(c.id)}</strong><div class="meta">` +
+    esc([`${w.one} ${c.index + 1} of ${pv.file.casts.length}`, c.time, position(c), c.dataset,
+         c.size != null ? count(c.size, w.row) : null].filter(Boolean).join(" · ")) +
+    "</div></div>";
+  const tables = cast.tables.map((t, i) => {
+    const plot = i === 0 && pv.kind !== "taxa" && t.rows > 1 && t.columns.filter(plotted).length > 1;
+    return `<div class="cast-main">${plot ? `<figure class="plot" id="plot"></figure>` : ""}` +
+      `<div class="levels" data-table="${i}"></div></div>` +
+      (t.empty.length ? `<p class="meta">No value in this ${w.one}: ${esc(t.empty.join(", "))}</p>`
+                      : "");
+  }).join("");
+  $("cast-view").innerHTML = head + tables +
+    `<details class="section fields"${pv.fieldsOpen ? " open" : ""}><summary>` +
+    `${w.one[0].toUpperCase() + w.one.slice(1)} fields (${cast.fields.length})</summary>` +
+    kvTable(cast.fields.map((f) => [f.name, f.value, f.long_name, f.units])) + "</details>";
+  cast.tables.forEach((t, i) => renderLevels(document.querySelector(`.levels[data-table="${i}"]`), t));
+  if ($("plot")) renderPlot();
+}
+
+function renderLevels(box, t) {
+  box.innerHTML = `<table class="data"><thead><tr><th class="n">#</th>` + t.columns.map((c) =>
+    `<th class="${c.flag ? "flag" : ""}" title="${esc(c.long_name || c.name)}">${esc(c.name)}` +
+    (c.units ? `<small>${esc(c.units)}</small>` : "") + "</th>").join("") +
+    "</tr></thead><tbody></tbody></table>";
+  const body = box.querySelector("tbody");
+  const more = document.createElement("button");
+  more.className = "small more";
+  let shown = 0;
+  const add = () => {
+    const end = Math.min(t.rows, shown + PAGE);
+    let html = "";
+    for (let r = shown; r < end; r++) {
+      html += `<tr><td class="n">${r + 1}</td>` + t.columns.map((c) => {
+        const v = c.values[r];
+        return `<td class="${c.flag ? "flag" : c.numeric ? "" : "text"}">${v == null ? "" : esc(v)}</td>`;
+      }).join("") + "</tr>";
+    }
+    body.insertAdjacentHTML("beforeend", html);
+    shown = end;
+    more.hidden = shown >= t.rows;
+    more.textContent = `Show ${Math.min(PAGE, t.rows - shown)} more (${t.rows - shown} not shown)`;
+  };
+  more.onclick = add;
+  box.append(more);
+  add();
+}
+
+// A profile: one variable against depth, depth increasing downward. Any numeric column can
+// be either axis; a level number stands in for depth when depth does not vary (a track).
+const plotted = (c) => c.numeric && !c.flag;
+
+function extent(values) {
+  let lo = Infinity, hi = -Infinity;
+  for (const v of values) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  return [lo, hi];
+}
+
+function niceScale(lo, hi, count) {
+  if (lo === hi) { const pad = Math.abs(lo) * 0.05 || 1; lo -= pad; hi += pad; }
+  const raw = (hi - lo) / count, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+  const first = Math.floor(lo / step) * step, last = Math.ceil(hi / step) * step;
+  const ticks = [];
+  for (let t = first; t <= last + step / 2; t += step) ticks.push(+t.toPrecision(12));
+  return { lo: first, hi: last, ticks };
+}
+
+function renderPlot() {
+  const fig = $("plot"), t = pv.cast.tables[0];
+  const level = { name: "level", values: Array.from({ length: t.rows }, (_, i) => i + 1),
+                  down: true, units: null };
+  const cols = [...t.columns.filter(plotted), level];
+  const byName = Object.fromEntries(cols.map((c) => [c.name, c]));
+  const varies = (c) => { const [a, b] = extent(c.values.filter((v) => v != null)); return a < b; };
+  const y = byName[pv.y] ? pv.y : (cols.find((c) => c.down && c !== level && varies(c)) || level).name;
+  const x = byName[pv.x] && pv.x !== y ? pv.x
+    : (cols.find((c) => !c.down && c !== level && c.name !== y) || cols.find((c) => c.name !== y)).name;
+  const option = (c, sel) => `<option value="${esc(c.name)}"${c.name === sel ? " selected" : ""}>` +
+    `${esc(c.name)}${c.units ? ` (${esc(c.units)})` : ""}</option>`;
+  const X = byName[x], Y = byName[y];
+  const pts = [];
+  for (let i = 0; i < t.rows; i++) {
+    if (X.values[i] != null && Y.values[i] != null) pts.push([X.values[i], Y.values[i], i]);
+  }
+  const W = 340, H = 420, L = 56, R = 14, T = 26, B = 10, pw = W - L - R, ph = H - T - B;
+  let svg = `<p class="meta">No ${words().row} has both values.</p>`;
+  let sx, sy;
+  if (pts.length) {
+    const xs = niceScale(...extent(pts.map((p) => p[0])), 4);
+    const ys = niceScale(...extent(pts.map((p) => p[1])), 6);
+    sx = (v) => L + (v - xs.lo) / (xs.hi - xs.lo) * pw;
+    sy = (v) => T + (Y.down ? v - ys.lo : ys.hi - v) / (ys.hi - ys.lo) * ph;
+    const grid = xs.ticks.map((v) => `<line class="grid" x1="${sx(v)}" x2="${sx(v)}" y1="${T}" y2="${T + ph}"/>` +
+      `<text class="tick" x="${sx(v)}" y="${T - 8}" text-anchor="middle">${v}</text>`).join("") +
+      ys.ticks.map((v) => `<line class="grid" x1="${L}" x2="${L + pw}" y1="${sy(v)}" y2="${sy(v)}"/>` +
+      `<text class="tick" x="${L - 6}" y="${sy(v) + 4}" text-anchor="end">${v}</text>`).join("");
+    const line = pts.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("");
+    const dots = pts.length <= 60 ? pts.map((p) =>
+      `<circle class="dot" r="4" cx="${sx(p[0]).toFixed(1)}" cy="${sy(p[1]).toFixed(1)}"/>`).join("") : "";
+    svg = `<svg width="${W}" height="${H}" role="img" aria-label="${esc(x)} against ${esc(y)}">` +
+      grid + `<path class="series" d="${line}"/>${dots}` +
+      `<g class="hover" visibility="hidden"><line class="cross" x1="${L}" x2="${L + pw}"/>` +
+      `<circle class="dot" r="4"/></g>` +
+      `<rect class="hit" x="${L}" y="${T}" width="${pw}" height="${ph}" fill="transparent"/></svg>` +
+      `<div class="tip" hidden></div>`;
+  }
+  fig.innerHTML = `<figcaption><select id="plot-x" title="Plotted">` +
+    cols.filter((c) => c.name !== y && c !== level).map((c) => option(c, x)).join("") +
+    `</select><span class="meta">against</span><select id="plot-y" title="Downward axis">` +
+    cols.filter((c) => c.name !== x).map((c) => option(c, y)).join("") + `</select></figcaption>` + svg;
+  $("plot-x").onchange = (e) => { pv.x = e.target.value; renderPlot(); };
+  $("plot-y").onchange = (e) => { pv.y = e.target.value; renderPlot(); };
+  if (!pts.length) return;
+
+  // The crosshair snaps to the nearest level on the downward axis.
+  const hit = fig.querySelector(".hit"), hover = fig.querySelector(".hover"), tip = fig.querySelector(".tip");
+  const fmt = (c, v) => `${v}${c.units ? ` ${c.units}` : ""}`;
+  hit.addEventListener("pointermove", (e) => {
+    const box = hit.getBoundingClientRect(), py = e.clientY - box.top + T, px = e.clientX - box.left + L;
+    let best = null, bestD = Infinity;
+    for (const p of pts) {
+      const d = Math.abs(sy(p[1]) - py) * 1000 + Math.abs(sx(p[0]) - px);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    const cx = sx(best[0]), cy = sy(best[1]);
+    hover.setAttribute("visibility", "visible");
+    hover.querySelector("line").setAttribute("y1", cy);
+    hover.querySelector("line").setAttribute("y2", cy);
+    hover.querySelector("circle").setAttribute("cx", cx);
+    hover.querySelector("circle").setAttribute("cy", cy);
+    const strong = document.createElement("strong");
+    strong.textContent = fmt(X, best[0]);
+    const rest = document.createElement("span");
+    rest.textContent = `${y} ${fmt(Y, best[1])}` + (Y === level ? "" : ` · level ${best[2] + 1}`);
+    tip.replaceChildren(strong, rest);
+    tip.hidden = false;
+    const svgBox = fig.querySelector("svg").getBoundingClientRect(), figBox = fig.getBoundingClientRect();
+    const left = svgBox.left - figBox.left + cx + 12;
+    tip.style.left = `${Math.min(left, svgBox.left - figBox.left + W - tip.offsetWidth)}px`;
+    tip.style.top = `${svgBox.top - figBox.top + cy + 10}px`;
+  });
+  hit.addEventListener("pointerleave", () => { hover.setAttribute("visibility", "hidden"); tip.hidden = true; });
+}
+
+$("output-list").addEventListener("click", (e) => {
+  const a = e.target.closest("a.preview");
+  if (!a) return;
+  e.preventDefault();
+  openPreview(a.dataset.name, a.dataset.kind);
+});
+$("preview-close").onclick = closePreview;
+$("cast-filter").addEventListener("input", renderCastList);
+$("cast-list").addEventListener("click", (e) => {
+  const el = e.target.closest(".cast");
+  if (el) showCast(+el.dataset.index);
+});
+$("cast-view").addEventListener("toggle", (e) => {
+  if (e.target.matches(".fields")) pv.fieldsOpen = e.target.open;
+}, true);
+document.addEventListener("keydown", (e) => {
+  if (!pv.name) return;
+  if (e.key === "Escape" && !(e.target === $("cast-filter") && e.target.value)) {
+    closePreview();
+    return;
+  }
+  const inList = e.target === document.body ||
+    (e.target instanceof Element && e.target.closest("#cast-list"));
+  if ((e.key === "ArrowDown" || e.key === "ArrowUp") && inList) {
+    const items = [...$("cast-list").querySelectorAll(".cast")];
+    const next = items[items.findIndex((el) => +el.dataset.index === pv.index) +
+                       (e.key === "ArrowDown" ? 1 : -1)];
+    if (next) { e.preventDefault(); showCast(+next.dataset.index); }
+  }
+});
 
 // ------------------------------------------------------------------ commands
 async function open(acc, keepSource = false) {
   if (ui.dirty && acc !== ui.acc && !window.confirm("Discard your unsaved edits to decisions.toml?")) {
     return;
   }
+  closePreview();
   ui.acc = acc;
   ui.dirty = false;
   history.replaceState(null, "", `#${acc}`);

@@ -31,10 +31,13 @@ def offline_code_lists(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_retry_backoff(monkeypatch):
-    """Keep retries but skip the waits between them."""
+    """Keep retries but skip the waits between them; every service starts reachable."""
     from wod_etl import http_util
 
     monkeypatch.setattr(http_util, "HTTP_BACKOFF_SECONDS", 0.0)
+    http_util.forget_unreachable()
+    yield
+    http_util.forget_unreachable()
 
 
 @pytest.fixture(autouse=True)

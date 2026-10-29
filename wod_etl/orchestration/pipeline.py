@@ -186,7 +186,10 @@ def _outcome(status: str, summary: str, outputs: Optional[Dict[str, Any]] = None
 
 
 # --------------------------------------------------------------------- 1 resolve
-def _fp_resolve(run: Run) -> str:
+def _fp_resolve(run: Run) -> Optional[str]:
+    # None (always rerun) after a fallback to downloaded files: NCEI may answer next time.
+    if run.out("resolve").get("mode") == "downloaded":
+        return None
     return _hash({"input": run.source})
 
 
@@ -212,6 +215,14 @@ def stage_resolve(run: Run, changed: bool) -> Dict[str, Any]:
                         {"mode": "local", "data_root": root, "files": n})
     listing = list_remote_directory(src, recursive=True)
     if listing.get("error") or not listing.get("items"):
+        downloaded = _downloaded_files(run.ws.mirror_dir)
+        if downloaded and not os.path.exists(src):
+            return _outcome(
+                "done", f"could not list {src}; using the {downloaded} files downloaded "
+                        f"earlier to {run.ws.mirror_dir}",
+                {"mode": "downloaded", "data_root": str(run.ws.mirror_dir),
+                 "files": downloaded, "listing_error": listing.get("error")},
+                [remedies.for_listing_fallback(listing, src, run.ws.mirror_dir)])
         return _outcome("failed", f"could not list {src}", problems=[
             remedies.for_listing(listing, src)])
     items = [{"key": _rel(listing["source"], i["path"]), "url": i["path"],
@@ -231,6 +242,13 @@ def stage_resolve(run: Run, changed: bool) -> Dict[str, Any]:
                 + ")",
         {"mode": "remote", "source": listing["source"], "files": len(items),
          "resolution": resolution or None, "version": version or None})
+
+
+def _downloaded_files(mirror: Path) -> int:
+    """Files a fetch completed in `mirror` (an interrupted download leaves only `.part`)."""
+    if not mirror.is_dir():
+        return 0
+    return sum(1 for p in mirror.rglob("*") if p.is_file() and p.suffix != ".part")
 
 
 def _rel(root: str, path: str) -> str:
@@ -938,7 +956,8 @@ def _drive(ws: Workspace, source: str, command: str, stages: tuple,
                 fp = None
             done = prior.get("status") == "done"
             intact = not done or prior.get("left") == _left_behind(run, name)
-            if done and intact and prior.get("fingerprint") == fp and name not in forced:
+            if done and intact and fp is not None and prior.get("fingerprint") == fp \
+                    and name not in forced:
                 say(f"[{i}/{total}] {name:<8} ✓ {prior.get('summary', '')} (unchanged)")
                 runlog.event(log, logging.INFO, f"stage {name}: up to date, reused; "
                                                 f"{prior.get('summary', '')}",
@@ -970,6 +989,8 @@ def _drive(ws: Workspace, source: str, command: str, stages: tuple,
                              traceback=traceback.format_exc(limit=8))
                 outcome = _outcome("failed", f"raised {type(e).__name__}",
                                    problems=[remedies.for_exception(name, e)])
+            # Resolve's fingerprint reads its own outputs, so they are recorded first.
+            state["stages"][name]["outputs"] = outcome["outputs"]
             try:
                 fp_after = FINGERPRINTS[name](run) if outcome["status"] == "done" else fp
             except Exception:                           # noqa: BLE001

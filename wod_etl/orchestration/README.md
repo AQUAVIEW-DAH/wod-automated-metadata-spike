@@ -33,7 +33,7 @@ uv run wod-etl status <acc>        # where it stopped, what is open, where the f
 
 | # | Stage | Command | Does | Stops when |
 | --- | --- | --- | --- | --- |
-| 1 | resolve | run | turns the input into a listing: the accession's ISO record in NCEI's metadata catalogue (then its landing page) names the archive directory; picks the latest version of a versioned accession; extracts a tarball | NCEI does not answer (run again later), or the input is not an accession |
+| 1 | resolve | run | turns the input into a listing: the accession's ISO record in NCEI's metadata catalogue (then its landing page) names the archive directory; picks the latest version of a versioned accession; extracts a tarball. When NCEI cannot list it and `data/raw/<accession>` holds an earlier download, uses that, with a note, and tries NCEI again on the next run | NCEI does not answer and nothing was downloaded before (run again later), or the input is not an accession |
 | 2 | fetch | run | mirrors a remote accession into `data/raw/<acc>/`, re-fetching files whose listed date changed; a local folder is used in place | a download fails (run again; finished files are kept) |
 | 3 | triage | run | `classify_accession` → `triage.json`: per file, what it holds, include or not, the WOD dataset, why | |
 | 4 | decide | run | writes an entry for every undecided file and recipes for files that need reshaping | never: review is the next step |

@@ -4,12 +4,15 @@ Each command runs as a child `wod-etl` process, one at a time, so a crash cannot
 the server. Runs share `data/runs/<accession>/` with the terminal. There is no login.
 """
 import datetime as dt
+import multiprocessing
 import os
 import re
 import subprocess
 import sys
 import threading
 import tomllib
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +27,7 @@ from wod_etl.orchestration import pipeline
 from wod_etl.orchestration import run_manifest
 from wod_etl.orchestration.pipeline import (CONFIRM_STAGES, RUN_STAGES, STAGES, Workspace,
                                             load_state)
+from wod_etl.web import preview
 from wod_etl.writers import is_output_file_name, is_taxa_file_name
 
 UI_DIR = Path(__file__).with_name("static")
@@ -35,6 +39,9 @@ app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
 _job_lock = threading.Lock()
 _job: Dict[str, Any] = {}          # the command running now, or the last one
+
+_reader_lock = threading.Lock()
+_reader: Optional[ProcessPoolExecutor] = None   # reads output files for the preview
 
 
 def _now() -> str:
@@ -271,13 +278,51 @@ def outputs(accession: str):
             "report": ws.report_md.is_file()}
 
 
-@app.get("/api/outputs/{accession}/{name}")
-def download(accession: str, name: str):
-    ws = _workspace(accession)
-    path = ws.processed_dir / name
+def _output_path(accession: str, name: str) -> Path:
+    path = _workspace(accession).processed_dir / name
     if not is_output_file_name(name, accession) or not path.is_file():
         raise HTTPException(404, f"no WOD file {name!r} for {accession}")
-    return FileResponse(path, media_type="application/x-netcdf", filename=name)
+    return path
+
+
+@app.get("/api/outputs/{accession}/{name}")
+def download(accession: str, name: str):
+    return FileResponse(_output_path(accession, name), media_type="application/x-netcdf",
+                        filename=name)
+
+
+@app.get("/api/preview/{accession}/{name}")
+def preview_file(accession: str, name: str):
+    """A written file's attributes, dimensions and variables, and its casts."""
+    return _read(name, preview.describe, str(_output_path(accession, name)))
+
+
+@app.get("/api/preview/{accession}/{name}/casts/{index}")
+def preview_cast(accession: str, name: str, index: int):
+    """One cast of a written file: its fields and its levels."""
+    return _read(name, preview.cast, str(_output_path(accession, name)), index)
+
+
+def _read(name: str, fn, *args):
+    """Run a read in a worker process: HDF5 stays off the server's threads, and a crash in it
+    costs a new worker, not the page."""
+    global _reader
+    with _reader_lock:
+        if _reader is None:
+            _reader = ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn"),
+                                          initializer=preview.exit_with, initargs=(os.getpid(),))
+        reader = _reader
+    try:
+        return reader.submit(fn, *args).result(timeout=120)
+    except IndexError as e:
+        raise HTTPException(404, f"{name}: {e}")
+    except OSError as e:
+        raise HTTPException(409, f"cannot read {name}: {e}")
+    except BrokenProcessPool:
+        with _reader_lock:
+            if _reader is reader:
+                _reader = None
+        raise HTTPException(500, f"the reader stopped while reading {name}: try again")
 
 
 @app.get("/api/report/{accession}", response_class=PlainTextResponse)

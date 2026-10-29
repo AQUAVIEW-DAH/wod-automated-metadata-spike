@@ -30,6 +30,16 @@ def for_listing(listing: Dict[str, Any], source: str) -> Dict[str, Any]:
     return problem("resolve", f"could not list {source}", err or "no files found", how)
 
 
+def for_listing_fallback(listing: Dict[str, Any], source: str, mirror) -> Dict[str, Any]:
+    """A note: the listing failed, so the files downloaded earlier were used instead."""
+    return problem("resolve", f"could not list {source}; used the files downloaded earlier "
+                              f"to {mirror}", str(listing.get("error") or "no files found"),
+                   "If an earlier download was interrupted or NCEI has changed the accession "
+                   "since, files may be missing or out of date. Run again when NCEI answers: "
+                   "it lists the accession and fetches only what is missing.",
+                   blocking=False, kind="offline")
+
+
 def for_download(key: str, error: str) -> Dict[str, Any]:
     return problem("fetch", f"could not download {key}", error,
                    "A network or server error; it is retried. Rerun later: files already "

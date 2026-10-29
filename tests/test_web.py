@@ -81,6 +81,20 @@ class TestRunReviewConfirm:
             f"wod_ctd_2015_{ACC}.nc", "CTD", 2015, 1)
         got = c.get(f"/api/outputs/{ACC}/{f['name']}")
         assert got.status_code == 200 and got.content[:4] == b"\x89HDF"
+
+        about = c.get(f"/api/preview/{ACC}/{f['name']}").json()
+        assert about["attributes"]["featureType"] == "profile"
+        assert about["level_dimension"] == "z_obs"
+        [cast] = about["casts"]
+        assert (cast["time"], cast["lat"], cast["lon"], cast["size"]) == (
+            "2015-11-09", 21.0, 142.3, 20)
+        one = c.get(f"/api/preview/{ACC}/{f['name']}/casts/0").json()
+        [levels] = one["tables"]
+        z = next(col for col in levels["columns"] if col["name"] == "z")
+        temperature = next(col for col in levels["columns"] if col["name"] == "temperature")
+        assert z["down"] and z["values"][:3] == [0.0, 1.0, 2.0]
+        assert temperature["values"][:3] == [25.0, 24.9, 24.8]
+        assert c.get(f"/api/preview/{ACC}/{f['name']}/casts/1").status_code == 404
         assert "## WOD files written" in c.get(f"/api/report/{ACC}").text
         assert "cli confirm" in c.get(f"/api/log/{ACC}").text
         assert c.get("/api/accessions").json()[0]["accession"] == ACC
@@ -120,3 +134,32 @@ class TestWhatItRefuses:
         assert c.get("/api/status/not!an:id").status_code == 400
         assert c.get(f"/api/outputs/{ACC}/notes.nc").status_code == 404
         assert c.get(f"/api/outputs/{ACC}/wod_ctd_2015_{ACC}.nc").status_code == 404
+        assert c.get(f"/api/preview/{ACC}/notes.nc").status_code == 404
+        assert c.get(f"/api/preview/{ACC}/wod_ctd_2015_{ACC}.nc/casts/0").status_code == 404
+
+
+class TestPreview:
+    """The preview reads a file by its ragged counts, not by the writer's variable names."""
+
+    def test_each_cast_gets_its_own_levels_and_fields(self, tmp_path):
+        from helpers import make_cast
+        from wod_etl.web import preview
+        from wod_etl.writers import write_ragged_profiles
+
+        p = tmp_path / "out.nc"
+        write_ragged_profiles([make_cast(dic=True), make_cast(lat=62.4, rows=2)], str(p))
+        about = preview.describe(str(p))
+        assert [(c["lat"], c["size"]) for c in about["casts"]] == [(61.93, 3), (62.4, 2)]
+        assert about["casts"][0]["time"] == "1985-06-12"
+
+        second = preview.cast(str(p), 1)
+        fields = {f["name"]: f["value"] for f in second["fields"]}
+        assert fields["wod_variable_codes"] == [1]
+        assert fields["wod_unique_cast"] is None
+        [levels] = second["tables"]
+        assert levels["rows"] == 2
+        assert "dissolved_inorganic_carbon" in levels["empty"]
+        assert [c["values"] for c in levels["columns"] if c["name"] == "temperature"] == [
+            [20.0, 18.0]]
+        with pytest.raises(IndexError):
+            preview.cast(str(p), 2)

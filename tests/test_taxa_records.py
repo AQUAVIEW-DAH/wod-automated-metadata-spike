@@ -138,6 +138,18 @@ class TestProcessTaxa:
                 "biological field 'Bucket colour' has no Table 6a home: red"]
             assert ds["cast_id"][0] == "0303928_SHU1505-st01-norpac-100um_20151109"
 
+    def test_the_preview_lists_each_haul_s_records(self, lists, tmp_path):
+        from wod_etl.web import preview
+
+        _haul(tmp_path / "staged" / "h1.csv")
+        out = process_taxa(tmp_path / "staged", tmp_path / "out")["outputs"][0]
+        about = preview.describe(out)
+        assert about["level_dimension"] == "taxa_obs"
+        assert [(c["size"], c["time"]) for c in about["casts"]] == [(5, "2015-11-09")]
+        [records] = preview.cast(out, 0)["tables"]
+        names = next(c for c in records["columns"] if c["name"] == "taxon_name_originator")
+        assert names["values"][0] == "Acartia danae" and not names["numeric"]
+
     def test_a_reversed_depth_range_is_not_output(self, lists, tmp_path):
         _haul(tmp_path / "staged" / "bad.csv", upper_depth=150, lower_depth=0)
         res = process_taxa(tmp_path / "staged", tmp_path / "out")

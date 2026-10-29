@@ -49,6 +49,26 @@
     <h2>Output files <span id="outputs-count" class="count"></span></h2>
     <div id="output-list" class="scroll"><p class="empty">Confirm writes the WOD files here.</p></div>
   </section>
+
+  <section class="panel" id="preview">
+    <h2><span id="preview-name"></span> <span id="preview-count" class="count"></span>
+      <span class="actions">
+        <a id="preview-download" class="button small" download>Download</a>
+        <button id="preview-close" class="small" title="Esc">Close</button>
+      </span>
+    </h2>
+    <div class="preview-body">
+      <div class="cast-pane">
+        <input id="cast-filter" type="search" autocomplete="off" spellcheck="false"
+               placeholder="Filter casts">
+        <div id="cast-list" class="scroll"></div>
+      </div>
+      <div id="preview-main" class="scroll">
+        <div id="file-info"></div>
+        <div id="cast-view"></div>
+      </div>
+    </div>
+  </section>
 </main>
 
 <footer>

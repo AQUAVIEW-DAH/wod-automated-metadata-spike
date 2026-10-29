@@ -57,7 +57,12 @@ res = list_remote_directory(
 - Links that leave the starting directory are refused and counted in `skipped_navigation_links`.
 - Recursion stops at depth 8 and skips visited URLs.
 - Errors return `{"error": "...", "total_items": 0, "items": []}`; it never raises. 429, 5xx and
-  timeouts are retried `HTTP_RETRIES` times with backoff; 404 is not.
+  timeouts are retried `HTTP_RETRIES` times with backoff; 404 is not. A subfolder that cannot be
+  listed fails the whole listing, so a partial listing never passes for the whole.
+- A service that times out or cannot be reached on every attempt is not tried again in that
+  process (`http_util`), and the requests after it fail at once. A service is the host plus the
+  first two path segments: NCEI's archive and code lists (`/data/oceans`), landing pages
+  (`/access/metadata`) and metadata catalogue (`/metadata/geoportal`) fail separately.
 - `filter_extension` filters files only; directories are always returned.
 
 **Input resolution.** A landing page, an `/archive/accession/<n>` URL or a bare accession

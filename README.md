@@ -30,7 +30,8 @@ uv run wod-etl web                 # http://127.0.0.1:8000
    Change what you disagree with and Save. Files that cannot be written are proposed out,
    with the reason.
 3. **Confirm**: stages, processes and verifies the included files. The output appears on the
-   right, with download links.
+   right, with download links. Click a file to preview it: its casts, each cast's levels
+   and fields, a profile plot, and the file's attributes.
 
 Running a step again redoes only what changed. The page is local-only, has no login and runs
 one command at a time. See [`wod_etl/web/README.md`](wod_etl/web/README.md).
@@ -144,6 +145,7 @@ it with `WOD_PROJECT_ROOT`.
 | Left out on purpose | ADCP, images, video, PDFs, and tables with nothing WOD stores. Media files are not downloaded. |
 | Plankton | Count matrices and whole-sample biomass need a staging script. Biological Header values cannot be set in `decisions.toml`. |
 | Code lists | Fetched from the WOD website and cached for 30 days. Offline, values are kept as text. |
+| NCEI down | A run by accession number uses the files downloaded earlier to `data/raw/<accession>` and says so; it cannot tell whether that download was complete. Each command waits on one timed-out request per NCEI service, then skips it. |
 | WOD QC | Off by default (`WOD_RUN_QC=1` turns it on). The originator's flags are always kept verbatim. |
 | Below-detection values | Become missing (Table 12 has no flag for them). The count is reported. |
 | `seawater_density` | Per-volume values are converted with WOD's constant 1025 kg/m³ (manual p.15), not the sample's own density. Every file that uses it says so. |

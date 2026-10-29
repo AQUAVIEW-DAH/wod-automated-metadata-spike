@@ -116,6 +116,9 @@ def list_remote_directory(
 
         if recursive and is_dir and _depth < _MAX_RECURSION_DEPTH:
             sub = list_remote_directory(full_url, True, filter_extension, visited, _depth + 1)
+            if sub.get("error"):                # a partial listing would pass for the whole
+                return {**sub, "source": url_or_path, "total_items": 0, "items": [],
+                        "error": f"could not list {full_url}: {sub['error']}"}
             items.extend(sub.get("items", []))
 
     result = {

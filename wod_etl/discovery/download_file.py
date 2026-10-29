@@ -18,6 +18,7 @@ from wod_etl.config import (
     RAW_DIR,
     USER_AGENT,
 )
+from wod_etl.http_util import mark_unreachable, unreachable
 
 
 def download_file(
@@ -50,8 +51,12 @@ def download_file(
             "note": "file already present; pass overwrite=True to refetch",
         }
 
+    if unreachable(url_or_path):
+        return {"status": "error", "source": url_or_path, "error": unreachable(url_or_path),
+                "attempts": 0, "local_path": None}
+
     tmp = dest.with_suffix(dest.suffix + ".part")
-    last_error = None
+    last_error = last_exc = None
 
     for attempt in range(1, HTTP_RETRIES + 1):
         try:
@@ -87,11 +92,13 @@ def download_file(
             }
 
         except Exception as e:                      # noqa: BLE001 - reported, not raised
-            last_error = f"{type(e).__name__}: {e}"
+            last_error, last_exc = f"{type(e).__name__}: {e}", e
             tmp.unlink(missing_ok=True)
             if attempt < HTTP_RETRIES:
                 time.sleep(HTTP_BACKOFF_SECONDS * attempt)
 
+    if isinstance(last_exc, httpx.TransportError):     # timeouts included
+        mark_unreachable(url_or_path, last_exc)
     return {"status": "error", "source": url_or_path, "error": last_error,
             "attempts": HTTP_RETRIES, "local_path": None}
 
