@@ -70,7 +70,7 @@ def for_file_failure(key: str, stage: str, error: str, staged: bool) -> Dict[str
                + leave_out)
     elif stage in ("sniff_format", "read_any"):
         how = ("It does not read as any table this package knows. If it holds data, find out "
-               "what wrote it (see knowledge/reading_unknown_files.md) and stage "
+               "what wrote it (the accession's readme or the submitter) and stage "
                "it with a script recipe. " + leave_out)
     elif staged:
         how = ("A recipe wrote this staged file: fix the recipe in decisions.toml (units, "

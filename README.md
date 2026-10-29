@@ -21,7 +21,7 @@ Run everything with `uv run` from the project root.
 ### In the browser
 
 ```bash
-uv run wod-etl web                 # http://127.0.0.1:8000
+uv run wod-etl web                 # http://127.0.0.1:8000  (--host, --port)
 ```
 
 1. **Run**: enter an accession number, NCEI URL, local folder or `.tar.gz`. It downloads and
@@ -33,8 +33,13 @@ uv run wod-etl web                 # http://127.0.0.1:8000
    right, with download links. Click a file to preview it: its casts, each cast's levels
    and fields, a profile plot, and the file's attributes.
 
+Each input file has a "preview" link too: text, tables, XML and workbooks laid out to read
+("As stored" shows the file unchanged), a NetCDF's variables, or a PDF in the page.
+
 Running a step again redoes only what changed. The page is local-only, has no login and runs
-one command at a time. See [`wod_etl/web/README.md`](wod_etl/web/README.md).
+one command at a time. A save is checked as TOML first and never overwrites a file that
+changed on disk; Run and Confirm save unsaved edits first. The terminal and the page share
+`data/runs/<accession>/`, so a run can start in one and finish in the other.
 
 ### In a terminal
 
@@ -77,9 +82,8 @@ uv run wod-etl status 0303928
 ## WOD reference
 
 The WOD 2023 manual is [`knowledge/wod_readme.pdf`](knowledge/wod_readme.pdf). Its tables are
-extracted to JSON with page citations, and the code reads those rather than hardcoded values.
-[`knowledge/README.md`](knowledge/README.md) says which file answers which question, and which
-appendices still need the PDF.
+extracted to JSON with page citations (`knowledge/wod_code_tables/`), and the code reads those
+rather than hardcoded values.
 
 ## For developers
 
@@ -95,19 +99,13 @@ wod_etl/
   writers/        ragged NetCDF: profiles and Taxa-Records
   verify/         structural and value checks
   reference/      loads knowledge/wod_code_tables/
-knowledge/        the manual, its tables as JSON, and prose references
+knowledge/        the manual and its tables as JSON
 tests/            unit and end-to-end tests; fixtures/accessions/
 data/             working area, not tracked
 ```
 
 Imports run one way: `cli` → `web` → `orchestration` → phase packages → `reference`. The page
 runs each command as a `wod-etl` child process rather than importing `cli`.
-Each package's README documents its functions:
-[orchestration](wod_etl/orchestration/README.md) · [staging](wod_etl/staging/README.md) ·
-[discovery](wod_etl/discovery/README.md) · [mapping](wod_etl/mapping/README.md) ·
-[qc_transforms](wod_etl/qc_transforms/README.md) · [writers](wod_etl/writers/README.md) ·
-[verify](wod_etl/verify/README.md) · [reference](wod_etl/reference/README.md) ·
-[web](wod_etl/web/README.md).
 
 **Custom staging scripts.** For a layout nothing here reads, write a script and name it in
 `decisions.toml`:
@@ -120,8 +118,7 @@ files = ["3-old-ascii/drop_001.dat"]
 ```
 
 `confirm` runs the script with `WOD_DATA_ROOT` and `WOD_STAGING_OUT` set. The script writes
-staged CSVs with `wod_etl.staging.write_staged_cast`. See
-[`knowledge/reading_unknown_files.md`](knowledge/reading_unknown_files.md).
+staged CSVs with `wod_etl.staging.write_staged_cast`.
 
 **New WOD release.** Replace the PDF and rebuild the code-list links:
 `uv run python -m wod_etl.reference.extract_code_table_links`.

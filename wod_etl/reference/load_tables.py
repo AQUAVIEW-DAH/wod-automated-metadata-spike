@@ -30,8 +30,7 @@ def load_table(name: str) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(
             f"Missing WOD reference table {path}. These are extracted from "
-            f"knowledge/wod_readme.pdf; see knowledge/wod_code_tables/"
-            f"standardization_rules.md. Known tables: {', '.join(sorted(TABLE_FILES))}."
+            f"knowledge/wod_readme.pdf. Known tables: {', '.join(sorted(TABLE_FILES))}."
         )
     return json.loads(path.read_text())
 

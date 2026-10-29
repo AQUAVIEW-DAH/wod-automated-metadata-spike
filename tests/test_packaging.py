@@ -1,9 +1,8 @@
-"""Repository checks: package layout, READMEs, doc links, reference data, fingerprint paths."""
+"""Repository checks: package layout, doc links, reference data, fingerprint paths."""
 import re
 import subprocess
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,23 +35,12 @@ class TestPortablePackage:
         assert 'include = ["wod_etl*"]' in cfg
 
 
-class TestEveryPackageDocumentsItself:
-    PACKAGES = sorted(p.name for p in (ROOT / "wod_etl").iterdir()
-                      if p.is_dir() and (p / "__init__.py").exists())
-
-    @pytest.mark.parametrize("package", PACKAGES)
-    def test_package_has_a_readme(self, package):
-        readme = ROOT / "wod_etl" / package / "README.md"
-        assert readme.is_file(), f"wod_etl/{package}/ has no README.md"
-        assert len(readme.read_text().splitlines()) > 10
-
-
 class TestDocLinksResolve:
     def test_every_relative_link_resolves(self):
         broken = []
         for md in tracked("*.md"):
-            if ".claude" in md.relative_to(ROOT).parts:
-                continue
+            if ".claude" in md.relative_to(ROOT).parts or not md.is_file():
+                continue                        # not part of the repo, or deleted locally
             for target in LINK.findall(md.read_text()):
                 if re.match(r"^(https?:|mailto:|#)", target):
                     continue

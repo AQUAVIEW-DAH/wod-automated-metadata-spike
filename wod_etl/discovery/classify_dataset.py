@@ -103,8 +103,7 @@ EXCLUSION_CATEGORIES: Dict[str, Dict[str, Any]] = {
         "route": "Belongs in WOD as a Biological Header (Table 6a) and Taxa-Records "
                  "(Table 7a), not a profile. `wod-etl confirm` writes tables it can locate; "
                  "anything else is staged with wod_etl.staging.write_staged_haul and written "
-                 "with wod_etl.orchestration.process_taxa. See "
-                 "knowledge/plankton_biomass.md.",
+                 "with wod_etl.orchestration.process_taxa.",
         "harvest": "Capture the Table 6a collection metadata while the accession is open: "
                    "gear and tow type, mesh size, water volume filtered or tow distance, "
                    "preservative, counting and weighing method. Only the submitter has it, "

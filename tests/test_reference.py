@@ -1,5 +1,4 @@
 """The knowledge base: table loading, flag derivation, and the knowledge index."""
-from pathlib import Path
 
 import pytest
 
@@ -93,67 +92,3 @@ class TestReferenceContent:
 
     def test_molar_volume_constant(self):
         assert unit_constants()["molar_volume_o2_stp_l_per_mole"] == pytest.approx(22.3916)
-
-
-class TestKnowledgeRouting:
-    """knowledge/README.md must route common questions to files that answer them."""
-
-    ROOT = Path(__file__).resolve().parents[1]
-    KNOWLEDGE = ROOT / "knowledge"
-    INDEX = KNOWLEDGE / "README.md"
-    PROSE = ("datasets.md", "cast_structure.md", "accession_field_guide.md",
-             "plankton_biomass.md", "reading_unknown_files.md",
-             "wod_code_tables/standardization_rules.md")
-
-    def test_index_and_prose_references_exist(self):
-        assert self.INDEX.is_file(), "knowledge/README.md is the knowledge index"
-        for name in self.PROSE:
-            assert (self.KNOWLEDGE / name).is_file(), f"missing knowledge doc: {name}"
-
-    def test_index_links_all_resolve(self):
-        import re
-        for link in re.findall(r"\]\(([^)#]+)\)", self.INDEX.read_text()):
-            if link.startswith(("http", "#")):
-                continue
-            assert (self.INDEX.parent / link).resolve().exists(), f"dead link in index: {link}"
-
-    def test_index_routes_to_every_prose_reference(self):
-        """A prose file the index does not name will not be found."""
-        text = self.INDEX.read_text()
-        for name in self.PROSE:
-            assert name in text, f"knowledge/README.md does not route to {name}"
-
-    def test_the_pages_the_index_cites_are_where_it_says(self):
-        import re
-        from wod_etl.staging.pdf_tables import pdf_page_text
-
-        text = self.INDEX.read_text()
-        cited = [(f"APPENDIX {n}", int(page))
-                 for n, page in re.findall(r"Appendix (\d+), pp?\.(\d+)", text)]
-        cited += [("XBT DEPTH-TIME EQUATION", int(re.search(r"§III\.C, p\.(\d+)", text)[1])),
-                  ("STANDARD LEVEL", int(re.search(r"§III\.B, p\.(\d+)", text)[1]))]
-        assert len(cited) >= 12, cited
-        pages, info = pdf_page_text(self.KNOWLEDGE / "wod_readme.pdf",
-                                    sorted({p for _, p in cited}))
-        assert pages, info
-        wrong = [(term, page) for term, page in cited
-                 if term not in re.sub(r"\s+", " ", pages.get(page, "")).upper()]
-        assert not wrong, f"not on the cited page: {wrong}"
-
-    @pytest.mark.parametrize("question,terms", [
-        ("plankton is not a Table 3a variable", ["Biological Header", "upper and lower depth"]),
-        ("SUR is one cast per cruise",          ["one cast per cruise", "Julian year-day"]),
-        ("surface data skips vertical checks",  ["no vertical checks"]),
-        ("bottom depth is a secondary header",  ["Bottom Depth"]),
-        ("buoy datasets are distinguishable",   ["moored", "profiling float", "drifting"]),
-        ("the 29/29 collision is explained",    ["Probe Type", "Air pressure"]),
-        ("CTD vs OSD is by resolution",         ["depth increment"]),
-        ("degree-decimal-minute coordinates",   ["decimal minutes"]),
-        ("nitrite is excluded",                 ["nitrite"]),
-    ])
-    def test_common_questions_are_answered_in_prose(self, question, terms):
-        """A failure means the answer moved or was lost from the prose docs."""
-        text = "\n".join(p.read_text() for p in self.KNOWLEDGE.rglob("*.md")).lower()
-        missing = [t for t in terms if t.lower() not in text]
-        assert not missing, f"{question}: knowledge docs no longer cover {missing}"
-
