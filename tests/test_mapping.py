@@ -1,4 +1,4 @@
-"""Phase 2 and 3: WOD spec lookup, mapping contract, conversions and QC flags."""
+"""Mapping and conversions: WOD spec lookup, mapping contract, conversions and QC flags."""
 import numpy as np
 import pandas as pd
 import pytest

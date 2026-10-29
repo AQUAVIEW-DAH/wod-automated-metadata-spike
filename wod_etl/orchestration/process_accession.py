@@ -14,10 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from wod_etl.config import (
-    ABORT_FAILURE_RATE_MIN_SAMPLE,
-    ABORT_IF_FAILURE_RATE_ABOVE,
     NON_DATA_EXTENSIONS,
-    ON_FILE_ERROR,
     PROCESSED_DIR,
     RUN_WOD_QC,
     RAW_DIR,
@@ -58,11 +55,8 @@ def process_accession(
     run_id: Optional[str] = None,
     recursive: bool = True,
     filter_extension: Optional[str] = None,
-    limit: Optional[int] = None,
     resume: bool = True,
     retry_failed: bool = False,
-    dry_run: bool = False,
-    on_error: str = ON_FILE_ERROR,
     dataset_overrides: Optional[Dict[str, str]] = None,
     process_unidentified_as: Optional[str] = None,
     run_qc: Optional[bool] = None,
@@ -115,11 +109,8 @@ def _process_accession(
     run_id: Optional[str] = None,
     recursive: bool = True,
     filter_extension: Optional[str] = None,
-    limit: Optional[int] = None,
     resume: bool = True,
     retry_failed: bool = False,
-    dry_run: bool = False,
-    on_error: str = ON_FILE_ERROR,
     dataset_overrides: Optional[Dict[str, str]] = None,
     process_unidentified_as: Optional[str] = None,
     run_qc: Optional[bool] = None,
@@ -159,10 +150,8 @@ def _process_accession(
                       if _item_key(root0, i["path"], i["name"]) in wanted]
         found = {_item_key(root0, i["path"], i["name"]) for i in candidates}
         include_missing = sorted(wanted - found) or None
-    # Files this call answers for: listed and included, even past `limit`.
+    # Files this call answers for: listed and included.
     listed = {_item_key(root0, i["path"], i["name"]) for i in candidates}
-    if limit:
-        candidates = candidates[:limit]
     if not candidates:
         return {"status": "empty", "source": url_or_path,
                 # Prefer `hint` when the URL itself explains the emptiness.
@@ -200,16 +189,12 @@ def _process_accession(
     todo = mf.pending_items(manifest, retry_failed=retry_failed)
     runlog.event(log, logging.INFO,
                  f"run {rid}: {len(manifest['items'])} file(s) listed under "
-                 f"{listing.get('source') or url_or_path}; {len(todo)} to process"
-                 + (" (dry run)" if dry_run else ""),
+                 f"{listing.get('source') or url_or_path}; {len(todo)} to process",
                  kind="run_start", run_id=rid, source=listing.get("source"),
                  listing={k: listing.get(k) for k in ("resolution", "version",
                                                       "extracted_from") if listing.get(k)},
                  to_process=len(todo))
-    if dry_run:
-        return _dry_run(rid, url_or_path, todo, manifest, dataset_type, dataset_overrides)
 
-    attempted = failed = 0
     for entry in todo:
         key = entry["key"]
 
@@ -229,20 +214,19 @@ def _process_accession(
                                       run_qc=qc, accession=accession,
                                       options=(file_options or {}).get(key),
                                       source_prefix=source_prefix)
-        except Exception as e:                       # noqa: BLE001 - unattended run
+        except Exception as e:                       # noqa: BLE001 - reported, not raised
             result = {"ok": False, "stage": "unexpected",
                       "error": f"{type(e).__name__}: {e}",
                       "traceback": traceback.format_exc(limit=4)}
 
         if result.get("skip"):
-            # Not WOD profile data: a skip, not counted toward the abort rate.
+            # Not WOD profile data: a skip, not a failure.
             mf.mark(manifest, key, mf.SKIPPED, reason=result["reason"],
                     evidence=result.get("evidence"), stage=result.get("stage"))
             runlog.event(log, logging.INFO, f"skipped {key}: {result['reason']}", kind="file",
                          key=key, status="skipped", reason=result["reason"])
             continue
 
-        attempted += 1
         if result["ok"]:
             mf.mark(manifest, key, mf.DONE,
                     output_path=result["output_path"], cache_path=result["cache_path"],
@@ -269,7 +253,6 @@ def _process_accession(
                          columns_not_written=not_written or None,
                          casts_not_written=len(result.get("skipped_casts") or []) or None)
         else:
-            failed += 1
             mf.mark(manifest, key, mf.FAILED, stage=result["stage"], error=result["error"],
                     detail=result.get("detail"), traceback=result.get("traceback"))
             runlog.event(log, logging.WARNING,
@@ -277,16 +260,6 @@ def _process_accession(
                          key=key, status="failed", stage=result["stage"],
                          error=result["error"], detail=result.get("detail"),
                          traceback=result.get("traceback"))
-            if on_error == "stop":
-                return _abort(manifest, f"on_error='stop' and {key} failed at "
-                                        f"{result['stage']}")
-
-            if (attempted >= ABORT_FAILURE_RATE_MIN_SAMPLE
-                    and failed / attempted > ABORT_IF_FAILURE_RATE_ABOVE):
-                return _abort(manifest,
-                              f"failure rate {failed}/{attempted} exceeded "
-                              f"{ABORT_IF_FAILURE_RATE_ABOVE:.0%}, which usually means a "
-                              f"systematic problem, not bad data")
 
     summary = mf.summarize(manifest)
     summary["status"] = "complete" if summary["complete"] else "incomplete"
@@ -296,13 +269,7 @@ def _process_accession(
     summary["per_file_casts"] = list(dict.fromkeys(
         it["cache_path"] for key, it in manifest["items"].items()
         if key in listed and it["status"] == mf.DONE and it.get("cache_path")))
-    if assemble and limit:
-        # A `limit` trial is not assembled: it would replace a full run's WOD files.
-        summary["outputs"] = summary["per_file_outputs"]
-        summary["assembly"] = {"skipped": f"limit={limit}: a trial run is not assembled; "
-                                          f"its per-file results are per_file_outputs"}
-    elif assemble:
-        _remove_old_layout(manifest, out_dir, source_prefix)
+    if assemble:
         scope = accession or accession_for(url_or_path) or folder_scope(root)
 
         def owns(source: str) -> bool:
@@ -341,7 +308,7 @@ def _verify_written_output(out_dir: Path, summary: Dict[str, Any],
     try:
         # The files this run wrote, not whatever else is in the folder.
         report = verify_output(str(out_dir), paths=summary["outputs"])
-    except Exception as e:                           # noqa: BLE001 - unattended run
+    except Exception as e:                           # noqa: BLE001 - reported, not raised
         return {"output_verified": False,
                 "output_verification": {"error": f"{type(e).__name__}: {e}"}}
 
@@ -499,21 +466,6 @@ def _save_casts(path: Path, key: str, source: str, built: List[Dict[str, Any]]) 
         pickle.dump({"version": CACHE_VERSION, "key": key, "source": source, "casts": built},
                     f, protocol=pickle.HIGHEST_PROTOCOL)
     os.replace(tmp, path)
-
-
-def _remove_old_layout(manifest: Dict[str, Any], out_dir: Path, source_prefix: str) -> None:
-    """Remove this package's old-layout `<stem>.nc` files, which duplicate the WOD files' casts."""
-    for key, item in manifest["items"].items():
-        old = out_dir / f"{_output_stem(key)}.nc"
-        if not old.is_file() or is_wod_file_name(old.name):
-            continue
-        # Files written before sources were accession-relative hold the full path.
-        if _sources_of(old) not in ([source_prefix + key], [str(item.get("url"))]):
-            continue
-        old.unlink()
-        runlog.event(log, logging.INFO, f"removed {old.name}: one source file's output as "
-                                        f"written before the WOD files",
-                     kind="wod_file", status="removed", names=[old.name])
 
 
 # ------------------------------------------------------------------ per file
@@ -828,7 +780,7 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
         verdict["skip_reason"] = (
             "no measured variable: this file carries coordinates and identifiers but "
             "nothing from Table 3a. It is a station list or metadata sidecar, not a cast: "
-            "use it to stage coordinates into the cast files that reference it (Phase 0, "
+            "use it to stage coordinates into the cast files that reference it (staging, "
             "wod_etl/staging/).")
         return None, verdict
     if empty:
@@ -848,7 +800,7 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
             f"missing required coordinate(s): {', '.join(blocking)}. They are not in the "
             f"data file or its header block. Stage them in first from a sibling station "
             f"list, the folder readme or a cruise report, noting where each came from "
-            f"(Phase 0, wod_etl/staging/).")
+            f"(staging, wod_etl/staging/).")
         return None, verdict
     verdict["missing_coordinates"] = missing or None
 
@@ -1032,60 +984,6 @@ def _prefilter(key: str, dataset_type, dataset_overrides) -> Optional[Dict[str, 
     return None
 
 
-def _dry_run(rid, source, todo, manifest, dataset_type, dataset_overrides):
-    """What a run would do. Local files are classified from their head, remote ones by path."""
-    from wod_etl.discovery import classify_file
-
-    would, skipped, staging, undecided = [], [], [], []
-    for entry in todo:
-        key = entry["key"]
-        pre = _prefilter(key, dataset_type, dataset_overrides)
-        if pre is not None:
-            skipped.append({"key": key, **pre})
-            continue
-        override = _override_for(key, dataset_overrides)
-        local = os.path.exists(str(entry.get("url") or ""))
-        if local:
-            v = classify_file(entry["url"], rel=key)
-            decided_by = "file head (format, header, columns)"
-        else:
-            cd = classify_dataset(path=key)
-            v = {"action": ("exclude" if cd.get("exclusion") else
-                            "process" if cd.get("dataset_type") else "inspect"),
-                 "dataset_type": cd.get("dataset_type"), "confidence": cd["confidence"],
-                 "reason": (cd.get("exclusion") or {}).get("reason"),
-                 "evidence": cd["evidence"]}
-            decided_by = "path only (remote; not downloaded)"
-
-        forced = override or dataset_type
-        if forced and v["action"] not in ("document",):
-            would.append({"key": key, "dataset_type": forced,
-                          "decided_by": "dataset_overrides" if override else "explicit argument",
-                          "evidence": v.get("evidence", [])[:2]})
-        elif v["action"] == "process":
-            would.append({"key": key, "dataset_type": v["dataset_type"],
-                          "decided_by": f"{decided_by} ({v['confidence']} confidence)",
-                          "evidence": v.get("evidence", [])[:2]})
-        elif v["action"] == "stage":
-            staging.append({"key": key, "reason": v["reason"]})
-        elif v["action"] in ("exclude", "document", "sidecar"):
-            skipped.append({"key": key, "reason": v.get("reason") or v["action"],
-                            "stage": "dry_run", "decided_by": decided_by})
-        else:
-            undecided.append({"key": key, "reason": v.get("reason"),
-                              "decided_by": decided_by})
-    return {"status": "dry_run", "run_id": rid, "source": source,
-            "would_process": would, "would_skip": skipped,
-            "needs_staging": staging, "undecided": undecided,
-            "already_done": [k for k, v in manifest["items"].items()
-                             if v["status"] in mf.TERMINAL],
-            "note": "Local files are triaged from their heads, as the real run would. Remote "
-                    "files are judged by path only; the real run reclassifies them from "
-                    "their content, so those types can change. `needs_staging` fails in a "
-                    "real run; `undecided` is skipped unless process_unidentified_as is "
-                    "set."}
-
-
 def _run_report(manifest) -> Dict[str, Any]:
     """Dataset mix, skip reasons and dropped columns for the run summary."""
     types: Dict[str, int] = {}
@@ -1144,7 +1042,7 @@ def _cast_left_out(c: Dict[str, Any]) -> str:
 
 def _log_summary(result: Dict[str, Any]) -> None:
     """One closing line per run, with the fields a report must carry."""
-    if result.get("status") in ("error", "empty", "dry_run"):
+    if result.get("status") in ("error", "empty"):
         runlog.event(log, logging.INFO, f"process_accession ended: {result.get('status')}",
                      kind="run_end", status=result.get("status"),
                      error=result.get("error"), hint=result.get("hint"))
@@ -1160,25 +1058,7 @@ def _log_summary(result: Dict[str, Any]) -> None:
                  skipped_reasons=result.get("skipped_reasons"),
                  output_verified=result.get("output_verified"),
                  findings=verification.get("findings"),
-                 abort_reason=result.get("abort_reason"),
                  manifest=result.get("manifest_path"))
-
-
-def _abort(manifest, reason: str) -> Dict[str, Any]:
-    runlog.event(log, logging.ERROR, f"run aborted: {reason}", kind="abort", reason=reason)
-    summary = mf.summarize(manifest)
-    summary["status"] = "aborted"
-    summary["abort_reason"] = reason
-    summary.update(_run_report(manifest))
-    # An aborted run is not assembled; its per-file outputs are kept for inspection.
-    summary["per_file_outputs"] = summary["outputs"]
-    summary["outputs"] = []
-    summary["output_verified"] = None
-    summary["output_verification"] = {
-        "skipped": "run aborted, so no WOD file was written (any in output_dir are from "
-                   "an earlier run); check its per-file outputs with "
-                   "verify_output(output_dir, paths=result['per_file_outputs'])"}
-    return summary
 
 
 def _item_key(root: str, path: str, name: str) -> str:
@@ -1208,7 +1088,7 @@ def _result_stems(keys) -> Dict[str, str]:
 
 
 def _output_stem(key: str) -> str:
-    """'stationA/data.csv' -> 'stationA__data': old-layout output stem, used for taxa hauls."""
+    """'stationA/data.csv' -> 'stationA__data': a per-haul output file's stem."""
     stem = key[:-len(Path(key).suffix)] if Path(key).suffix else key
     return re.sub(r"[^A-Za-z0-9._-]+", "_", stem.replace("/", "__")).strip("_") or "cast"
 

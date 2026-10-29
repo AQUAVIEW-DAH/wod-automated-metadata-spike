@@ -64,7 +64,6 @@ TOOL_VERSION = _tool_version()
 # ------------------------------------------------------------------ HTTP
 USER_AGENT = os.environ.get("WOD_USER_AGENT", f"{TOOL_NAME}/{TOOL_VERSION}")
 HTTP_TIMEOUT = float(os.environ.get("WOD_HTTP_TIMEOUT", "30"))
-PEEK_BYTES = int(os.environ.get("WOD_PEEK_BYTES", "8192"))
 DOWNLOAD_CHUNK_BYTES = 1 << 16
 MAX_DOWNLOAD_BYTES = int(os.environ.get("WOD_MAX_DOWNLOAD_BYTES", str(2 * 1024**3)))
 HTTP_RETRIES = int(os.environ.get("WOD_HTTP_RETRIES", "3"))
@@ -114,14 +113,6 @@ DEFAULT_DATASET_TYPE = os.environ.get("WOD_DEFAULT_DATASET_TYPE", "OSD")
 # WOD observed-level QC (manual Table 12, section III). Off by default, as the data centre
 # applies it downstream; originator flags are always kept.
 RUN_WOD_QC = os.environ.get("WOD_RUN_QC", "0").strip().lower() in ("1", "true", "yes", "on")
-
-# ------------------------------------------------------- failure policy
-# On a per-file failure, "skip" records it and continues; "stop" aborts the run.
-ON_FILE_ERROR = os.environ.get("WOD_ON_FILE_ERROR", "skip")
-
-# Abort when this fraction of files fails, which suggests a systematic problem.
-ABORT_IF_FAILURE_RATE_ABOVE = float(os.environ.get("WOD_ABORT_FAILURE_RATE", "0.5"))
-ABORT_FAILURE_RATE_MIN_SAMPLE = 10
 
 # ------------------------------------------------------- source text
 # Text encodings tried in order; cp932 covers Japanese-authored files.
@@ -179,14 +170,12 @@ def describe() -> dict:
         "user_agent": USER_AGENT,
         "http_timeout": HTTP_TIMEOUT,
         "http_retries": HTTP_RETRIES,
-        "peek_bytes": PEEK_BYTES,
         "high_res_depth_increment_m": HIGH_RES_DEPTH_INCREMENT_M,
         "gradient_depth_split_m": GRADIENT_DEPTH_SPLIT_M,
         "min_gradient_depth_diff_m": MIN_GRADIENT_DEPTH_DIFF_M,
         "assumed_seawater_density_kg_m3": ASSUMED_SEAWATER_DENSITY_KG_M3,
         "default_dataset_type": DEFAULT_DATASET_TYPE,
         "run_wod_qc": RUN_WOD_QC,
-        "on_file_error": ON_FILE_ERROR,
         "text_encodings": list(TEXT_ENCODINGS),
         "code_lookup": CODE_LOOKUP,
         "code_list_fetch": CODE_LIST_FETCH,

@@ -180,9 +180,11 @@ The same two commands, in a browser: [`wod_etl/web/README.md`](../web/README.md)
 
 ## `process_accession(url_or_path, dataset_type=None, ...)`
 
+The per-file engine `wod-etl confirm` runs on the files the decisions include. Called directly,
+it processes a folder or URL with no review:
+
 ```python
-result = process_accession(
-    "https://www.ncei.noaa.gov/data/oceans/archive/arc0222/0287423/")
+result = process_accession("data/raw/0287423", include=["data/0-data/ctd/cast_01.csv"])
 ```
 
 `dataset_type` is normally omitted: an accession often mixes CTD, bottle data, ADCP and
@@ -200,35 +202,16 @@ plankton, so each file is classified from its own path, header, columns and dept
 | `run_id` | Names the manifest. Reuse it to resume. Defaults to the URL + timestamp. |
 | `recursive` | Crawl subdirectories (default `True`). |
 | `filter_extension` | Only consider files with this extension. |
-| `limit` | Process at most N files, to test the setup first. A limited run is not assembled; check its `per_file_outputs`. |
 | `resume` | Fold into an existing manifest (default `True`). |
 | `retry_failed` | Also retry items already marked `failed`. |
 | `verify` | Read the written NetCDF back and check every value against the manual's range for its variable and depth (default on). Sets `output_verified`. |
 | `run_qc` | Run WOD's observed-level QC. Defaults to `RUN_WOD_QC` in [`config.py`](../config.py), which is off. Originator flag columns are kept either way, verbatim. |
-| `dry_run` | Report what would be processed, and as what; write nothing. |
-| `on_error` | `"skip"` (default) or `"stop"`. |
 | `include` | Process only these keys (paths relative to the listed root); `include_missing` lists any not found. |
 | `file_options` | `{key: {"drop": [variable, ...], "metadata": {Key: value}}}`: variables not to write and header values for a file's casts, as set in `decisions.toml`. |
 | `accession` | Which accession's run log to write to (`data/runs/<acc>/`). Worked out from the source when omitted; with none, nothing is logged. |
 
 The result also carries `listing` (how the input became a listing: `resolution`, `version`,
 `extracted_from`). Each failed file's `traceback` is kept in the manifest.
-
-### Recommended sequence
-
-```python
-from wod_etl.discovery import classify_accession
-classify_accession("data/raw/0287423")        # 0. what is in here
-process_accession(url, dry_run=True)          # 1. what would run, and as what
-process_accession(url, limit=3)               # 2. prove the shape on 3 files
-process_accession(url)                        # 3. the rest
-```
-
-- Step 0 is triage; most folders in an accession are not WOD profile data.
-- Step 1 triages a local file from its head (format, header, columns) as `classify_file`
-  does, and returns `would_process`, `would_skip`, `needs_staging` (long-format files) and
-  `undecided`. A remote file is judged by its path only; each item's `decided_by` says which.
-- Step 2 shows a wrong routing or format on 3 files rather than 400.
 
 ### What comes back
 
@@ -259,10 +242,8 @@ process_accession(url)                        # 3. the rest
 | --- | --- |
 | `complete` | Every item reached `done` or `skipped`. |
 | `incomplete` | Some items are still `failed` and can be retried. |
-| `aborted` | Stopped early. Read `abort_reason`. |
 | `error` | Could not list the source, after retries and after resolving a landing page or accession number. Read `error` and `hint`. |
 | `empty` | Listing succeeded but held no files. Check `filter_extension`. |
-| `dry_run` | Nothing was written. |
 
 `complete` says whether every item is `done` or `skipped`; `status` is also `incomplete` when a
 WOD file could not be assembled.
@@ -281,23 +262,13 @@ WOD file could not be assembled.
 
 ### Skipped is not failed
 
-| Outcome | When | Counts toward abort? |
-| --- | --- | --- |
-| skipped | Read and found not to be WOD profile data: a documentation extension, a PDF/archive/XML container, excluded content (currents, plankton, eDNA), a station-list sidecar with no measured variable, or every measurement column empty. | No |
-| failed | Something that should have worked did not: a download error, a file in no known format, no column mapping, missing latitude/longitude/depth, a write or validation error. | Yes |
+| Outcome | When |
+| --- | --- |
+| skipped | Read and found not to be WOD profile data: a documentation extension, a PDF/archive/XML container, excluded content (currents, plankton, eDNA), a station-list sidecar with no measured variable, or every measurement column empty. |
+| failed | Something that should have worked did not: a download error, a file in no known format, no column mapping, missing latitude/longitude/depth, a write or validation error. |
 
-This keeps an accession of mostly non-profile data from tripping the abort. A file that is
-not a document and still will not read is a failure, never a skip.
-
-### Failure policy
-
-Per-file failures are recorded and the run continues. Two things stop it:
-
-- `on_error="stop"`: abort on the first failure.
-- Automatic abort above a 50% failure rate, once at least 10 files have been attempted. This
-  usually means something systematic (wrong URL, wrong dataset type, non-tabular files).
-
-Both thresholds are in [`config.py`](../config.py).
+A file that is not a document and still will not read is a failure, never a skip. A failed
+file is recorded and the run goes on to the next.
 
 ### Reporting
 
@@ -308,14 +279,6 @@ or `unexpected`.
 `status: "complete"` is not a quality result: every file was written and passed structural
 validation, which says nothing of the values. `output_verified` judges them, and
 `output_verification` holds each variable's range and the QC flag distribution.
-[`audit_dataset`](../verify/README.md) also lists a dataset's mapped and dropped columns.
-
-### One accession, several runs
-
-Give each dataset in an accession its own `run_id` and `output_dir`
-(`run_id="osd_7-CTD-bottle"`): datasets fail for different reasons and are audited separately,
-and a combined run makes the 50% abort hard to read. Plan the runs from `classify_accession`'s
-`process` list.
 
 ---
 

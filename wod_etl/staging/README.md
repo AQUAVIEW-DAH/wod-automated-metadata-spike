@@ -1,4 +1,4 @@
-# Phase 0 — Staging
+# Staging
 
 Build a readable copy of a file that cannot be processed as it stands.
 
@@ -414,7 +414,7 @@ forms a group of its own, whose position does not parse.
 
 ## `write_staged_cast(path, columns, rows, *, latitude, longitude, date, time=None, metadata=None, notes=None, sources=None, time_zone=None)`
 
-Writes the header block Phase 1 reads, then the CSV table.
+Writes the header block discovery reads, then the CSV table.
 
 ```python
 write_staged_cast(
@@ -589,5 +589,5 @@ sibling list or readme) cannot be staged.
 
 ## Next
 
-[Phase 1 — Discovery](../discovery/README.md) reads the staged file as it would an
+[Discovery](../discovery/README.md) reads the staged file as it would an
 original.

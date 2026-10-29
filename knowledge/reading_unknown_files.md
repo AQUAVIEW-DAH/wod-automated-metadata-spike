@@ -106,8 +106,8 @@ Look in this order, and record which source you used:
 | Columns in the data | `Lat`, `LATITUDE`, `lat_deg` | Nothing; the mapper finds them |
 | The file's own header block | `# Latitude: 34.250`, `* NMEA Latitude = 34 15.00 N` | Nothing; `read_any` normalises both |
 | NetCDF attributes or per-profile variables | `LATITUDE(N_PROF)`, `geospatial_lat_min` | Nothing; `read_any` puts them in the header block |
-| A sibling station list | `stations.csv` keyed by station number | Join it in during Phase 0 staging |
-| Only in a readme or cruise report | Prose, or a PDF | Phase 0 staging. A position stated in a readme is a source: use it and cite it |
+| A sibling station list | `stations.csv` keyed by station number | Join it in during staging |
+| Only in a readme or cruise report | Prose, or a PDF | Staging. A position stated in a readme is a source: use it and cite it |
 | Nowhere | | The cast cannot be staged; a position is never invented |
 
 Coordinates that are not decimal degrees (`49-46.9858N`) are handled by `parse_coordinate` in
@@ -156,8 +156,8 @@ A wrong unit still validates, so this is the most expensive question to get wron
 - Depth versus pressure: depth is the axis and has no variable code; pressure is code 25.
   Pressure in dbar becomes depth automatically when the cast has a latitude; otherwise
   stage it with `pressure_to_depth` in `wod_etl.staging` (dbar in, metres out).
-- Read the value ranges of one output file before trusting any of this. `audit_dataset` in
-  `wod_etl.verify` does it per dataset.
+- Read the value ranges of one output file before trusting any of this: report.md lists each
+  variable's range, and the web UI's preview shows the values.
 
 ## 6. Is there any data in it?
 

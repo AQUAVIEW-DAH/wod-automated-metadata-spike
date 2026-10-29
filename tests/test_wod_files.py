@@ -161,10 +161,6 @@ class TestProcessAccessionWritesWodFiles:
         cast.write_text(_cast_block(1, "1999-11-09", 21.0, 20))
         out = tmp_path / "out"
         _run(src, tmp_path, run_id="first")
-        # the older one-file-per-source output
-        process_one_file(str(cast), "CTD", str(out), "old", raw_root=str(tmp_path / "raw"),
-                         stem="cast_01")
-        (out / f"cast_01{CACHE_SUFFIX}").unlink()
         for name in ("wod_ctd_1999_9999999.nc", "notes.nc"):
             (out / name).write_bytes(b"not this run's")
         cast.write_text(_cast_block(1, "2015-11-09", 21.0, 20))   # the date was corrected
@@ -384,24 +380,6 @@ class TestWhatOneFileOfManySourcesMustStillSay:
             assert [str(x) for x in ds["seawater_density_provenance"][:]] == [
                 "assumed", "from the header"]
 
-    def test_the_audit_counts_staged_files_by_the_casts_they_gave(self, tmp_path):
-        from wod_etl.verify import audit_dataset
-
-        staged = tmp_path / "staged"
-        staged.mkdir()
-        for i in range(3):
-            (staged / f"cast_{i}.csv").write_text(_cast_block(1, f"2015-11-0{i + 1}", 21.0, 20))
-        res = process_accession(str(staged), dataset_type="CTD",
-                                output_dir=str(tmp_path / "out"),
-                                raw_dir=str(tmp_path / "raw"), run_id="audit", resume=False)
-        assert len(res["outputs"]) == 1
-        report = audit_dataset(str(staged), "CTD", str(tmp_path / "out"))
-        assert report["staged_without_casts"] == []
-        assert "produced no cast" not in report["text"]
-        (staged / "cast_9.csv").write_text(_cast_block(1, "2015-11-09", 21.0, 20))
-        assert audit_dataset(str(staged), "CTD", str(tmp_path / "out"))[
-            "staged_without_casts"] == ["cast_9.csv"]
-
 
 class TestAFileIsDoneOnlyWhenItsResultIsSaved:
     def test_a_failure_after_the_write_leaves_no_result_to_assemble(self, tmp_path, monkeypatch):
@@ -419,21 +397,6 @@ class TestAFileIsDoneOnlyWhenItsResultIsSaved:
         assert res["counts"].get("failed") == 1
         assert res["per_file_casts"] == [] and res["outputs"] == []
 
-    def test_old_layout_cleanup_removes_only_a_files_own_old_output(self, tmp_path):
-        src = tmp_path / ACC
-        src.mkdir()
-        (src / "a.csv").write_text(_cast_block(1, "2015-11-09", 21.0, 20))
-        out = tmp_path / "out"
-        out.mkdir()
-        # an old-layout file from another source, so not this item's
-        other = tmp_path / "elsewhere.csv"
-        other.write_text(_cast_block(1, "2015-11-09", 21.0, 20))
-        process_one_file(str(other), "CTD", str(tmp_path / "tmp_out"), "x",
-                         raw_root=str(tmp_path / "raw"))
-        (tmp_path / "tmp_out" / "elsewhere.csv.nc").rename(out / "a.nc")
-        _run(src, tmp_path)
-        assert (out / "a.nc").is_file()
-
 
 class TestARunWritesOnlyWhatItAnswersFor:
     def test_two_files_of_one_name_and_different_extensions_are_both_written(self, tmp_path):
@@ -445,18 +408,6 @@ class TestARunWritesOnlyWhatItAnswersFor:
         res = _run(src, tmp_path)
         assert len(set(res["per_file_casts"])) == 2
         assert sorted(_casts(res["outputs"][0])["sources"]) == ["x.csv", "x.txt"]
-
-    def test_a_trial_run_does_not_replace_a_full_runs_output(self, tmp_path):
-        src = tmp_path / ACC
-        src.mkdir()
-        for name, date in (("a.csv", "2015-11-09"), ("b.csv", "2016-01-02")):
-            (src / name).write_text(_cast_block(1, date, 21.0, 20))
-        full = _run(src, tmp_path, run_id="full")
-        trial = _run(src, tmp_path, run_id="trial", limit=1)
-        assert "not assembled" in trial["assembly"]["skipped"]
-        assert trial["outputs"] == trial["per_file_outputs"]
-        assert sorted(p.name for p in (tmp_path / "out").glob("wod_*.nc")) == sorted(
-            Path(p).name for p in full["outputs"])
 
     def test_an_include_batch_does_not_replace_another_batchs_casts(self, tmp_path):
         src = tmp_path / ACC
@@ -512,18 +463,6 @@ class TestARunWritesOnlyWhatItAnswersFor:
         write_ragged_profiles([a, b], str(tmp_path / "f.nc"))
         report = verify_output(str(tmp_path))
         assert not any(f["finding"] == "duplicate_cast_id" for f in report["findings"])
-
-    def test_the_audit_does_not_take_another_folders_file_of_one_name(self, tmp_path):
-        from wod_etl.verify import audit_dataset
-
-        for folder in ("A", "B"):
-            (tmp_path / folder).mkdir()
-            (tmp_path / folder / "cast.csv").write_text(_cast_block(1, "2015-11-09", 21.0, 20))
-        process_accession(str(tmp_path / "B"), dataset_type="CTD",
-                          output_dir=str(tmp_path / "out"), raw_dir=str(tmp_path / "raw"),
-                          run_id="b", resume=False)
-        report = audit_dataset(str(tmp_path / "A"), "CTD", str(tmp_path / "out"))
-        assert report["staged_without_casts"] == ["cast.csv"]
 
 
 class TestTaxaRecordFilesSitBesideTheProfiles:

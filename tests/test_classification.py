@@ -297,14 +297,12 @@ class TestProcessAccessionWithoutBeingToldTheDataset:
         assert res["dataset_types"].get("XBT") == 1
         assert res["dataset_types"].get("CTD") == 1
 
-    def test_dry_run_says_what_each_file_would_be_processed_as(self, mixed, tmp_path):
-        res = process_accession(str(mixed), output_dir=str(tmp_path / "out"),
-                                raw_dir=str(tmp_path / "raw"), run_id="t_auto_6",
-                                resume=False, dry_run=True)
-        decided = {item["key"]: item["dataset_type"] for item in res["would_process"]}
-        assert decided["1-ctd/cast_01.csv"] == "CTD"
-        assert decided["2-xbt/drop_07.csv"] == "XBT"
-        assert any(s["key"].startswith(("3-adcp", "4-plankton")) for s in res["would_skip"])
+    def test_triage_says_what_each_file_would_be_processed_as(self, mixed):
+        files = {f["path"]: f for f in classify_accession(str(mixed))["files"]}
+        assert (files["1-ctd/cast_01.csv"]["action"],
+                files["1-ctd/cast_01.csv"]["dataset_type"]) == ("process", "CTD")
+        assert files["2-xbt/drop_07.csv"]["dataset_type"] == "XBT"
+        assert files["3-adcp/currents.csv"]["action"] == "exclude"
 
 
 class TestTheInputIsDiagnosedWhenItIsNotADirectory:
@@ -582,8 +580,8 @@ class TestBinaryFilesAreOpenedNotAskedAbout:
         assert files["about/0302602_map.jpg"]["ncei_bundle"].startswith("NCEI's map")
 
 
-class TestDryRunReadsLocalFiles:
-    """Dry runs classify local files from their contents, not only their names."""
+class TestTriageReadsLocalFiles:
+    """Local files are classified from their contents, not only their names."""
 
     def test_a_staged_cast_is_classified_from_its_header(self, tmp_path):
         d = tmp_path / "staged"
@@ -592,28 +590,20 @@ class TestDryRunReadsLocalFiles:
             "# Instrument: SBE CTD/Rosette system\nLAT: 21.0\nLON: 142.3\nDATE: 2015-11-09\n"
             "Depth (m),Temperature (deg C)\n" + "\n".join(f"{z},{20 - z / 100}"
                                                           for z in range(5, 60)) + "\n")
-        res = process_accession(str(d), output_dir=str(tmp_path / "o"),
-                                raw_dir=str(tmp_path / "r"), run_id="t_dry_local",
-                                resume=False, dry_run=True)
-        (item,) = res["would_process"]
-        assert item["dataset_type"] == "CTD"
-        assert item["decided_by"].startswith("file head")
+        (item,) = classify_accession(str(d))["files"]
+        assert (item["action"], item["dataset_type"]) == ("process", "CTD")
 
-    def test_long_format_and_ncei_files_are_named_in_the_dry_run(self, tmp_path):
+    def test_long_format_and_ncei_files_are_named_in_triage(self, tmp_path):
         d = tmp_path / "acc"
         (d / "about").mkdir(parents=True)
         (d / "NCEI-Readme.txt").write_text("This is the standard bundle.\n")
         (d / "about" / "0303928_lonlat.txt").write_text("140 10\n150 10\n150 25\n140 25\n")
         rows = "\n".join(f"C,1,Temperature,{z},{20 - z / 10}" for z in range(5, 30))
         (d / "ctd_long.csv").write_text(f"Cruise,StNo,parm,depth,value\n{rows}\n")
-        res = process_accession(str(d), output_dir=str(tmp_path / "o"),
-                                raw_dir=str(tmp_path / "r"), run_id="t_dry_long",
-                                resume=False, dry_run=True)
-        assert [s["key"] for s in res["needs_staging"]] == ["ctd_long.csv"]
-        skipped = {s["key"]: s["reason"] for s in res["would_skip"]}
-        assert "NCEI bundle" in skipped["NCEI-Readme.txt"]
-        assert "NCEI bundle" in skipped["about/0303928_lonlat.txt"]
-
+        files = {f["path"]: f for f in classify_accession(str(d))["files"]}
+        assert files["ctd_long.csv"]["action"] == "stage"
+        assert "NCEI bundle" in files["NCEI-Readme.txt"]["reason"]
+        assert files["about/0303928_lonlat.txt"]["action"] == "document"
 
 class TestTriageSaysWhatEachFileIsAndWhy:
     """What a reviewer reads in decisions.toml: data, include, dataset, why."""

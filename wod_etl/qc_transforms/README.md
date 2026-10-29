@@ -1,4 +1,4 @@
-# Phase 3 — Conversions and QC
+# Conversions and QC
 
 Convert values to WOD standard units, then, only if asked, flag every level against the
 manual's checks.
@@ -33,7 +33,7 @@ The switch is `RUN_WOD_QC` in [`config.py`](../config.py).
 The originator's own flags are always kept. A `Temperature_QC` column reaches the output
 verbatim as `temperature_qc_originator`, on the submitter's scale (an originator's `1` may
 mean good where WOD's `1` means a failed range check). The flag set used is secondary
-header 96. See [Phase 2](../mapping/README.md#originator-quality-flags).
+header 96. See [mapping](../mapping/README.md#originator-quality-flags).
 
 With QC off, `qc_summary` is `{"wod_qc": "not run", ...}` and names the originator flag
 columns kept.
@@ -197,4 +197,4 @@ surface range bounds were checked.
 
 ## Next
 
-[Phase 4 — Writers](../writers/README.md) turns the flagged DataFrame into NetCDF.
+[The writers](../writers/README.md) turn the flagged DataFrame into NetCDF.

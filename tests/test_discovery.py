@@ -1,4 +1,4 @@
-"""Phase 1: directory listing, peeking, profiling, loading, cast splitting."""
+"""Discovery: directory listing, profiling, loading, cast splitting."""
 import functools
 import http.server
 import socketserver
@@ -7,7 +7,6 @@ import threading
 import pytest
 
 from wod_etl.discovery import (
-    fetch_and_peek_file,
     list_remote_directory,
     load_tabular,
     profile_raw_data,
@@ -77,18 +76,6 @@ class TestListRemoteDirectory:
         res = list_remote_directory(str(tmp_path))
         names = {i["name"] for i in res["items"]}
         assert {"a.csv", "sub"} <= names
-
-
-class TestFetchAndPeek:
-    def test_reads_only_the_requested_prefix(self, tmp_path):
-        p = tmp_path / "big.txt"
-        p.write_text("A" * 10_000)
-        peek = fetch_and_peek_file(str(p), num_bytes=100)
-        assert peek["peek_size_bytes"] == 100
-        assert len(peek["preview_text"]) == 100
-
-    def test_missing_file_returns_error(self):
-        assert "error" in fetch_and_peek_file("/nonexistent/nope.csv")
 
 
 class TestProfileRawData:
@@ -173,7 +160,7 @@ class TestCommentsBelowTheHeader:
     def _load(self, tmp_path, name, text):
         p = tmp_path / name
         p.write_text(text)
-        profile = profile_raw_data(fetch_and_peek_file(str(p))["preview_text"], str(p))
+        profile = profile_raw_data(p.read_text(), str(p))
         return profile, load_tabular(str(p), profile)
 
     def test_a_mid_file_comment_does_not_eat_the_header(self, tmp_path):
@@ -221,41 +208,16 @@ class TestRealValuesAreNotSentinels:
     def test_a_plausible_value_survives(self, tmp_path, column, value):
         p = tmp_path / "v.csv"
         p.write_text(f"Depth (m),{column}\n0,{value}\n10,1.5\n")
-        profile = profile_raw_data(fetch_and_peek_file(str(p))["preview_text"], str(p))
+        profile = profile_raw_data(p.read_text(), str(p))
         df, _ = load_tabular(str(p), profile)
         assert df[column].iloc[0] == pytest.approx(float(value))
 
     def test_unambiguous_sentinels_are_still_missing(self, tmp_path):
         p = tmp_path / "s.csv"
         p.write_text("Depth (m),Temp (deg C)\n0,-999\n10,-9999\n20,1.5\n")
-        profile = profile_raw_data(fetch_and_peek_file(str(p))["preview_text"], str(p))
+        profile = profile_raw_data(p.read_text(), str(p))
         df, _ = load_tabular(str(p), profile)
         assert df["Temp (deg C)"].isna().sum() == 2
-
-
-class TestPeekDecoding:
-    """A peek cut mid-character must not make a UTF-8 file look latin-1."""
-
-    FULL = "Nitrate (µmol/l),Depth (m)\n1.5,0\n".encode("utf-8")
-
-    @pytest.mark.parametrize("cut", [9, 10, 11, 12])
-    def test_a_cut_multibyte_character_does_not_change_the_verdict(self, cut):
-        from wod_etl.discovery.fetch_and_peek_file import _decode_peek
-        text, encoding = _decode_peek(self.FULL[:cut])
-        assert encoding == "utf-8"
-        assert "Â" not in text
-
-    def test_a_whole_file_still_decodes(self):
-        from wod_etl.discovery.fetch_and_peek_file import _decode_peek
-        text, encoding = _decode_peek(self.FULL)
-        assert encoding == "utf-8"
-        assert "µmol/l" in text
-
-    def test_a_japanese_export_is_detected_rather_than_mojibaked(self):
-        from wod_etl.discovery.fetch_and_peek_file import _decode_peek
-        text, encoding = _decode_peek("経度,緯度\n1,2\n".encode("cp932"))
-        assert encoding == "cp932"
-        assert "経度" in text
 
 
 class TestMissingPathIsAnError:

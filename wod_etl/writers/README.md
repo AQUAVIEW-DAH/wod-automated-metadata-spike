@@ -1,4 +1,4 @@
-# Phase 4 — Writers
+# Writers
 
 Write CF-compliant contiguous ragged array NetCDF files.
 

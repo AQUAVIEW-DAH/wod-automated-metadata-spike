@@ -3,22 +3,22 @@
 Checks that what was written is right, structurally and in its values.
 
 ```python
-from wod_etl.verify import validate_intermediate_netcdf, audit_dataset
+from wod_etl.verify import validate_intermediate_netcdf, verify_output
 ```
 
 - `validate_intermediate_netcdf` checks structure: CF and the ragged-array contract. A file
   that fails is not output.
-- `verify_output` and `audit_dataset` check that the values make sense.
+- `verify_output` checks that the values make sense.
 
 Many errors pass structural validation:
 
-| What went wrong | Validator | Audit |
+| What went wrong | Validator | What catches it |
 | --- | --- | --- |
 | `DO [mg/L]` mapped with no conversion (~30× error) | PASS | value range physically impossible |
 | DIC in µmol/kg treated as standard (~1000× error) | PASS | same |
-| A column dropped at mapping | PASS | appears in `unmapped_columns` |
+| A column dropped at mapping | PASS | report.md lists it as not written |
 | Depth column unmapped, `z` all NaN | FAIL (all-fill `z` is an error) | `z` range empty |
-| QC misapplied to a non-profile dataset | PASS | most flags non-zero |
+| QC misapplied to a non-profile dataset | PASS | nothing: WOD QC is off by default |
 
 ---
 
@@ -56,7 +56,7 @@ An unreadable file returns `status: "FAIL"` with `fatal_error`; it does not rais
   Regenerate rather than patch.
 - *"not a valid CF identifier"*: a name was written without `cf_safe_name`.
 - *"entirely missing: no usable position"*: the contract had no coordinates. Fix it in
-  Phase 2; check `missing_required_coordinates`.
+  mapping; check `missing_required_coordinates`.
 - *"Row size mismatch"*: counts and observations disagree; casts were assembled
   inconsistently.
 
@@ -105,36 +105,11 @@ means the variable cannot be what it claims.
 - Ranges are the union of all 30 ocean basins (basin assignment needs `range_area.msk` from
   the WOD website). A flagged value is outside every basin's bound; an unflagged value may
   still be wrong (nitrate's union bound reaches 500 µmol/kg).
-- It cannot see a dropped column; `unmapped_columns` and `audit_dataset` do.
+- It cannot see a dropped column; the mapping's `unmapped_columns` and report.md do.
 
 `_suspect_cause` names the conversion a systematic offset resembles (~1000× for a per-litre
 column in a per-kilogram variable, ~1.8× for Fahrenheit) when the ratio matches within 15%.
 Otherwise it prints the ratio and suggests checking Table 3a.
-
----
-
-## `audit_dataset(staged_dir, dataset_type, processed_dir)`
-
-Recomputes the mapping contract for every staged file and reads back every NetCDF, to answer
-what the run manifest cannot.
-
-| Not in a run summary | What the audit gives you |
-| --- | --- |
-| Which columns were dropped | `unmapped_columns`, per file |
-| Whether the values are plausible | `value_ranges`: min/max and units per variable |
-| The QC flag distribution | `qc_flags`: counts and non-zero percentage |
-
-```python
-from wod_etl.verify import audit_dataset
-
-report = audit_dataset("data/staging/0287423/2-CTD", "CTD", "data/processed/2-CTD")
-print(report["text"])
-```
-
-It also returns `all_missing_variables`, `missing_coordinates`, `contract_warnings`,
-`wod_dataset_routing`, and `text`, a readable summary.
-
-`contract_for(path, dataset_type)` returns one file's contract without auditing the set.
 
 ---
 
@@ -154,7 +129,7 @@ Appendix 11 range.
 
 ## What neither check can do
 
-- A mis-triaged folder (currents or bathymetry forced through the profile path) audits
+- A mis-triaged folder (currents or bathymetry forced through the profile path) verifies
   clean, because its numbers are internally consistent.
 - A wrong time zone shifts every cast by hours and stays inside every bound.
 

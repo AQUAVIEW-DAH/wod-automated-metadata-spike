@@ -1,4 +1,4 @@
-"""Write one staged cast in the form Phase 1 can read."""
+"""Write one staged cast in the form discovery reads."""
 import csv
 import logging
 from pathlib import Path
@@ -8,7 +8,7 @@ from wod_etl import runlog
 
 log = logging.getLogger(__name__)
 
-# Coordinate keys Phase 1's header parser scans for, written without the comment marker.
+# Coordinate keys the header parser scans for, written without the comment marker.
 _COORD_KEYS = ("LAT:", "LON:", "DATE:", "TIME:")
 
 

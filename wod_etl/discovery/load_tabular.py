@@ -34,7 +34,7 @@ def load_tabular(
     max_rows: Optional[int] = None,
     encoding: Optional[str] = None,
 ) -> Tuple[Optional[pd.DataFrame], Dict[str, Any]]:
-    """Read a full tabular file using the structure Phase 1 inferred.
+    """Read a full tabular file using the structure `profile_raw_data` inferred.
 
     Returns (DataFrame, info). On failure the DataFrame is None and info carries `error`.
     """
@@ -139,7 +139,7 @@ def load_tabular(
     profiled = profile_result.get("columns")
     if profiled and list(df.columns) != list(profiled):
         info["warnings"].append(
-            f"columns differ from the Phase 1 profile: profile saw {list(profiled)}, "
+            f"columns differ from the profile: profile saw {list(profiled)}, "
             f"full file has {list(df.columns)}")
 
     if len(df) == 0:

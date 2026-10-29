@@ -82,7 +82,7 @@ def _checked_haul(path: str, probe: Path, source: str) -> Dict[str, Any]:
     `source` is what the haul records as `source_file`, not the staged file's local path."""
     try:
         haul = map_haul(read_staged_haul(path))
-    except Exception as e:                              # noqa: BLE001 - unattended run
+    except Exception as e:                              # noqa: BLE001 - reported, not raised
         return {"stage": "map_haul", "error": f"{type(e).__name__}: {e}"}
     haul["contract"]["source"] = source
     if not haul["records"]:

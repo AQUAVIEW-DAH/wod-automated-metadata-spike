@@ -1,4 +1,4 @@
-"""Phase 0 staging: the parsing and reshaping that lets an unreadable file reach Phase 1."""
+"""Staging: the parsing and reshaping that lets an unreadable file be read."""
 import datetime as dt
 
 import pytest
@@ -232,9 +232,9 @@ class TestCombineOnKey:
 
 
 class TestWriteStagedCast:
-    def test_round_trips_through_phase_one(self, tmp_path):
+    def test_round_trips_through_discovery(self, tmp_path):
         """Staged output must parse as a positioned cast."""
-        from wod_etl.discovery import fetch_and_peek_file, profile_raw_data
+        from wod_etl.discovery import profile_raw_data
         from wod_etl.mapping import generate_field_mapping, query_wod_spec
 
         out = tmp_path / "C145-001.csv"
@@ -246,8 +246,7 @@ class TestWriteStagedCast:
             metadata={"Accession": "0287423", "Platform": "Oshoro maru", "Station": "a01"},
             notes=["Depth computed from PrDM by UNESCO 1983"])
 
-        peek = fetch_and_peek_file(str(out))
-        profile = profile_raw_data(peek["preview_text"], str(out))
+        profile = profile_raw_data(out.read_text(), str(out))
         contract = generate_field_mapping(
             {**profile, "columns": ["Depth (m)", "Temp (deg C)", "Salinity"]},
             query_wod_spec("CTD", ["Depth (m)", "Temp (deg C)", "Salinity"], 10.0))

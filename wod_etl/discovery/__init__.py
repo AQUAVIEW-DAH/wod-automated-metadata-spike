@@ -1,8 +1,7 @@
-"""Phase 1: list, fetch, sniff, read and classify an accession's files."""
+"""Discovery: list, fetch, sniff, read and classify an accession's files."""
 
 from .list_remote_directory import (list_remote_directory, accession_number,
                                     accession_for, resolve_accession_url)
-from .fetch_and_peek_file import fetch_and_peek_file
 from .sniff_format import sniff_format
 from .classify_dataset import classify_dataset, classify_accession, classify_file
 from .profile_raw_data import profile_raw_data
@@ -16,7 +15,6 @@ __all__ = [
     "accession_number",
     "accession_for",
     "resolve_accession_url",
-    "fetch_and_peek_file",
     "sniff_format",
     "classify_dataset",
     "classify_accession",

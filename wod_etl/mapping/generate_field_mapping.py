@@ -8,14 +8,12 @@ from typing import Dict, Any, List, Optional
 from wod_etl.mapping.map_metadata import map_metadata
 from wod_etl.mapping.query_wod_spec import (
     DEPTH_SENTINEL_CODE,
-    PER_VOLUME_CODES,
     canonical_unit_text,
     explain_column,
     extract_scale,
     fluorescence_rule,
     extract_unit,
     match_variable,
-    normalize_name,
     seabird_unit,
     wod_secondary_headers,
     wod_variables,

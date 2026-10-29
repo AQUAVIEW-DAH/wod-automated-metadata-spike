@@ -1896,7 +1896,7 @@ def _cross_file_shape(entry) -> Optional[Dict[str, Any]]:
             "evidence": f"{len(long_files)} file(s) name the variable in a "
                         f"{lf['variable_column']!r} column and hold it in "
                         f"{lf['value_column']!r}"
-                        + (f"; each file holds a different variable" if per_variable else ""),
+                        + ("; each file holds a different variable" if per_variable else ""),
             "action": "Pivot with wod_etl.staging.pivot_long, passing every file together "
                       "as a list of tables (with key_aliases for any key column spelt "
                       "differently between them), then split the result per cast with "
@@ -2045,7 +2045,7 @@ def _folder_verdict(folder: str, entry) -> Dict[str, Any]:
                        + ", ".join(f"{n} {t}" for t, n in sorted(types.items()))
                        + (f"; mixed, so classify per file rather than passing "
                           f"dataset_type='{dominant}' for the folder" if mixed else "")
-                       + (f". The folder also holds " + ", ".join(
+                       + (". The folder also holds " + ", ".join(
                            f"{n} to {a}" for a, n in sorted(others.items()))
                           + "; the per-file verdicts decide, not this summary"
                           if others else "")),
@@ -2059,7 +2059,7 @@ def _folder_verdict(folder: str, entry) -> Dict[str, Any]:
         return {"action": "stage", "files": staged, "files_by_action": by_action,
                 "reason": f"{len(staged)} file(s) hold profile data in a shape that must be "
                           f"reshaped before processing (long format). See cross_file_shape."
-                          + (f" The folder also holds " + ", ".join(
+                          + (" The folder also holds " + ", ".join(
                               f"{n} to {a}" for a, n in sorted(others.items()))
                              + "; the per-file verdicts decide." if others else "")}
     return {"action": "inspect",

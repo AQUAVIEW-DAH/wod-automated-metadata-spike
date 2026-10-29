@@ -1,4 +1,4 @@
-# Phase 2 — Mapping
+# Mapping
 
 Decide what each raw column is in WOD terms and build the mapping contract later phases read.
 
@@ -136,7 +136,7 @@ candidates, e.g. Sea-Bird `t090C` and `t190C` (primary and secondary sensors, bo
 
 A query that lands on a column WOD does not store is refused with `explain_column`'s reason.
 
-To rename what it finds, use [`rename_columns`](../staging/README.md) in Phase 0.
+To rename what it finds, use [`rename_columns`](../staging/README.md) during staging.
 
 ---
 
@@ -314,7 +314,7 @@ into `comment` and `source_files_raw`. A fluorometer column mapped to code 11 ca
 | --- | --- |
 | `unmapped_columns` | Not written to the output. An expected column here means a missing alias, unless it is also in `dropped_columns` (refused on purpose). |
 | `dropped_columns` | Columns not written (no WOD code, not stored in the dataset, or a unit with no conversion), each with the reason and what to do instead. Do not alias these. |
-| `missing_required_coordinates` | Any of `latitude`, `longitude`, `time`, `depth`. The file will fail Phase 4 validation. |
+| `missing_required_coordinates` | Any of `latitude`, `longitude`, `time`, `depth`. The file will fail validation. |
 | `ready_for_transform` | `false` when the mapping is empty or coordinates are missing. |
 | `warnings` | Unresolved dataset, two columns claiming one WOD code, a variable not stored in this dataset. |
 
@@ -386,7 +386,7 @@ that agrees with its declaration is kept.
 | any molar unit | `molar_rescale` | see below |
 
 **Molar units.** `molar_rescale` carries `conversion_from` and `conversion_to` (`"umol/kg"`,
-`"mmol/l"`) in the mapping entry, and Phase 3 computes the factor: an SI-prefix rescale, plus
+`"mmol/l"`) in the mapping entry, and the conversion computes the factor: an SI-prefix rescale, plus
 a density step when the basis (per-mass vs per-volume) changes. The target is the variable's
 Table 3a standard unit:
 
@@ -451,5 +451,5 @@ only for exactly one match. ITIS itself is not queried.
 
 ## Next
 
-[Phase 3 — Conversions and QC](../qc_transforms/README.md) consumes the contract.
-For a file that would not parse, see [Phase 0 — Staging](../staging/README.md).
+[Conversions and QC](../qc_transforms/README.md) consumes the contract.
+For a file that would not parse, see [Staging](../staging/README.md).

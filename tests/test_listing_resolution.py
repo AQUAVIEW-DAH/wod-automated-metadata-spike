@@ -183,14 +183,13 @@ class TestLandingPageResolution:
         assert r["url"] == ROOT and "geoportal" in r["resolved_from"]
         assert not any("landing-page" in c for c in fake_ncei)
 
-    def test_process_accession_keys_are_relative_to_the_resolved_version(self, fake_ncei,
-                                                                        tmp_path):
-        from wod_etl.orchestration import process_accession
+    def test_keys_are_relative_to_the_resolved_version(self, fake_ncei):
+        from wod_etl.orchestration.process_accession import _item_key
 
-        res = process_accession("0303535", output_dir=str(tmp_path / "o"),
-                                raw_dir=str(tmp_path / "r"), dry_run=True, resume=False)
-        keys = {w["key"] for w in res["would_process"]} | {w["key"] for w in res["would_skip"]}
-        assert "data/tsg.csv" in keys and "NCEI-Readme.txt" in keys
+        listing = list_remote_directory("0303535", recursive=True)
+        keys = {_item_key(listing["source"], i["path"], i["name"])
+                for i in listing["items"] if not i["is_dir"]}
+        assert {"data/tsg.csv", "NCEI-Readme.txt"} <= keys
 
 
 class TestLocalArchives:

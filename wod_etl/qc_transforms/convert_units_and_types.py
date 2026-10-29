@@ -1,11 +1,10 @@
-"""Deterministic unit and type conversions driven by the Phase 2 mapping contract.
+"""Deterministic unit and type conversions driven by the mapping contract.
 
 Each conversion is logged with its constant and source, for the NetCDF metadata.
 """
 import json
 from typing import Dict, Any, Tuple, List
 
-import numpy as np
 import pandas as pd
 
 from wod_etl.config import (
@@ -14,7 +13,6 @@ from wod_etl.config import (
     SEAWATER_DENSITY_PROVENANCE,
 )
 from wod_etl.mapping.generate_field_mapping import MOLAR_PREFIX_SCALE
-from wod_etl.mapping.query_wod_spec import PER_VOLUME_CODES
 
 FEET_TO_METERS = 0.3048
 FATHOMS_TO_METERS = 1.8288

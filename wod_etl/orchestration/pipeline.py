@@ -45,8 +45,6 @@ class Workspace:
         self.staging_dir = Path(config.STAGING_DIR) / accession / "pipeline"
         # WOD files, one per dataset and year; only names from writers.wod_files are touched.
         self.processed_dir = Path(config.PROCESSED_DIR) / accession
-        # Legacy output folder, removed when the accession is processed.
-        self.legacy_output_dir = Path(config.PROCESSED_DIR) / accession / "pipeline"
         self.work_dir = self.run_dir / "work"
         # Each source file's own result, assembled into the WOD files.
         self.per_file_dir = self.work_dir / "per_file"
@@ -654,11 +652,6 @@ def stage_process(run: Run, changed: bool) -> Dict[str, Any]:
 
     ws = run.ws
     plan = _plan(run)
-    if ws.legacy_output_dir.is_dir():
-        shutil.rmtree(ws.legacy_output_dir, ignore_errors=True)
-        runlog.event(log, logging.INFO, f"removed {ws.legacy_output_dir}: the output as it was "
-                                        f"written before the WOD files",
-                     kind="wod_file", status="removed", names=[str(ws.legacy_output_dir)])
     if changed:
         shutil.rmtree(ws.per_file_dir, ignore_errors=True)
     direct = list(plan.get("direct") or [])
@@ -705,13 +698,6 @@ def stage_process(run: Run, changed: bool) -> Dict[str, Any]:
                                                       staged=which == "staged"))
             transient = transient or (f.get("stage") or "") not in \
                 remedies.DETERMINISTIC_FILE_STAGES
-        if res.get("status") == "aborted":
-            transient = True
-            problems.append(remedies.problem("process", f"the {which} run aborted",
-                                             res.get("abort_reason", ""),
-                                             "Something systematic is wrong; read the first "
-                                             "failure in run.log, fix it, then confirm "
-                                             "again."))
 
     # Both runs together: direct and staged casts of one dataset and year share a WOD file.
     caches = [c for r in runs.values() for c in r.get("per_file_casts") or []]
@@ -757,7 +743,7 @@ def _process_summary(res: Dict[str, Any]) -> Dict[str, Any]:
             "unstorable_columns_dropped", "outputs_without_time",
             "outputs_without_time_of_day", "coded_headers_not_resolved", "casts_not_written",
             "casts_not_written_in", "levels_without_data", "casts_depth_from_pressure",
-            "manifest_path", "include_missing", "abort_reason")
+            "manifest_path", "include_missing")
     return {k: res.get(k) for k in keys if res.get(k) is not None}
 
 

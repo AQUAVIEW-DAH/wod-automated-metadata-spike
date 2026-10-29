@@ -1,4 +1,4 @@
-"""Phase 4: WOD ragged-array NetCDF files for profiles and Taxa-Records.
+"""Writers: WOD ragged-array NetCDF files for profiles and Taxa-Records.
 
 Validation is in `wod_etl.verify`.
 """

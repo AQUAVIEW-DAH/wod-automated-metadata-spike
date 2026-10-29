@@ -1,6 +1,5 @@
 """Everything in a file that is not a measurement value: headers, units, scales and flags."""
 import netCDF4 as nc
-import numpy as np
 import pandas as pd
 import pytest
 

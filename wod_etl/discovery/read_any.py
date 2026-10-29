@@ -71,7 +71,7 @@ def read_any(path: str, sniff: Optional[Dict[str, Any]] = None,
 
     try:
         casts, extra = reader(path, fmt, profile)
-    except Exception as e:                                # noqa: BLE001 - unattended run
+    except Exception as e:                                # noqa: BLE001 - reported, not raised
         return [], {**info, "error": f"{type(e).__name__} while reading as "
                                      f"{fmt['format_family']}: {e}"}
 

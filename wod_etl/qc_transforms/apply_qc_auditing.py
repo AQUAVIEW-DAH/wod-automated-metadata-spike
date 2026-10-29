@@ -3,7 +3,7 @@
 Adds `<depth>_qc_flag` (Table 12 (2)(a) depth flags) and `<var>_qc_flag` (Table 12 (2)(b)
 observed level flags); the same integer differs in meaning between them. Nothing is deleted.
 """
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional
 
 import numpy as np
 import pandas as pd

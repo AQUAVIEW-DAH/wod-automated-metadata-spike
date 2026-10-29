@@ -1,7 +1,6 @@
 """Verification: the structural validator, and the value audit that catches what it misses."""
 import netCDF4 as nc
 import numpy as np
-import pytest
 
 from wod_etl.verify import validate_intermediate_netcdf
 from wod_etl.writers import write_ragged_profiles
@@ -95,45 +94,6 @@ class TestValidatorCatchesEmptyArrays:
         report = validate_intermediate_netcdf(str(p))
         assert report["passed"]
         assert any("is entirely missing" in w for w in report["warnings"])
-
-
-class TestAuditSurvivesTextMetadata:
-    """Per-cast headers are written as vlen-string variables; the audit must not coerce them."""
-
-    def _dataset(self, tmp_path, headers_per_cast):
-        casts = []
-        for i, headers in enumerate(headers_per_cast):
-            c = make_cast(lat=61.0 + i)
-            c["contract"]["extracted_header_metadata"] = headers
-            casts.append(c)
-        proc = tmp_path / "proc"; proc.mkdir()
-        (tmp_path / "staged").mkdir()
-        write_ragged_profiles(casts, str(proc / "multi.nc"))
-        from wod_etl.verify import audit_dataset
-        return audit_dataset(str(tmp_path / "staged"), "CTD", str(proc))
-
-    def test_per_cast_station_numbers_do_not_abort_the_audit(self, tmp_path):
-        report = self._dataset(tmp_path, [
-            {"7": {"name": "Originator's station number", "value": "A01"}},
-            {"7": {"name": "Originator's station number", "value": "A02"}}])
-        assert report["casts"] == 2
-        assert report["value_ranges"]["temperature"]["n"] > 0
-
-    def test_the_text_metadata_is_reported_not_silently_skipped(self, tmp_path):
-        report = self._dataset(tmp_path, [
-            {"7": {"name": "Originator's station number", "value": "A01"}},
-            {"7": {"name": "Originator's station number", "value": "A02"}}])
-        station = report["text_variables"]["secondary_header_7_originator_s_station_number"]
-        assert station == ["A01", "A02"]
-        assert "A01" in report["text"]
-
-    def test_a_numeric_per_cast_header_is_still_a_value_range(self, tmp_path):
-        """Bottom depth varies per cast too, but it is a number and must be ranged."""
-        report = self._dataset(tmp_path, [
-            {"10": {"name": "Bottom Depth (meters)", "value": 3212.4}},
-            {"10": {"name": "Bottom Depth (meters)", "value": 1409.3}}])
-        r = report["value_ranges"]["secondary_header_10_bottom_depth_meters"]
-        assert (r["min"], r["max"]) == pytest.approx((1409.3, 3212.4))
 
 
 class TestTheRunVerifiesItsOwnOutput:

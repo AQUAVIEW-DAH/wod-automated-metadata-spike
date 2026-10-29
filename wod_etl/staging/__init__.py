@@ -1,4 +1,4 @@
-"""Phase 0 — Staging: build pipeline-ready copies of files that cannot be read as they are.
+"""Staging: build pipeline-ready copies of files that cannot be read as they are.
 
 Primitives composed per accession; `wod-etl run` uses them for common shapes.
 """

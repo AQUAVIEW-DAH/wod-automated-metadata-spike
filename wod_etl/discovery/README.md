@@ -1,15 +1,15 @@
-# Phase 1 — Discovery
+# Discovery
 
 Find files, work out what is in them, and load the data into memory. Everything here works on
-raw bytes and text; WOD terms start in [Phase 2](../mapping/README.md).
+raw bytes and text; WOD terms start in [mapping](../mapping/README.md).
 
-A file that does not parse as a table or lacks its own coordinates is staged first with
-[Phase 0 — Staging](../staging/README.md); discovery then reads the staged copy.
+A file that does not parse as a table or lacks its own coordinates is staged first (see
+[staging](../staging/README.md)); discovery then reads the staged copy.
 
 ```python
 from wod_etl.discovery import (list_remote_directory, resolve_accession_url,
                               classify_accession, classify_file, classify_dataset,
-                              fetch_and_peek_file, sniff_format, profile_raw_data,
+                              sniff_format, profile_raw_data,
                               download_file, read_any, split_casts, load_tabular)
 ```
 
@@ -26,12 +26,11 @@ sniff_format            what is this file? (bytes, not extension)
         ↓
 read_any                → [{cast_id, df, header_block}]   for every format
         ↓
-classify_dataset        which WOD dataset is this cast?   → Phase 2
+classify_dataset        which WOD dataset is this cast?   → mapping
 ```
 
-`read_any` dispatches each format to its reader; all return the same shape.
-`fetch_and_peek_file` reads the first 8 KB of a remote file without downloading it. For a file
-that does not open cleanly, see
+`read_any` dispatches each format to its reader; all return the same shape. For a file that
+does not open cleanly, see
 [`knowledge/reading_unknown_files.md`](../../knowledge/reading_unknown_files.md).
 
 ---
@@ -325,24 +324,9 @@ near-zero key overlap means the files do not share a key.
 
 ---
 
-## `fetch_and_peek_file(file_url_or_path, num_bytes=8192)`
-
-Reads the first N bytes, using an HTTP `Range` request when remote.
-
-```json
-{"source": "...", "peek_size_bytes": 8192, "detected_encoding": "utf-8",
- "preview_text": "# CRUISE: STOCS85A\n...", "line_count_in_peek": 42}
-```
-
-Decoding tries `TEXT_ENCODINGS`, then lossy ASCII, so `preview_text` is always a string.
-
-**Gotcha:** a server that ignores `Range` returns the whole file (see `peek_size_bytes`).
-
----
-
 ## `profile_raw_data(preview_text, file_url_or_path="")`
 
-Works out the file's structure from the peeked text.
+Works out the file's structure from its first few KB of text.
 
 ```json
 {"format_family": "tabular_ascii", "detected_delimiter": "','",
@@ -354,7 +338,7 @@ Works out the file's structure from the peeked text.
 ```
 
 A line is header if it starts with `#`, `%`, `*`, `//`, or matches `Key: value`, so
-`LAT: 61.930 LON: -172.270` is captured as metadata. Phase 2 reads coordinates from this
+`LAT: 61.930 LON: -172.270` is captured as metadata. Mapping reads coordinates from this
 header block.
 
 | `format_family` | Meaning |
@@ -367,7 +351,7 @@ header block.
 
 - `detected_delimiter` is a `repr` (`"','"`), which `load_tabular` unwraps.
 - `inferred_dtypes` keys keep pandas' leading spaces (`" Temp (deg F)"`); `columns` is stripped.
-- `detected_scientific_variables` is a hint; Phase 2's `match_variable` decides what a column is.
+- `detected_scientific_variables` is a hint; mapping's `match_variable` decides what a column is.
 
 ---
 
@@ -434,5 +418,5 @@ Below-detection markers are real measurements WOD has no flag for.
 
 ## Next
 
-[Phase 2 — Mapping](../mapping/README.md) turns `profile_result` and the loaded columns
+[Mapping](../mapping/README.md) turns `profile_result` and the loaded columns
 into the mapping contract.

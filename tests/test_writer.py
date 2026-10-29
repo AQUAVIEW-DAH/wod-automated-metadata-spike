@@ -1,4 +1,4 @@
-"""Phase 4 and orchestration: NetCDF writing, manifest, end-to-end run."""
+"""Writers and orchestration: NetCDF writing, manifest, end-to-end run."""
 from pathlib import Path
 
 import netCDF4 as nc
@@ -165,21 +165,21 @@ class TestEndToEnd:
             assert len(ds.dimensions["casts"]) == 2
             assert list(ds.variables["z_row_size"][:]) == [2, 2]
 
-    def test_dry_run_writes_nothing(self, accession, tmp_path):
-        out = tmp_path / "out"
-        res = process_accession(str(accession), dataset_type="XCTD", output_dir=str(out), raw_dir=str(tmp_path / "raw"),
-                                run_id="t_e2e_4", resume=False, dry_run=True)
-        assert res["status"] == "dry_run"
-        assert not list(out.glob("*.nc")) if out.exists() else True
+    def test_resume_does_not_redo_completed_files(self, accession, tmp_path, monkeypatch):
+        import importlib
 
-    def test_resume_does_not_redo_completed_files(self, accession, tmp_path):
+        pa = importlib.import_module("wod_etl.orchestration.process_accession")
         out = tmp_path / "out"
         first = process_accession(str(accession), dataset_type="XCTD", output_dir=str(out),
                                   raw_dir=str(tmp_path / "raw"), run_id="t_e2e_5", resume=False)
-        again = process_accession(str(accession), dataset_type="XCTD", output_dir=str(out),
-                                  raw_dir=str(tmp_path / "raw"), run_id="t_e2e_5", resume=True, dry_run=True)
-        assert set(again["already_done"]) >= {"cast_01.csv", "cast_02.csv", "meta.xml"}
         assert first["counts"]["done"] == 2
+
+        def again(*a, **k):
+            raise AssertionError("a completed file was processed again")
+        monkeypatch.setattr(pa, "process_one_file", again)
+        second = process_accession(str(accession), dataset_type="XCTD", output_dir=str(out),
+                                   raw_dir=str(tmp_path / "raw"), run_id="t_e2e_5", resume=True)
+        assert second["counts"]["done"] == 2
 
     def test_empty_directory_is_reported(self, tmp_path):
         empty = tmp_path / "empty"
