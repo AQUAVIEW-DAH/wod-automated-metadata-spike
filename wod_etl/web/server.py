@@ -4,6 +4,7 @@ Each command runs as a child `wod-etl` process, one at a time, so a crash cannot
 the server. Runs share `data/runs/<accession>/` with the terminal. There is no login.
 """
 import datetime as dt
+import mimetypes
 import multiprocessing
 import os
 import re
@@ -27,7 +28,7 @@ from wod_etl.orchestration import pipeline
 from wod_etl.orchestration import run_manifest
 from wod_etl.orchestration.pipeline import (CONFIRM_STAGES, RUN_STAGES, STAGES, Workspace,
                                             load_state)
-from wod_etl.web import preview
+from wod_etl.web import inputs, preview
 from wod_etl.writers import is_output_file_name, is_taxa_file_name
 
 UI_DIR = Path(__file__).with_name("static")
@@ -323,6 +324,39 @@ def _read(name: str, fn, *args):
             if _reader is reader:
                 _reader = None
         raise HTTPException(500, f"the reader stopped while reading {name}: try again")
+
+
+# ------------------------------------------------------------------ input files
+def _input_path(accession: str, path: str) -> Path:
+    """A file the accession's triage lists, inside its data folder; 404 for anything else."""
+    ws = _workspace(accession)
+    state = load_state(ws)
+    run = pipeline.Run(ws, state.get("input") or "", state, lambda _: None)
+    listed = {f["path"] for f in run.triage().get("files", [])}
+    root = Path(run.data_root or ws.mirror_dir).resolve()
+    full = (root / path).resolve()
+    if path not in listed or not full.is_relative_to(root) or not full.is_file():
+        raise HTTPException(404, f"no input file {path!r} for {accession}")
+    return full
+
+
+@app.get("/api/input-preview/{accession}/{path:path}")
+def input_preview(accession: str, path: str):
+    """An input file's text, sheets or NetCDF variables."""
+    full = _input_path(accession, path)
+    out = {"path": path, "name": full.name, **inputs.preview_input(full)}
+    if out["kind"] == "netcdf":
+        out.update(_read(full.name, preview.describe_input, str(full)))
+    return out
+
+
+@app.get("/api/input-file/{accession}/{path:path}")
+def input_file(accession: str, path: str):
+    """An input file as it is, shown in the page (a PDF, an image) or downloaded."""
+    full = _input_path(accession, path)
+    return FileResponse(full, media_type=mimetypes.guess_type(full.name)[0]
+                        or "application/octet-stream", filename=full.name,
+                        content_disposition_type="inline")
 
 
 @app.get("/api/report/{accession}", response_class=PlainTextResponse)

@@ -48,6 +48,13 @@ The app is [`server.py`](server.py) (FastAPI) plus the static front end in
   threads. A cast's levels load in one request and the table shows them 500 at a time; the
   plot uses level number when depth does not vary (a surface track). Plankton files show
   each haul's Taxa-Records, with no plot.
+- **Input preview.** Each input file's "preview" link shows it beside its decision: text (the
+  first 64 KB), a workbook's sheets (the first 50 rows each), a NetCDF's attributes and
+  variables with their first values, or a PDF or image in the browser. Text is laid out to be
+  read, and "As stored" shows it unchanged: a table (delimited, fixed-width, Sea-Bird `.cnv`,
+  WOD's CSV export, XBT/XCTD `.dat`) as its header lines and columns, split as the pipeline
+  splits it; XML and JSON indented; prose wrapped. Files are only read, and only files the
+  accession's triage lists, inside its data folder, are served.
 
 API:
 
@@ -58,4 +65,6 @@ API:
 - `GET /api/outputs/<acc>/<file>`
 - `GET /api/preview/<acc>/<file>` (attributes, dimensions, variables, cast index)
 - `GET /api/preview/<acc>/<file>/casts/<i>` (one cast's fields and levels)
+- `GET /api/input-preview/<acc>/<path>` (an input file's text, sheets or NetCDF variables)
+- `GET /api/input-file/<acc>/<path>` (an input file as it is: shown in the page or downloaded)
 - `GET /api/accessions`

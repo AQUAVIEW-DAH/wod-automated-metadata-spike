@@ -56,6 +56,13 @@ class TestRunReviewConfirm:
             "data/ctd/cast_1.csv", True, "CTD", "data/ctd/cast_1.csv")
         assert [f["name"] for f in files["docs"]] == ["NCEI-Readme.txt"]
 
+        text = c.get(f"/api/input-preview/{ACC}/data/ctd/cast_1.csv").json()
+        assert text["kind"] == "text" and text["text"].startswith("# LAT: 21.0")
+        raw = c.get(f"/api/input-file/{ACC}/data/ctd/cast_1.csv")
+        assert raw.status_code == 200 and raw.text == CAST
+        for path in ("data/ctd/missing.csv", "%2E%2E/%2E%2E/etc/passwd"):
+            assert c.get(f"/api/input-preview/{ACC}/{path}").status_code == 404
+
         d = c.get(f"/api/decisions/{ACC}").json()
         assert d["exists"] and '[files."data/ctd/cast_1.csv"]' in d["text"]
         broken = d["text"].replace("include = true", "include = yes", 1)
@@ -163,3 +170,61 @@ class TestPreview:
             [20.0, 18.0]]
         with pytest.raises(IndexError):
             preview.cast(str(p), 2)
+
+
+class TestInputPreview:
+    """An input file is shown as its originator sent it."""
+
+    def test_a_workbook_shows_each_sheet_s_first_rows(self, tmp_path):
+        import pandas as pd
+
+        from wod_etl.web.inputs import preview_input
+
+        p = tmp_path / "ctd.xlsx"
+        with pd.ExcelWriter(p) as w:
+            pd.DataFrame({"Depth (m)": [0, 10], "Temp": [5.1, 4.2]}).to_excel(
+                w, sheet_name="cast 1", index=False)
+        r = preview_input(p)
+        assert r["kind"] == "sheets"
+        [sheet] = r["sheets"]
+        assert sheet["name"] == "cast 1" and sheet["rows"][:2] == [["Depth (m)", "Temp"],
+                                                                   ["0", "5.1"]]
+
+    def test_a_netcdf_shows_its_variables_and_their_first_values(self, tmp_path):
+        from helpers import write_mooring_nc
+        from wod_etl.web.inputs import preview_input
+        from wod_etl.web.preview import describe_input
+
+        p = tmp_path / "t.nc"
+        write_mooring_nc(p, days=1)
+        assert preview_input(p)["kind"] == "netcdf"
+        r = describe_input(str(p))
+        t = next(v for v in r["variables"] if v["name"] == "T_20")
+        assert t["dimensions"] == ["time", "depth", "lat", "lon"] and t["head"][:2] == [5.0, 5.0]
+        assert r["dimensions"]["time"] == 25
+
+    def test_text_is_laid_out_to_be_read_and_kept_as_stored(self, tmp_path):
+        from wod_etl.web.inputs import preview_input
+
+        csv = tmp_path / "bottle.csv"
+        csv.write_text("Cruise C145 bottle data,,\n\nStation,Depth (m),Temp\n"
+                       + "".join(f"A01,{z},{5 - z / 100}\n" for z in range(0, 50, 10)))
+        r = preview_input(csv)
+        f = r["formatted"]
+        assert r["text"] == csv.read_text()                     # the file as stored
+        assert (f["layout"], f["columns"], f["rows"][0]) == (
+            "table", ["Station", "Depth (m)", "Temp"], ["A01", "0", "5.0"])
+        assert f["above"][0] == "Cruise C145 bottle data,,"
+
+        dat = tmp_path / "c01.dat"
+        dat.write_text("".join(f"   {27.7 - z / 100:.4f}    {z:.4f}\n" for z in range(1, 40)))
+        f = preview_input(dat)["formatted"]
+        assert not f["named"] and f["columns"] == ["column 1", "column 2"]
+
+        xml = tmp_path / "iso.xml"
+        xml.write_text('<?xml version="1.0"?><a><b>x</b></a>')
+        assert preview_input(xml)["formatted"]["text"].splitlines()[1:] == ["<a>", "  <b>x</b>",
+                                                                            "</a>"]
+        readme = tmp_path / "readme.txt"
+        readme.write_text("This accession holds CTD casts from 2015.\nContact the PI.\n" * 3)
+        assert preview_input(readme)["formatted"] == {"layout": "prose"}

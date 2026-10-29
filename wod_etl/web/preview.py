@@ -91,6 +91,34 @@ def cast(path: str, index: int) -> Dict[str, Any]:
         return {"index": index, "fields": fields, "tables": tables}
 
 
+HEAD = 12                            # values shown per variable of an input file
+
+
+def describe_input(path: str) -> Dict[str, Any]:
+    """Any NetCDF file, as its originator wrote it: attributes, dimensions, and each variable
+    with its first values along its first dimension."""
+    import netCDF4
+
+    with netCDF4.Dataset(str(path)) as ds:
+        variables = []
+        for name, v in ds.variables.items():
+            cut = tuple(slice(0, HEAD) if i == 0 else 0 for i in range(v.ndim))
+            try:
+                data = np.ma.atleast_1d(np.ma.asarray(v[cut] if cut else v[...])).ravel()
+                head = ([x.decode("utf-8", "replace") for x in np.ma.getdata(data).tolist()]
+                        if data.dtype.kind == "S" else _values(data))
+            except (ValueError, TypeError, IndexError, RuntimeError):
+                head = []
+            variables.append({"name": name, "dimensions": list(v.dimensions),
+                              "shape": list(v.shape),
+                              "type": "string" if v.dtype is str else v.dtype.name,
+                              "attributes": {k: _attr(v.getncattr(k)) for k in v.ncattrs()},
+                              "head": head})
+        return {"attributes": {k: _attr(ds.getncattr(k)) for k in ds.ncattrs()},
+                "dimensions": {name: len(d) for name, d in ds.dimensions.items()},
+                "variables": variables}
+
+
 def _cast_count(ds) -> int:
     return len(ds.dimensions[CAST_DIM]) if CAST_DIM in ds.dimensions else 0
 

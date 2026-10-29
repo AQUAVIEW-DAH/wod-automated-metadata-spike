@@ -105,6 +105,7 @@ const SHORT = {
 async function refreshFiles() {
   const r = await api(`/api/files/${ui.acc}`);
   const list = $("file-list");
+  ui.inputs = new Map(r.sections.flatMap((sec) => sec.files.map((f) => [f.path, f])));
   let n = 0;
   if (!r.sections.length) {
     list.innerHTML = `<p class="empty">No files triaged yet: Run it.</p>`;
@@ -117,6 +118,7 @@ async function refreshFiles() {
             `<div class="file" data-key="${esc(f.decided_by || "")}" ` +
             `title="${esc(f.path + (f.why ? "\n\n" + f.why : "") +
                           (f.depth_note ? "\n\nDepth: " + f.depth_note : ""))}">` +
+            (f.size != null ? `<a class="peek" href="#" data-path="${esc(f.path)}">preview</a>` : "") +
             `<span class="name">${esc(f.name)}</span>` +
             (f.include ? `<span class="badge">${esc(f.dataset || "in")}</span>`
                        : `<span class="badge out">out</span>`) +
@@ -130,6 +132,12 @@ async function refreshFiles() {
 }
 
 $("file-list").addEventListener("click", (e) => {
+  const peek = e.target.closest("a.peek");
+  if (peek) {
+    e.preventDefault();
+    openInputPreview(peek.dataset.path);
+    return;
+  }
   const el = e.target.closest(".file");
   if (el) jumpTo(el.dataset.key);
 });
@@ -403,8 +411,9 @@ const position = (c) => c.lat == null && c.lon == null ? null :
 async function openPreview(name, kind, index = 0) {
   const token = ++pv.token;
   if (name !== pv.name) Object.assign(pv, { x: null, y: null });
-  Object.assign(pv, { name, kind, file: null, index: null, cast: null });
+  Object.assign(pv, { name, kind, input: null, file: null, index: null, cast: null });
   document.body.classList.add("previewing");
+  $("preview").classList.remove("input-mode");
   $("preview-name").textContent = name;
   $("preview-count").textContent = "";
   $("preview-download").href = outputUrl(name);
@@ -428,7 +437,7 @@ async function openPreview(name, kind, index = 0) {
 
 function closePreview() {
   pv.token++;
-  pv.name = null;
+  pv.name = pv.input = null;
   document.body.classList.remove("previewing");
 }
 
@@ -635,6 +644,96 @@ function renderPlot() {
   hit.addEventListener("pointerleave", () => { hover.setAttribute("visibility", "hidden"); tip.hidden = true; });
 }
 
+// An input file as its originator sent it: text, sheets, a NetCDF's variables, or the file.
+const inputUrl = (route, path) => `/api/${route}/${encodeURIComponent(ui.acc)}/` +
+  path.split("/").map(encodeURIComponent).join("/");
+
+async function openInputPreview(path) {
+  const token = ++pv.token;
+  Object.assign(pv, { name: null, input: path, file: null, index: null, cast: null });
+  document.body.classList.add("previewing");
+  $("preview").classList.add("input-mode");
+  $("preview-name").textContent = path;
+  $("preview-count").textContent = "";
+  $("preview-download").href = inputUrl("input-file", path);
+  $("file-info").innerHTML = "";
+  $("cast-view").innerHTML = `<p class="empty">Reading…</p>`;
+  let r;
+  try {
+    r = await api(inputUrl("input-preview", path));
+  } catch (e) {
+    if (token === pv.token) $("cast-view").innerHTML = `<p class="msg bad">${esc(e.message)}</p>`;
+    return;
+  }
+  if (token !== pv.token) return;
+  $("preview-count").textContent = fmtSize(r.size);
+  $("cast-view").innerHTML = inputHead(path) + renderInput(r, path);
+}
+
+function inputHead(path) {
+  const f = (ui.inputs && ui.inputs.get(path)) || {};
+  const verdict = f.include ? `in, as ${f.dataset || "?"}` : "out";
+  return `<div class="cast-head"><strong>${esc(path)}</strong>` +
+    `<div class="meta">${esc([verdict, f.data].filter(Boolean).join(" · "))}</div>` +
+    (f.why ? `<div class="meta">${esc(f.why)}</div>` : "") + "</div>";
+}
+
+// A text file laid out to be read; the file itself is unchanged ("As stored" shows it).
+function renderFormatted(f, r) {
+  if (f.layout === "code") return `<pre class="raw wrap">${esc(f.text)}</pre>`;
+  if (f.layout === "prose") return `<pre class="raw wrap">${esc(r.text)}</pre>`;
+  const number = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
+  return (f.above.length ? `<pre class="raw above">${esc(f.above.join("\n"))}</pre>` : "") +
+    `<div class="levels"><table class="data"><thead><tr><th class="n">#</th>` +
+    f.columns.map((c) => `<th>${esc(c)}</th>`).join("") + "</tr></thead><tbody>" +
+    f.rows.map((row, i) => `<tr><td class="n">${i + 1}</td>` + f.columns.map((_, j) => {
+      const c = row[j] ?? "";
+      return `<td class="${number.test(c) ? "" : "text"}">${esc(c)}</td>`;
+    }).join("") + "</tr>").join("") + "</tbody></table></div>" +
+    `<p class="meta">${f.named ? "" : "No header row: the columns are numbered. "}` +
+    (f.casts > 1 ? `The first of ${f.casts} casts in the text read. ` : "") +
+    (f.rows_total > f.rows.length ? `The first ${f.rows.length} of ${f.rows_total} rows ` +
+      "read." : "") + "</p>";
+}
+
+function renderInput(r, path) {
+  const file = inputUrl("input-file", path);
+  if (r.kind === "text") {
+    const meta = `<p class="meta">${esc(r.encoding)}` +
+      (r.truncated ? ` · the first 64 KB of ${esc(fmtSize(r.size))}` : "") + "</p>";
+    const raw = `<pre class="raw">${esc(r.text)}</pre>`;
+    if (!r.formatted) return raw + meta;
+    return `<div class="view-toggle"><button class="small on" data-view="formatted">Formatted` +
+      `</button><button class="small" data-view="raw">As stored</button></div>` +
+      `<div class="view" data-view="formatted">${renderFormatted(r.formatted, r)}</div>` +
+      `<div class="view" data-view="raw" hidden>${raw}</div>` + meta;
+  }
+  if (r.kind === "sheets") {
+    return r.sheets.map((sh) => `<h4 class="sheet">${esc(sh.name)}</h4><div class="levels">` +
+      `<table class="data"><tbody>` + sh.rows.map((row, i) => `<tr><td class="n">${i + 1}</td>` +
+        row.map((c) => `<td class="text">${esc(c)}</td>`).join("") + "</tr>").join("") +
+      `</tbody></table></div>`).join("") +
+      `<p class="meta">The first ${r.rows_shown} rows of each sheet.</p>`;
+  }
+  if (r.kind === "netcdf") {
+    const dims = Object.entries(r.dimensions).map(([k, n]) => `${k} ${n}`).join(" · ");
+    return `<details class="section" open><summary>Global attributes ` +
+      `(${Object.keys(r.attributes).length}) · ${esc(dims)}</summary>` +
+      kvTable(Object.entries(r.attributes)) + "</details>" +
+      `<details class="section" open><summary>Variables (${r.variables.length})</summary>` +
+      r.variables.map((v) => `<details class="var"><summary><code>${esc(v.name)}</code> ` +
+        `<span class="meta">(${esc(v.dimensions.join(", "))}) ${esc(v.type)}` +
+        (v.attributes.long_name ? ` · ${esc(v.attributes.long_name)}` : "") +
+        (v.attributes.units ? ` · ${esc(v.attributes.units)}` : "") + "</span></summary>" +
+        kvTable([["first values", v.head.map((x) => x ?? "—")], ...Object.entries(v.attributes)]) +
+        "</details>").join("") + "</details>";
+  }
+  if (r.kind === "pdf") return `<iframe class="doc" src="${esc(file)}"></iframe>`;
+  if (r.kind === "image") return `<img class="doc" src="${esc(file)}" alt="${esc(path)}">`;
+  return `<p class="meta">No preview for this kind of file (${esc(r.format || "unknown")}). ` +
+    "Download it to open it.</p>";
+}
+
 $("output-list").addEventListener("click", (e) => {
   const a = e.target.closest("a.preview");
   if (!a) return;
@@ -647,15 +746,22 @@ $("cast-list").addEventListener("click", (e) => {
   const el = e.target.closest(".cast");
   if (el) showCast(+el.dataset.index);
 });
+$("cast-view").addEventListener("click", (e) => {
+  const b = e.target.closest(".view-toggle button");
+  if (!b) return;
+  for (const x of b.parentElement.children) x.classList.toggle("on", x === b);
+  for (const v of $("cast-view").querySelectorAll(".view")) v.hidden = v.dataset.view !== b.dataset.view;
+});
 $("cast-view").addEventListener("toggle", (e) => {
   if (e.target.matches(".fields")) pv.fieldsOpen = e.target.open;
 }, true);
 document.addEventListener("keydown", (e) => {
-  if (!pv.name) return;
+  if (!pv.name && !pv.input) return;
   if (e.key === "Escape" && !(e.target === $("cast-filter") && e.target.value)) {
     closePreview();
     return;
   }
+  if (!pv.name) return;
   const inList = e.target === document.body ||
     (e.target instanceof Element && e.target.closest("#cast-list"));
   if ((e.key === "ArrowDown" || e.key === "ArrowUp") && inList) {
