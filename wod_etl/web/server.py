@@ -1,7 +1,8 @@
 """`wod-etl web`: run and confirm accessions from a local browser page.
 
-Each command runs as a child `wod-etl` process, one at a time, so a crash cannot take down
-the server. Runs share `data/runs/<accession>/` with the terminal. There is no login.
+Each command runs as a child `wod-etl` process, so a crash cannot take down the server.
+Commands run one at a time; the rest wait in a queue, in order. Runs share
+`data/runs/<accession>/` with the terminal. There is no login.
 """
 import datetime as dt
 import mimetypes
@@ -40,6 +41,8 @@ app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
 _job_lock = threading.Lock()
 _job: Dict[str, Any] = {}          # the command running now, or the last one
+_jobs: Dict[str, Dict[str, Any]] = {}   # each accession's last command
+_queue: List[Dict[str, Any]] = []       # commands waiting their turn, oldest first
 
 _reader_lock = threading.Lock()
 _reader: Optional[ProcessPoolExecutor] = None   # reads output files for the preview
@@ -59,44 +62,74 @@ def _busy() -> Optional[Dict[str, Any]]:
     return _job if _job.get("running") else None
 
 
+def _running(accession: str) -> bool:
+    return bool(_job.get("running")) and _job.get("accession") == accession
+
+
+def _waiting(accession: str) -> Optional[Dict[str, Any]]:
+    """The accession's place in the queue (1 is next) and its command, or None."""
+    for i, q in enumerate(_queue):
+        if q["accession"] == accession:
+            return {"position": i + 1, "command": q["command"]}
+    return None
+
+
 def _command_line(command: str, *args: str) -> List[str]:
     """The `wod-etl` command a job runs, as a process of its own."""
     return [sys.executable, "-m", "wod_etl", command, *args]
 
 
-def _start(accession: str, command: str, argv: List[str]):
-    """Start `argv` as a background child process unless a job is running. Its output lines
-    become the job's activity log."""
-    global _job
+def _enqueue(accession: str, command: str, argv: List[str]) -> bool:
+    """Queue `argv`, and start it if nothing is running. False, and nothing queued, when the
+    accession already has a command running or waiting."""
     with _job_lock:
-        running = _busy()
-        if running:
-            raise HTTPException(409, f"`{running['command']} {running['accession']}` is still "
-                                     f"running: one command at a time")
+        if _running(accession) or _waiting(accession):
+            return False
+        _queue.append({"accession": accession, "command": command, "argv": argv})
+        if not _busy():
+            _start_next()
+    return True
+
+
+def _start_next() -> None:
+    """Start the oldest queued command as a child process; its output lines become the job's
+    activity log. Called with `_job_lock` held."""
+    global _job
+    while _queue:
+        item = _queue.pop(0)
+        job = {"accession": item["accession"], "command": item["command"], "running": True,
+               "lines": [], "started_at": _now(), "finished_at": None, "exit_code": None,
+               "error": None, "pid": None}
+        _job = _jobs[item["accession"]] = job
         env = {**os.environ, **config.child_environment(),
                "WOD_MANIFEST_DIR": str(run_manifest.MANIFEST_DIR), "PYTHONUNBUFFERED": "1"}
-        proc = subprocess.Popen(argv, cwd=str(config.ROOT), env=env, text=True,
-                                encoding="utf-8", errors="replace", stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, bufsize=1)
-        job = {"accession": accession, "command": command, "running": True, "lines": [],
-               "started_at": _now(), "finished_at": None, "exit_code": None, "error": None,
-               "pid": proc.pid}
-        _job = job
-
-    def collect():
         try:
-            for line in proc.stdout:
-                job["lines"].append(line.rstrip("\n"))
-            job["exit_code"] = proc.wait()
-        except Exception as e:                       # noqa: BLE001 - shown on the page
-            job["error"] = f"{type(e).__name__}: {e}"
-            job["exit_code"] = pipeline.EXIT_FAILED
-        finally:
+            proc = subprocess.Popen(item["argv"], cwd=str(config.ROOT), env=env, text=True,
+                                    encoding="utf-8", errors="replace", stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, bufsize=1)
+        except OSError as e:
+            job.update(running=False, finished_at=_now(), exit_code=pipeline.EXIT_FAILED,
+                       error=f"{type(e).__name__}: {e}")
+            continue
+        job["pid"] = proc.pid
+        threading.Thread(target=_collect, args=(proc, job), daemon=True,
+                         name=f"wod-etl {item['command']} {item['accession']}").start()
+        return
+
+
+def _collect(proc: subprocess.Popen, job: Dict[str, Any]) -> None:
+    try:
+        for line in proc.stdout:
+            job["lines"].append(line.rstrip("\n"))
+        job["exit_code"] = proc.wait()
+    except Exception as e:                           # noqa: BLE001 - shown on the page
+        job["error"] = f"{type(e).__name__}: {e}"
+        job["exit_code"] = pipeline.EXIT_FAILED
+    finally:
+        with _job_lock:
             job["finished_at"] = _now()
             job["running"] = False
-
-    threading.Thread(target=collect, name=f"wod-etl {command} {accession}", daemon=True).start()
-    return {"accession": accession, "command": command, "started_at": job["started_at"]}
+            _start_next()
 
 
 # ------------------------------------------------------------------ the page
@@ -109,20 +142,37 @@ def index():
 @app.post("/api/run")
 def start_run(source: str = Body(..., embed=True),
               accession_id: Optional[str] = Body(None, embed=True)):
-    """`wod-etl run <source>`: resolve, fetch, triage and propose decisions."""
+    """`wod-etl run <source>` for each source, separated by commas: resolve, fetch, triage
+    and propose decisions. Nothing is queued unless every source names an accession."""
     from wod_etl.discovery import accession_for
 
-    source = source.strip()
-    if not source:
+    sources = [s.strip() for s in re.split(r"[,\n]", source) if s.strip()]
+    if not sources:
         raise HTTPException(400, "give an accession: a landing-page URL, a number, an NCEI "
-                                 "data directory or a local folder")
-    accession = (accession_id or "").strip() or accession_for(source)
-    if not accession:
-        raise HTTPException(400, f"cannot tell which accession {source!r} is: give its "
-                                 f"number as the accession id")
-    _workspace(accession)
-    return _start(accession, "run",
-                  _command_line("run", source, "--accession-id", accession))
+                                 "data directory or a local folder; several, separated by "
+                                 "commas")
+    accession_id = (accession_id or "").strip()
+    if accession_id and len(sources) > 1:
+        raise HTTPException(400, "an accession id names one input, not several")
+    named: Dict[str, str] = {}
+    unknown = []
+    for s in sources:
+        acc = accession_id or accession_for(s)
+        if not acc:
+            unknown.append(s)
+        else:
+            _workspace(acc)
+            named.setdefault(acc, s)
+    if unknown:
+        raise HTTPException(400, f"cannot tell which accession {', '.join(map(repr, unknown))} "
+                                 f"is: give its number as the accession id")
+    queued = [acc for acc, s in named.items()
+              if _enqueue(acc, "run", _command_line("run", s, "--accession-id", acc))]
+    if not queued:
+        raise HTTPException(409, f"{', '.join(named)}: a command is already running or "
+                                 f"waiting")
+    return {"accessions": list(named), "queued": queued,
+            "skipped": [acc for acc in named if acc not in queued]}
 
 
 @app.post("/api/confirm/{accession}")
@@ -131,7 +181,21 @@ def start_confirm(accession: str):
     ws = _workspace(accession)
     if not ws.state_path.exists():
         raise HTTPException(404, f"no run of {accession} yet: Run it first")
-    return _start(accession, "confirm", _command_line("confirm", accession))
+    if not _enqueue(accession, "confirm", _command_line("confirm", accession)):
+        raise HTTPException(409, f"{accession}: a command is already running or waiting")
+    return {"accession": accession, "command": "confirm"}
+
+
+@app.delete("/api/queue/{accession}")
+def unqueue(accession: str):
+    """Take a waiting command out of the queue; one already running carries on."""
+    _workspace(accession)
+    with _job_lock:
+        waiting = _waiting(accession)
+        if not waiting:
+            raise HTTPException(404, f"nothing waiting for {accession}")
+        del _queue[waiting["position"] - 1]
+    return {"accession": accession, "removed": waiting["command"]}
 
 
 # ------------------------------------------------------------------ what is there
@@ -159,7 +223,7 @@ def status(accession: str):
     s = pipeline.status(accession)
     state = load_state(ws)
     code, command = s.get("last_exit_code"), s.get("last_command")
-    job = _job if _job.get("accession") == accession else None
+    job = _jobs.get(accession)
     return {
         "accession": accession, "exists": s["exists"], "input": s.get("input"),
         "last_command": command, "last_exit_code": code,
@@ -170,8 +234,46 @@ def status(accession: str):
                     **(s["stages"].get(n) or _report_stage(ws, n, job))} for n in STAGES],
         "problems": s["problems"],
         "job": {k: v for k, v in job.items()} if job else None,
+        "queued": _waiting(accession),
         "busy": ({"accession": _job["accession"], "command": _job["command"]}
                  if _busy() else None)}
+
+
+@app.get("/api/batch")
+def batch(ids: str = Query(..., description="accession ids, separated by commas")):
+    """A line for each accession of a batch: what it is doing, or where it stopped."""
+    from wod_etl.orchestration.report import _status_words
+
+    out = []
+    for acc in dict.fromkeys(i.strip() for i in ids.split(",") if i.strip()):
+        ws = _workspace(acc)
+        s, state = pipeline.status(acc), load_state(ws)
+        command, code = s.get("last_command"), s.get("last_exit_code")
+        verify = (state["stages"].get("verify") or {}).get("outputs") or {}
+        job, waiting = _jobs.get(acc) or {}, _waiting(acc)
+        blocking = sum(1 for p in s["problems"] if p.get("blocking"))
+        if _running(acc):
+            step = "running"
+        elif waiting:
+            step = "queued"
+        elif job.get("error"):
+            step = "failed"
+        elif not command or code is None:
+            step = "new"
+        elif (command, code) in (("run", 0), ("confirm", pipeline.EXIT_DECISIONS)):
+            step = "review"
+        elif code == 0:
+            step = "done" if verify.get("output_verified") else "empty"
+        else:
+            step = "failed"
+        out.append({"accession": acc, "step": step, "blocking": blocking,
+                    "command": (job.get("command") if step == "running" else
+                                waiting["command"] if waiting else command),
+                    "position": waiting["position"] if waiting else None,
+                    "outcome": job.get("error") or (
+                        _status_words(command, code, state)
+                        if command and code is not None else None)})
+    return out
 
 
 def _report_stage(ws: Workspace, name: str, job) -> Dict[str, Any]:
@@ -229,8 +331,9 @@ def put_decisions(accession: str, text: str = Body(..., embed=True),
     """Save reviewed decisions: valid TOML only, not over a newer file, not during a command."""
     ws = _workspace(accession)
     p = ws.decisions_path
-    if _busy():
-        raise HTTPException(409, "a command is running: save when it has finished")
+    if _running(accession):
+        raise HTTPException(409, f"a command is running for {accession}: save when it has "
+                                 f"finished")
     if not p.is_file():
         raise HTTPException(404, f"no decisions.toml for {accession}: Run it first")
     if mtime is not None and p.stat().st_mtime_ns != mtime:

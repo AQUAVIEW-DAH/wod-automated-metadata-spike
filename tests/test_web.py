@@ -27,14 +27,16 @@ def client(tmp_path, monkeypatch):
     (acc / "NCEI-Readme.txt").write_text("This is the standard bundle for an NCEI AIP.\n")
     (acc / "data" / "ctd" / "cast_1.csv").write_text(CAST)
     monkeypatch.setattr(web, "_job", {})
+    monkeypatch.setattr(web, "_jobs", {})
+    monkeypatch.setattr(web, "_queue", [])
     return TestClient(web.app), acc
 
 
-def _wait(c, timeout=60):
+def _wait(c, acc=ACC, timeout=60):
     end = time.time() + timeout
     while time.time() < end:
-        s = c.get(f"/api/status/{ACC}").json()
-        if not (s["job"] or {}).get("running"):
+        s = c.get(f"/api/status/{acc}").json()
+        if not (s["job"] or {}).get("running") and not s["queued"]:
             return s
         time.sleep(0.05)
     raise AssertionError("the command did not finish")
@@ -43,11 +45,12 @@ def _wait(c, timeout=60):
 class TestRunReviewConfirm:
     def test_the_two_steps_and_the_review_between_them(self, client):
         c, acc = client
-        assert c.post("/api/run", json={"source": str(acc)}).json()["accession"] == ACC
+        assert c.post("/api/run", json={"source": str(acc)}).json()["accessions"] == [ACC]
         s = _wait(c)
         assert (s["last_command"], s["last_exit_code"]) == ("run", 0)
         assert [st["status"] for st in s["stages"][:4]] == ["done"] * 4
         assert "review them, then confirm" in s["outcome"]
+        assert c.get(f"/api/batch?ids={ACC}").json()[0]["step"] == "review"
 
         files = {sec["section"]: sec["files"] for sec in c.get(f"/api/files/{ACC}").json()[
             "sections"]}
@@ -81,6 +84,7 @@ class TestRunReviewConfirm:
         assert {st["name"]: st["status"] for st in s["stages"]} == dict.fromkeys(
             ["resolve", "fetch", "triage", "decide", "check", "stage", "process", "verify",
              "report"], "done")
+        assert c.get(f"/api/batch?ids={ACC}").json()[0]["step"] == "done"
         out = c.get(f"/api/outputs/{ACC}").json()
         assert out["verified"] is True
         [f] = out["files"]
@@ -108,18 +112,20 @@ class TestRunReviewConfirm:
 
 
 class TestOneCommandAtATime:
-    def test_a_second_command_and_a_save_wait_for_the_first(self, client, monkeypatch,
-                                                              tmp_path):
+    def test_later_commands_wait_their_turn(self, client, monkeypatch, tmp_path):
         c, acc = client
+        other = acc.parent / "0999997"
+        other.mkdir()
         signal = tmp_path / "release"
         # A stand-in for the command: says one line, then waits to be released.
         slow = ("import os, sys, time\nprint('[1/5] resolve  ...', flush=True)\n"
                 "while not os.path.exists(sys.argv[1]):\n    time.sleep(0.02)\n")
         monkeypatch.setattr(web, "_command_line",
                             lambda *a: [sys.executable, "-c", slow, str(signal)])
-        assert c.post("/api/run", json={"source": str(acc)}).status_code == 200
+        r = c.post("/api/run", json={"source": f"{acc}, {acc} ,{other}"}).json()
+        assert (r["accessions"], r["queued"]) == ([ACC, "0999997"], [ACC, "0999997"])
         again = c.post("/api/run", json={"source": str(acc)})
-        assert again.status_code == 409 and "one command at a time" in again.json()["detail"]
+        assert again.status_code == 409 and "already running" in again.json()["detail"]
         assert c.put(f"/api/decisions/{ACC}", json={"text": ""}).status_code == 409
         for _ in range(200):
             s = c.get(f"/api/status/{ACC}").json()
@@ -127,8 +133,19 @@ class TestOneCommandAtATime:
                 break
             time.sleep(0.02)
         assert s["job"]["running"] and s["job"]["lines"] == ["[1/5] resolve  ..."]
+        assert c.get("/api/status/0999997").json()["queued"] == {"position": 1,
+                                                                  "command": "run"}
+        steps = {b["accession"]: (b["step"], b["command"], b["position"])
+                 for b in c.get(f"/api/batch?ids={ACC},0999997").json()}
+        assert steps == {ACC: ("running", "run", None), "0999997": ("queued", "run", 1)}
+
+        assert c.delete("/api/queue/0999997").json()["removed"] == "run"
+        assert c.delete("/api/queue/0999997").status_code == 404
+        assert c.delete(f"/api/queue/{ACC}").status_code == 404     # running, not waiting
+        assert c.post("/api/run", json={"source": str(other)}).json()["queued"] == ["0999997"]
         signal.write_text("go")
         assert _wait(c)["job"]["exit_code"] == 0
+        assert _wait(c, "0999997")["job"]["exit_code"] == 0
 
 
 class TestWhatItRefuses:
@@ -137,6 +154,11 @@ class TestWhatItRefuses:
         assert c.post("/api/run", json={"source": "  "}).status_code == 400
         no_acc = c.post("/api/run", json={"source": str(acc.parent)})
         assert no_acc.status_code == 400 and "accession id" in no_acc.json()["detail"]
+        some = c.post("/api/run", json={"source": f"{acc},{acc.parent}"})
+        assert some.status_code == 400 and repr(str(acc.parent)) in some.json()["detail"]
+        assert c.get(f"/api/status/{ACC}").json()["job"] is None          # none of them run
+        named = c.post("/api/run", json={"source": f"{acc},{acc}", "accession_id": "1"})
+        assert named.status_code == 400
         assert c.post(f"/api/confirm/{ACC}").status_code == 404          # not run yet
         assert c.get("/api/status/not!an:id").status_code == 400
         assert c.get(f"/api/outputs/{ACC}/notes.nc").status_code == 404

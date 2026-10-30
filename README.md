@@ -24,8 +24,9 @@ Run everything with `uv run` from the project root.
 uv run wod-etl web                 # http://127.0.0.1:8000  (--host, --port)
 ```
 
-1. **Run**: enter an accession number, NCEI URL, local folder or `.tar.gz`. It downloads and
-   triages every file and writes `data/runs/<accession>/decisions.toml`. Nothing is processed.
+1. **Run**: enter an accession number, NCEI URL, local folder or `.tar.gz`, or several
+   separated by commas. It downloads and triages every file and writes
+   `data/runs/<accession>/decisions.toml`. Nothing is processed.
 2. **Review**: each file has an entry with what it holds, `include`, `dataset` and `why`.
    Change what you disagree with and Save. Files that cannot be written are proposed out,
    with the reason.
@@ -36,10 +37,16 @@ uv run wod-etl web                 # http://127.0.0.1:8000  (--host, --port)
 Each input file has a "preview" link too: text, tables, XML and workbooks laid out to read
 ("As stored" shows the file unchanged), a NetCDF's variables, or a PDF in the page.
 
+Several accessions run one after another. A chip for each shows where it is (waiting,
+running, review, done, nothing written, failed) and opens it; ‹ › or `[` `]` step through
+them. A waiting one can be taken out of the queue with ×. **Confirm ready** confirms, in one go, every accession
+waiting for review with nothing left to settle.
+
 Running a step again redoes only what changed. The page is local-only, has no login and runs
-one command at a time. A save is checked as TOML first and never overwrites a file that
-changed on disk; Run and Confirm save unsaved edits first. The terminal and the page share
-`data/runs/<accession>/`, so a run can start in one and finish in the other.
+one command at a time; the others wait in a queue. A save is checked as TOML first and never
+overwrites a file that changed on disk; Run and Confirm save unsaved edits first. The
+terminal and the page share `data/runs/<accession>/`, so a run can start in one and finish in
+the other.
 
 ### In a terminal
 
@@ -147,4 +154,4 @@ it with `WOD_PROJECT_ROOT`.
 | Below-detection values | Become missing (Table 12 has no flag for them). The count is reported. |
 | `seawater_density` | Per-volume values are converted with WOD's constant 1025 kg/m³ (manual p.15), not the sample's own density. Every file that uses it says so. |
 | Nutrients in mass units | Phosphate, silicate and nitrate in mg/l are not converted: they are written as given under µmol/kg, with the originator's unit recorded. Range checks do not catch it. Chlorophyll in a molar unit is not written (no molar mass in Table 3b). |
-| Web page | No cancel button and no accession-id field. Use `--accession-id` in a terminal. |
+| Web page | A running command cannot be stopped (a waiting one can). No accession-id field: a local folder whose path has no accession number needs `--accession-id` in a terminal. |

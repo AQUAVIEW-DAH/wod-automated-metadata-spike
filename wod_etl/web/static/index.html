@@ -11,11 +11,20 @@
   <div class="bar">
     <strong class="brand">wod-etl</strong>
     <input id="source" type="text" autocomplete="off" spellcheck="false"
-           placeholder="Accession: landing-page URL, number (0189574), NCEI data URL or local folder">
-    <button id="run" title="Resolve, fetch and triage the accession, and propose decisions">Run</button>
+           placeholder="Accessions, separated by commas: landing-page URL, number (0189574), NCEI data URL or local folder">
+    <button id="run" title="Resolve, fetch and triage each accession, and propose decisions">Run</button>
     <button id="confirm" title="Write what the reviewed decisions include, and verify it" disabled>Confirm</button>
     <select id="recent" title="Accessions run before"><option value="">Open…</option></select>
   </div>
+  <nav id="batch" class="batch" hidden>
+    <button id="prev" class="small" title="Previous accession ([)">‹</button>
+    <button id="next" class="small" title="Next accession (])">›</button>
+    <div id="batch-list" class="batch-list"></div>
+    <span id="batch-count" class="batch-count"></span>
+    <button id="confirm-all" class="small" disabled
+            title="Confirm every accession waiting for review with nothing left to settle">Confirm ready</button>
+    <button id="batch-clear" class="small" title="Forget this list; the runs stay">Clear</button>
+  </nav>
   <ol id="stages" class="stages"></ol>
   <div id="outcome" class="outcome"></div>
   <ul id="problems" class="problems"></ul>

@@ -1,9 +1,20 @@
 "use strict";
-// wod-etl in a browser: Run and Confirm an accession, review decisions.toml in between.
+// wod-etl in a browser: Run and Confirm accessions, review decisions.toml in between.
 
 const $ = (id) => document.getElementById(id);
-const ui = { acc: null, mtime: null, dirty: false, timer: null, running: false, status: null };
+const BATCH = "wod-etl batch";      // the accessions of the last multi-accession Run
+const ui = { acc: null, mtime: null, dirty: false, timer: null, poll: 0, active: false,
+             status: null, batch: storedBatch(), steps: new Map(), batchActive: false };
 const ta = $("decisions");
+
+function storedBatch() {
+  try {
+    const b = JSON.parse(localStorage.getItem(BATCH));
+    return Array.isArray(b) ? b.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 async function api(path, options = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
@@ -43,8 +54,9 @@ function renderStatus(s) {
   const job = s.job;
   if (job && job.running) {
     say("outcome", `${job.command} running…`, "wait");
-  } else if (s.busy) {
-    say("outcome", `busy: ${s.busy.command} ${s.busy.accession} is running`, "wait");
+  } else if (s.queued) {
+    say("outcome", `${s.queued.command} waiting: ` +
+        (s.queued.position === 1 ? "next in line" : `${s.queued.position} in line`), "wait");
   } else if (job && job.error) {
     say("outcome", `${job.command} raised ${job.error}`, "bad");
   } else if (s.outcome) {
@@ -59,41 +71,153 @@ function renderStatus(s) {
     (p.why ? ` — ${esc(p.why)}` : "") +
     (p.how_to_fix ? `<br><span class="how">→ ${esc(p.how_to_fix)}</span>` : "") + "</li>").join("");
 
-  if (job) {
-    $("lines").textContent = (job.lines || []).join("\n");
-    $("activity-state").textContent = job.running ? "(running)" :
-      `(${job.command} finished${job.exit_code != null ? `, exit code ${job.exit_code}` : ""})`;
-  }
+  $("lines").textContent = job ? (job.lines || []).join("\n") : "";
+  $("activity-state").textContent = !job ? "" : job.running ? "(running)" :
+    `(${job.command} finished${job.exit_code != null ? `, exit code ${job.exit_code}` : ""})`;
   setButtons();
 }
 
+const sources = () => $("source").value.split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
+
 function setButtons() {
-  const busy = !!(ui.status && ui.status.busy);
-  $("run").disabled = busy || !$("source").value.trim();
-  $("confirm").disabled = busy || !ui.acc || !(ui.status && ui.status.exists);
-  $("save").disabled = busy || !ui.acc || !ui.dirty;
-  $("reload").disabled = busy || !ui.acc;
-  ta.readOnly = busy;
+  const s = ui.status;
+  const running = !!(s && s.job && s.job.running);    // this accession's command
+  const n = sources().length;
+  $("run").disabled = !n;
+  $("run").textContent = n > 1 ? `Run ${n}` : "Run";
+  $("confirm").disabled = running || !!(s && s.queued) || !ui.acc || !(s && s.exists);
+  $("save").disabled = running || !ui.acc || !ui.dirty;
+  $("reload").disabled = running || !ui.acc;
+  ta.readOnly = running;
+  const ready = readyToConfirm().length;
+  $("confirm-all").disabled = !ready;
+  $("confirm-all").textContent = ready ? `Confirm ready (${ready})` : "Confirm ready";
 }
 
 async function poll() {
   clearTimeout(ui.timer);
-  if (!ui.acc) return;
-  let s;
+  const token = ++ui.poll, acc = ui.acc;
+  let s = null, batchActive = false;
   try {
-    s = await api(`/api/status/${ui.acc}`);
+    [s, batchActive] = await Promise.all([acc ? api(`/api/status/${acc}`) : null, refreshBatch()]);
   } catch (e) {
-    ui.timer = setTimeout(poll, 5000);
+    if (token === ui.poll) ui.timer = setTimeout(poll, 5000);
     return;
   }
-  const running = !!(s.job && s.job.running) || !!s.busy;
-  renderStatus(s);
-  if (ui.running && !running) {               // a command just finished: show what it did
-    await Promise.all([refreshFiles(), refreshOutputs(), loadDecisions(false), loadRecent()]);
+  if (token !== ui.poll || acc !== ui.acc) return;    // another accession was opened meanwhile
+  const active = !!(s && ((s.job && s.job.running) || s.queued));
+  if (s) renderStatus(s);
+  if (ui.active && !active) {                 // its command just finished: show what it did
+    await Promise.all([refreshFiles(), refreshOutputs(), loadDecisions(false)]);
   }
-  ui.running = running;
-  ui.timer = setTimeout(poll, running ? 1200 : 5000);
+  if ((ui.active && !active) || (ui.batchActive && !batchActive)) loadRecent();
+  ui.active = active;
+  ui.batchActive = batchActive;
+  if (token === ui.poll) {
+    ui.timer = setTimeout(poll, active || batchActive || (s && s.busy) ? 1200 : 5000);
+  }
 }
+
+// ------------------------------------------------------------------ batch
+// Several accessions run in turn; each chip opens one, and shows where it is.
+const STEP = { queued: "waiting", running: "running", review: "review", done: "done",
+               empty: "nothing written", failed: "failed", new: "not run" };
+
+function setBatch(list) {
+  ui.batch = list;
+  localStorage.setItem(BATCH, JSON.stringify(list));
+}
+
+const readyToConfirm = () => ui.batch.length < 2 ? [] : ui.batch.filter((acc) => {
+  const b = ui.steps.get(acc);
+  return b && b.step === "review" && !b.blocking;
+});
+
+function stepWord(b) {
+  if (b.step === "queued") return `${b.command} ${b.position === 1 ? "next" : `#${b.position}`}`;
+  if (b.step === "running") return `${b.command}…`;
+  if (b.step === "review" && b.blocking) return `settle ${b.blocking}`;
+  return STEP[b.step] || b.step;
+}
+
+async function refreshBatch() {
+  $("batch").hidden = ui.batch.length < 2;
+  if (ui.batch.length < 2) return false;
+  const list = await api(`/api/batch?ids=${encodeURIComponent(ui.batch.join(","))}`);
+  ui.steps = new Map(list.map((b) => [b.accession, b]));
+  renderBatch();
+  return list.some((b) => b.step === "running" || b.step === "queued");
+}
+
+function renderBatch() {
+  const items = ui.batch.map((acc) => ui.steps.get(acc) || { accession: acc, step: "new" });
+  $("batch-list").innerHTML = items.map((b) =>
+    `<span class="chip ${b.step}${b.accession === ui.acc ? " active" : ""}" ` +
+    `data-acc="${esc(b.accession)}" title="${esc(b.outcome || STEP[b.step] || "")}">` +
+    `${esc(b.accession)} <small>${esc(stepWord(b))}</small>` +
+    (b.step === "queued" ? `<span class="x" data-unqueue="${esc(b.accession)}" ` +
+      `title="Take it out of the queue">×</span>` : "") + "</span>").join("");
+  const n = (...steps) => items.filter((b) => steps.includes(b.step)).length;
+  $("batch-count").textContent = [[n("review"), "to review"], [n("running", "queued"), "to go"],
+                                  [n("done"), "done"], [n("empty"), "nothing written"],
+                                  [n("failed"), "failed"]]
+    .filter(([k]) => k).map(([k, w]) => `${k} ${w}`).join(" · ");
+  setButtons();
+}
+
+function move(by) {
+  if (ui.batch.length < 2) return;
+  const i = ui.batch.indexOf(ui.acc);
+  const next = ui.batch[i < 0 ? 0 : (i + by + ui.batch.length) % ui.batch.length];
+  if (next !== ui.acc) open(next);
+}
+
+$("batch-list").addEventListener("click", async (e) => {
+  const x = e.target.closest("[data-unqueue]");
+  if (x) {
+    try {
+      await api(`/api/queue/${encodeURIComponent(x.dataset.unqueue)}`, { method: "DELETE" });
+    } catch (err) {
+      say("outcome", err.message, "bad");
+    }
+    poll();
+    return;
+  }
+  const chip = e.target.closest(".chip");
+  if (chip && chip.dataset.acc !== ui.acc) open(chip.dataset.acc);
+});
+$("prev").onclick = () => move(-1);
+$("next").onclick = () => move(1);
+document.addEventListener("keydown", (e) => {
+  if ((e.key !== "[" && e.key !== "]") || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target instanceof Element && e.target.closest("input, textarea, select")) return;
+  e.preventDefault();
+  move(e.key === "]" ? 1 : -1);
+});
+
+$("confirm-all").onclick = async () => {
+  const accs = readyToConfirm();
+  if (!accs.length || !(await save())) return;
+  if (!window.confirm(`Confirm ${count(accs.length, "accession")}? Each writes what its ` +
+                      `decisions.toml includes.\n\n${accs.join(", ")}`)) return;
+  const refused = [];
+  for (const acc of accs) {
+    try {
+      await api(`/api/confirm/${encodeURIComponent(acc)}`, { method: "POST" });
+    } catch (e) {
+      refused.push(e.message);
+    }
+  }
+  if (accs.includes(ui.acc)) ui.active = true;
+  poll();
+  if (refused.length) window.alert(`Not confirmed:\n\n${refused.join("\n")}`);
+};
+$("batch-clear").onclick = () => {
+  setBatch([]);
+  ui.steps = new Map();
+  refreshBatch();
+  setButtons();
+};
 
 // ------------------------------------------------------------------ input files
 const SHORT = {
@@ -783,10 +907,15 @@ async function open(acc, keepSource = false) {
   history.replaceState(null, "", `#${acc}`);
   $("report-link").href = `/api/report/${encodeURIComponent(acc)}`;
   $("log-link").href = `/api/log/${encodeURIComponent(acc)}`;
+  if (ui.batch.length > 1) {
+    renderBatch();
+    const chip = $("batch-list").querySelector(".chip.active");
+    if (chip) chip.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
   const s = await api(`/api/status/${acc}`);
   if (!keepSource) $("source").value = s.input || acc;
   renderStatus(s);
-  ui.running = !!(s.job && s.job.running) || !!s.busy;
+  ui.active = !!(s.job && s.job.running) || !!s.queued;
   await Promise.all([refreshFiles(), refreshOutputs(), loadDecisions(true)]);
   poll();
 }
@@ -796,8 +925,11 @@ $("run").onclick = async () => {
   if (!source || !(await save())) return;
   try {
     const r = await api("/api/run", { method: "POST", body: JSON.stringify({ source }) });
-    ui.running = true;
-    await open(r.accession, true);
+    // A Run of several accessions starts a list; later Runs join it until it is cleared.
+    if (r.accessions.length > 1 || ui.batch.length > 1) {
+      setBatch([...new Set([...ui.batch, ...r.accessions])]);
+    }
+    await open(r.accessions[0], true);
     $("activity").open = true;
   } catch (e) {
     say("outcome", e.message, "bad");
@@ -808,7 +940,7 @@ $("confirm").onclick = async () => {
   if (!ui.acc || !(await save())) return;
   try {
     await api(`/api/confirm/${encodeURIComponent(ui.acc)}`, { method: "POST" });
-    ui.running = true;
+    ui.active = true;
     $("activity").open = true;
     poll();
   } catch (e) {
@@ -832,4 +964,5 @@ $("recent").onchange = (e) => {
 
 loadRecent();
 if (location.hash.length > 1) open(decodeURIComponent(location.hash.slice(1)));
+else if (ui.batch.length > 1) open(ui.batch[0]);
 setButtons();

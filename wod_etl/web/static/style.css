@@ -76,6 +76,26 @@ select {
 .stage.failed { border-color: var(--fail); color: #fff; background: var(--fail); }
 .stage.blocked, .stage.pending { border-color: var(--block); color: var(--block); background: #fff8eb; }
 @keyframes pulse { 50% { opacity: .55; } }
+/* The batch: a chip per accession, coloured like the stages, the open one outlined. */
+.batch { display: flex; gap: 6px; align-items: center; margin: 10px 0 0; }
+.batch[hidden] { display: none; }
+.batch-list { display: flex; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; padding: 3px; }
+.chip {
+  flex: 0 0 auto; display: inline-flex; gap: 6px; align-items: baseline; padding: 3px 10px;
+  border: 1px solid var(--idle); border-radius: 999px; background: #fff; color: var(--muted);
+  font: 600 12px var(--mono); white-space: nowrap; cursor: pointer;
+}
+.chip small { font: 500 11px system-ui, -apple-system, "Segoe UI", sans-serif; }
+.chip:hover { border-color: var(--accent); }
+.chip.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chip.review { border-color: var(--block); color: var(--block); background: #fff8eb; }
+.chip.done { border-color: var(--done); color: var(--done); background: #effaf3; }
+.chip.empty { border-color: var(--done); border-style: dashed; color: var(--muted); }
+.chip.failed { border-color: var(--fail); color: var(--fail); background: #fdf1f1; }
+.chip.running { border-color: var(--run); color: #fff; background: var(--run); animation: pulse 1.2s infinite; }
+.chip .x { margin-left: 2px; font-size: 13px; line-height: 1; }
+.chip .x:hover { color: var(--fail); }
+.batch-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .outcome { font-weight: 600; min-height: 1.4em; }
 .outcome.ok { color: var(--done); } .outcome.wait { color: var(--block); }
 .outcome.bad { color: var(--fail); }
