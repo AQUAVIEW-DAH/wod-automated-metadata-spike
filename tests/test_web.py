@@ -65,6 +65,12 @@ class TestRunReviewConfirm:
         assert raw.status_code == 200 and raw.text == CAST
         for path in ("data/ctd/missing.csv", "%2E%2E/%2E%2E/etc/passwd"):
             assert c.get(f"/api/input-preview/{ACC}/{path}").status_code == 404
+            assert c.get(f"/api/input-stats/{ACC}/{path}").status_code == 404
+        read = c.get(f"/api/input-stats/{ACC}/data/ctd/cast_1.csv").json()
+        assert (read["casts"], read["groups"][0]["size"]) == (1, 20)
+        depth, temperature, _ = read["groups"][0]["variables"]
+        assert (depth["name"], depth["min"], depth["max"]) == ("Depth (m)", 0, 19)
+        assert (temperature["mean"], temperature["missing"]) == (pytest.approx(24.05), 0)
 
         d = c.get(f"/api/decisions/{ACC}").json()
         assert d["exists"] and '[files."data/ctd/cast_1.csv"]' in d["text"]
@@ -106,6 +112,10 @@ class TestRunReviewConfirm:
         assert z["down"] and z["values"][:3] == [0.0, 1.0, 2.0]
         assert temperature["values"][:3] == [25.0, 24.9, 24.8]
         assert c.get(f"/api/preview/{ACC}/{f['name']}/casts/1").status_code == 404
+        groups = c.get(f"/api/stats/{ACC}/{f['name']}").json()["groups"]
+        assert [g["dimension"] for g in groups][:2] == ["z_obs", "casts"]
+        z = next(v for v in groups[0]["variables"] if v["name"] == "z")
+        assert (z["n"], z["max"], z["units"]) == (20, 19, "m")
         assert "## WOD files written" in c.get(f"/api/report/{ACC}").text
         assert "cli confirm" in c.get(f"/api/log/{ACC}").text
         assert c.get("/api/accessions").json()[0]["accession"] == ACC
@@ -165,6 +175,7 @@ class TestWhatItRefuses:
         assert c.get(f"/api/outputs/{ACC}/wod_ctd_2015_{ACC}.nc").status_code == 404
         assert c.get(f"/api/preview/{ACC}/notes.nc").status_code == 404
         assert c.get(f"/api/preview/{ACC}/wod_ctd_2015_{ACC}.nc/casts/0").status_code == 404
+        assert c.get(f"/api/stats/{ACC}/wod_ctd_2015_{ACC}.nc").status_code == 404
 
 
 class TestPreview:
@@ -250,3 +261,96 @@ class TestInputPreview:
         readme = tmp_path / "readme.txt"
         readme.write_text("This accession holds CTD casts from 2015.\nContact the PI.\n" * 3)
         assert preview_input(readme)["formatted"] == {"layout": "prose"}
+
+
+class TestStats:
+    """Each variable summarized as a scientist reads it: numbers, flags, text and times."""
+
+    def test_numbers(self):
+        import pandas as pd
+
+        from wod_etl.web.stats import BINS, summarize
+
+        s = summarize(pd.Series([1.0, 2.0, 3.0, 4.0, None]))
+        assert (s["kind"], s["n"], s["missing"]) == ("number", 4, 1)
+        assert (s["min"], s["p25"], s["median"], s["p75"], s["max"]) == (1, 1.75, 2.5, 3.25, 4)
+        assert s["mean"] == 2.5 and s["std"] == pytest.approx(1.2910, abs=1e-4)
+        assert len(s["histogram"]) == BINS and sum(s["histogram"]) == 4
+        assert summarize(pd.Series([5.0, 5.0]))["histogram"] == [2]
+        assert summarize(pd.Series([None, None], dtype=float))["kind"] == "empty"
+
+    def test_text_in_a_numeric_column_is_counted_apart(self):
+        import pandas as pd
+
+        from wod_etl.web.stats import summarize
+
+        s = summarize(pd.Series(["0.5", "ND", "1.5", "ND", "2.5", None], dtype=object))
+        assert (s["kind"], s["n"], s["missing"], s["median"]) == ("number", 3, 1, 1.5)
+        assert s["text"] == {"count": 2, "values": [{"value": "ND", "count": 2,
+                                                     "meaning": None}]}
+
+    def test_flags_text_and_times(self):
+        import pandas as pd
+
+        from wod_etl.web.stats import summarize
+
+        flags = summarize(pd.Series([4.0, 0.0, 0.0, None]), flag=True,
+                          meanings={0.0: "accepted", 4.0: "bad"})
+        assert flags["values"] == [{"value": 0, "count": 2, "meaning": "accepted"},
+                                   {"value": 4, "count": 1, "meaning": "bad"}]
+        text = summarize(pd.Series(["A01", "A01", "B02", ""], dtype=object))
+        assert (text["kind"], text["distinct"], text["missing"]) == ("text", 2, 1)
+        times = summarize(pd.Series(["2023/6/16 12:14", "2023/6/25 16:55", None], dtype=object))
+        assert (times["kind"], times["first"], times["last"], times["missing"]) == (
+            "time", "2023-06-16 12:14", "2023-06-25 16:55", 1)
+
+    def test_a_written_file_by_dimension(self, tmp_path):
+        from helpers import make_cast
+        from wod_etl.web.stats import output_stats
+        from wod_etl.writers import write_ragged_profiles
+
+        p = tmp_path / "out.nc"
+        write_ragged_profiles([make_cast(dic=True), make_cast(lat=62.4, rows=2)], str(p))
+        r = output_stats(str(p))
+        levels, casts = r["groups"][:2]
+        assert (levels["dimension"], levels["size"], casts["dimension"]) == ("z_obs", 5, "casts")
+        by_name = {v["name"]: v for g in r["groups"] for v in g["variables"]}
+        assert "z_row_size" not in by_name                         # a count, not data
+        dic = by_name["dissolved_inorganic_carbon"]
+        assert (dic["n"], dic["missing"], dic["min"], dic["max"]) == (3, 2, 2100, 2110)
+        assert by_name["temperature_qc"]["kind"] == "flag"
+        assert (by_name["time"]["first"], by_name["lat"]["max"]) == ("1985-06-12", 62.4)
+
+    def test_a_netcdf_input_is_described_as_stored(self, tmp_path):
+        import netCDF4
+        from helpers import write_mooring_nc
+        from wod_etl.web.stats import input_stats
+
+        p = tmp_path / "t.nc"
+        write_mooring_nc(p, days=1)
+        with netCDF4.Dataset(p, "a") as ds:
+            ds["T_20"][3, 0, 0, 0] = 1e35                       # EPIC's undeclared fill
+        r = input_stats(str(p))
+        record, clock, single = r["groups"]
+        assert r["stored"] and record["dimension"] == "time, depth, lat, lon"
+        [t] = record["variables"]
+        assert (t["n"], t["missing"], t["min"], t["max"]) == (24, 1, 5, 5)
+        [time] = clock["variables"]
+        assert (time["kind"], time["first"], time["last"]) == (
+            "time", "2017-09-24 00:00", "2017-09-25 00:00")
+        assert [v["name"] for v in single["variables"]] == ["depth", "lat", "lon"]
+        assert single["size"] is None
+
+    def test_an_input_table_as_the_pipeline_s_reader_splits_it(self, tmp_path):
+        from wod_etl.web.stats import input_stats
+
+        csv = tmp_path / "bottle.csv"
+        csv.write_text("Station,Depth (m),Temp,Temp_QC\n"
+                       + "".join(f"A01,{z},{5 - z / 100},2\n" for z in range(0, 50, 10)))
+        r = input_stats(str(csv))
+        station, depth, temp, flag = r["groups"][0]["variables"]
+        assert (station["kind"], depth["max"], temp["min"]) == ("text", 40, 4.6)
+        assert flag["kind"] == "flag" and flag["values"][0]["count"] == 5
+        readme = tmp_path / "readme.txt"
+        readme.write_text("This accession holds CTD casts from 2015. Contact the PI.\n" * 3)
+        assert input_stats(str(readme))["error"]

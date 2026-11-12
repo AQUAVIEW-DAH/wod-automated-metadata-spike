@@ -674,6 +674,12 @@ def _from_column_names(columns: List[str], out: Dict[str, Any]) -> None:
 
 
 # ------------------------------------------------------- originator flags
+def is_flag_column(name) -> bool:
+    """A column read as an originator's quality flag, by its name."""
+    text = str(name).strip()
+    return any(p.match(text) for p in (_BARE_FLAG, _FLAG_SUFFIX, _FLAG_PREFIX))
+
+
 def _find_originator_flags(columns: List[str], out: Dict[str, Any]) -> None:
     """Pair each originator quality-flag column with the variable it flags.
 

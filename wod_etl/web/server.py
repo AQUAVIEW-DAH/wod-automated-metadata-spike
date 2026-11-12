@@ -29,7 +29,7 @@ from wod_etl.orchestration import pipeline
 from wod_etl.orchestration import run_manifest
 from wod_etl.orchestration.pipeline import (CONFIRM_STAGES, RUN_STAGES, STAGES, Workspace,
                                             load_state)
-from wod_etl.web import inputs, preview
+from wod_etl.web import inputs, preview, stats
 from wod_etl.writers import is_output_file_name, is_taxa_file_name
 
 UI_DIR = Path(__file__).with_name("static")
@@ -407,6 +407,12 @@ def preview_cast(accession: str, name: str, index: int):
     return _read(name, preview.cast, str(_output_path(accession, name)), index)
 
 
+@app.get("/api/stats/{accession}/{name}")
+def output_stats(accession: str, name: str):
+    """Descriptive statistics of a written file's variables."""
+    return _read(name, stats.output_stats, str(_output_path(accession, name)))
+
+
 def _read(name: str, fn, *args):
     """Run a read in a worker process: HDF5 stays off the server's threads, and a crash in it
     costs a new worker, not the page."""
@@ -451,6 +457,13 @@ def input_preview(accession: str, path: str):
     if out["kind"] == "netcdf":
         out.update(_read(full.name, preview.describe_input, str(full)))
     return out
+
+
+@app.get("/api/input-stats/{accession}/{path:path}")
+def input_stats(accession: str, path: str):
+    """Descriptive statistics of an input file's columns, as the pipeline reads them."""
+    full = _input_path(accession, path)
+    return {"path": path, **_read(full.name, stats.input_stats, str(full))}
 
 
 @app.get("/api/input-file/{accession}/{path:path}")

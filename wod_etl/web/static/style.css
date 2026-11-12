@@ -289,7 +289,7 @@ table.data th small { display: block; font-weight: normal; color: var(--muted); 
 table.data td {
   padding: 2px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line-soft);
 }
-table.data td.text { text-align: left; }
+table.data td.text, table.data th.text { text-align: left; }
 table.data .flag { color: var(--muted); }
 table.data .n { color: #a8b0ba; }
 table.data tbody tr:hover { background: #f6f8fb; }
@@ -351,6 +351,34 @@ pre.raw {
 img.doc { height: auto; max-height: 75vh; object-fit: contain; }
 h4.sheet { margin: 12px 0 4px; font-size: 12px; color: #344054; }
 .view-toggle { display: flex; gap: 6px; margin: 0 0 8px; }
-.view-toggle button.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.view-toggle button.on, .tabs button.on {
+  border-color: var(--accent); color: var(--accent); font-weight: 600;
+}
 pre.raw.wrap { white-space: pre-wrap; word-break: break-word; }
 pre.raw.above { max-height: 30vh; margin-bottom: 8px; }
+
+/* Statistics: a tab beside the preview, a row per variable. */
+#preview .tabs { display: flex; gap: 4px; margin-left: 10px; }
+#stats-view { display: none; padding: 0 16px 16px; }
+#preview.stats-mode #stats-view { display: block; }
+#preview.stats-mode .preview-body { display: none; }
+#stats-view > .meta { margin: 10px 0 0; }
+#stats-view .meta { color: var(--muted); font-size: 12px; }
+#stats-view .meta.warn, table.stats .warn { color: #8a5a00; }
+h4.stats-head { margin: 16px 0 6px; font-size: 12px; font-family: var(--mono); color: #344054; }
+table.stats td { vertical-align: top; padding-top: 4px; padding-bottom: 4px; }
+table.stats td small { color: var(--muted); }
+table.stats .sub { display: block; font-size: 11px; }
+table.stats .none { color: var(--idle); }
+table.stats td.summary { white-space: normal; }
+table.stats .value { display: inline-block; margin-right: 14px; }
+table.stats code { font: 12px var(--mono); }
+table.stats .value code {
+  display: inline-block; max-width: 36ch; overflow: hidden; text-overflow: ellipsis;
+  vertical-align: bottom; white-space: nowrap;
+}
+.spark { display: block; }
+.spark .hit { fill: transparent; }
+.spark .bar { fill: var(--accent); }
+.spark g:hover .bar { fill: #1d4ed8; }
+.spark .base { stroke: var(--line); stroke-width: 1; }

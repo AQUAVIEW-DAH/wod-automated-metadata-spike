@@ -37,6 +37,11 @@ uv run wod-etl web                 # http://127.0.0.1:8000  (--host, --port)
 Each input file has a "preview" link too: text, tables, XML and workbooks laid out to read
 ("As stored" shows the file unchanged), a NetCDF's variables, or a PDF in the page.
 
+Both previews have a Statistics tab: each variable's count, missing values, quartiles, mean,
+standard deviation and histogram; flags and text by their commonest values; times by their
+range. An input NetCDF file is described as stored; other tables by the columns the
+pipeline's reader splits them into.
+
 Several accessions run one after another. A chip for each shows where it is (waiting,
 running, review, done, nothing written, failed) and opens it; ‹ › or `[` `]` step through
 them. A waiting one can be taken out of the queue with ×. **Confirm ready** confirms, in one go, every accession

@@ -61,6 +61,10 @@
 
   <section class="panel" id="preview">
     <h2><span id="preview-name"></span> <span id="preview-count" class="count"></span>
+      <span id="preview-tabs" class="tabs">
+        <button class="small on" data-tab="preview">Preview</button>
+        <button class="small" data-tab="stats" title="Descriptive statistics of each variable">Statistics</button>
+      </span>
       <span class="actions">
         <a id="preview-download" class="button small" download>Download</a>
         <button id="preview-close" class="small" title="Esc">Close</button>
@@ -77,6 +81,7 @@
         <div id="cast-view"></div>
       </div>
     </div>
+    <div id="stats-view" class="scroll"></div>
   </section>
 </main>
 

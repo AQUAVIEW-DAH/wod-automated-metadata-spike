@@ -522,7 +522,7 @@ async function refreshOutputs() {
 // ------------------------------------------------------------------ preview
 const PAGE = 500;                    // level rows added to the table at a time
 const pv = { name: null, kind: null, file: null, index: null, cast: null, token: 0,
-             x: null, y: null, fieldsOpen: true };
+             x: null, y: null, fieldsOpen: true, tab: "preview", stats: null };
 const outputUrl = (name) => `/api/outputs/${encodeURIComponent(ui.acc)}/${encodeURIComponent(name)}`;
 const previewUrl = (name) => `/api/preview/${encodeURIComponent(ui.acc)}/${encodeURIComponent(name)}`;
 const words = () => pv.kind === "taxa" ? { one: "haul", many: "hauls", row: "record" }
@@ -535,7 +535,7 @@ const position = (c) => c.lat == null && c.lon == null ? null :
 async function openPreview(name, kind, index = 0) {
   const token = ++pv.token;
   if (name !== pv.name) Object.assign(pv, { x: null, y: null });
-  Object.assign(pv, { name, kind, input: null, file: null, index: null, cast: null });
+  Object.assign(pv, { name, kind, input: null, file: null, index: null, cast: null, stats: null });
   document.body.classList.add("previewing");
   $("preview").classList.remove("input-mode");
   $("preview-name").textContent = name;
@@ -544,6 +544,7 @@ async function openPreview(name, kind, index = 0) {
   $("cast-filter").placeholder = `Filter ${words().many}`;
   $("cast-list").innerHTML = `<p class="empty">Reading…</p>`;
   $("file-info").innerHTML = $("cast-view").innerHTML = "";
+  if (pv.tab === "stats") loadStats();
   let file;
   try {
     file = await api(previewUrl(name));
@@ -774,7 +775,8 @@ const inputUrl = (route, path) => `/api/${route}/${encodeURIComponent(ui.acc)}/`
 
 async function openInputPreview(path) {
   const token = ++pv.token;
-  Object.assign(pv, { name: null, input: path, file: null, index: null, cast: null });
+  Object.assign(pv, { name: null, kind: null, input: path, file: null, index: null, cast: null,
+                      stats: null });
   document.body.classList.add("previewing");
   $("preview").classList.add("input-mode");
   $("preview-name").textContent = path;
@@ -782,6 +784,7 @@ async function openInputPreview(path) {
   $("preview-download").href = inputUrl("input-file", path);
   $("file-info").innerHTML = "";
   $("cast-view").innerHTML = `<p class="empty">Reading…</p>`;
+  if (pv.tab === "stats") loadStats();
   let r;
   try {
     r = await api(inputUrl("input-preview", path));
@@ -858,6 +861,114 @@ function renderInput(r, path) {
     "Download it to open it.</p>";
 }
 
+// ------------------------------------------------------------------ statistics
+// The open file's variables, a row each: numbers by quartiles, mean, std and a histogram;
+// flags and text by their commonest values; times by first and last. Loaded once per file.
+const STATS = [["min", "min"], ["p25", "25%"], ["median", "median"], ["p75", "75%"],
+               ["max", "max"], ["mean", "mean"], ["std", "std"]];
+
+function setTab(tab) {
+  pv.tab = tab;
+  $("preview").classList.toggle("stats-mode", tab === "stats");
+  for (const b of $("preview-tabs").children) b.classList.toggle("on", b.dataset.tab === tab);
+  if (tab === "stats") loadStats();
+}
+
+async function loadStats() {
+  const url = pv.name ? `/api/stats/${encodeURIComponent(ui.acc)}/${encodeURIComponent(pv.name)}`
+    : pv.input ? inputUrl("input-stats", pv.input) : null;
+  if (!url || pv.stats === url) return;                 // loaded, or loading
+  const token = pv.token;
+  pv.stats = url;
+  $("stats-view").innerHTML = `<p class="empty">Reading…</p>`;
+  try {
+    const r = await api(url);
+    if (token === pv.token) $("stats-view").innerHTML = renderStats(r);
+  } catch (e) {
+    if (token !== pv.token) return;
+    pv.stats = null;                                    // the tab tries again
+    $("stats-view").innerHTML = `<p class="msg bad">${esc(e.message)}</p>`;
+  }
+}
+
+function renderStats(r) {
+  if (r.error) return `<p class="empty">No table to describe: ${esc(r.error)}</p>`;
+  const w = words();
+  const intro = !pv.input ? "" : r.stored ?
+    `<p class="meta">Each variable as stored (${esc(r.format)}).</p>` :
+    `<p class="meta">Split into columns as the pipeline's reader splits ${esc(r.format)}: ` +
+    `${count(r.casts, "cast")}, ${count(r.groups[0].size, "row")}.</p>` +
+    r.warnings.map((x) => `<p class="meta warn">${esc(x)}</p>`).join("");
+  return intro + r.groups.map((g) => {
+    const size = g.dimension == null || g.size == null ? "" : g.dimension === r.level_dimension ?
+      count(g.size, w.row) : g.dimension === "casts" ? count(g.size, w.one) :
+      `${g.size.toLocaleString()} values`;
+    return `<h4 class="stats-head">${esc(g.dimension ?? "Columns")}` +
+      (size ? ` <span class="meta">${esc(size)}</span>` : "") + "</h4>" +
+      `<div class="levels"><table class="data stats"><thead><tr><th class="text">variable</th>` +
+      `<th>n</th><th>missing</th>` + STATS.map(([, h]) => `<th>${h}</th>`).join("") +
+      `<th class="text">distribution</th></tr></thead><tbody>` +
+      g.variables.map(statsRow).join("") + "</tbody></table></div>";
+  }).join("");
+}
+
+// Six significant digits, never rounding the integer part (a YYYYMMDD date keeps its day).
+const num = (v) => v == null ? "" : Number.isInteger(v) ? String(v) :
+  String(+v.toPrecision(Math.min(21, Math.max(6, Math.floor(Math.log10(Math.abs(v))) + 1))));
+const pct = (a, b) => {
+  const p = 100 * a / b;
+  return p > 0 && p < 0.1 ? "<0.1%" : p > 99.9 && p < 100 ? ">99.9%" : `${+p.toFixed(1)}%`;
+};
+
+function statsRow(v) {
+  const other = v.text ? v.text.count : 0, total = v.n + v.missing + other;
+  const name = `<td class="text" title="${esc(v.long_name || v.name)}"><code>${esc(v.name)}</code>` +
+    (v.units ? `<small class="sub">${esc(v.units)}</small>` : "") +
+    (v.every ? `<small class="sub">1 in ${esc(v.every)} values read</small>` : "") +
+    (other ? `<small class="sub warn">${esc(count(other, "value"))} not a number: ` +
+      esc(v.text.values.map((x) => `${x.value} ×${x.count}`).join(", ")) + "</small>" : "") + "</td>";
+  const counts = `<td>${v.n.toLocaleString()}</td>` + (v.missing ?
+    `<td>${v.missing.toLocaleString()} <small>${pct(v.missing, total)}</small></td>` :
+    `<td class="none">0</td>`);
+  if (v.kind === "number") {
+    return `<tr>${name}${counts}` + STATS.map(([k]) => `<td>${num(v[k])}</td>`).join("") +
+      `<td class="text">${v.histogram.length > 1 ? histogram(v) : `<span class="meta">constant</span>`}` +
+      "</td></tr>";
+  }
+  return `<tr>${name}${counts}<td class="text summary" colspan="${STATS.length + 1}">` +
+    valuesOf(v) + "</td></tr>";
+}
+
+function valuesOf(v) {
+  if (v.kind === "empty") return `<span class="none">no values</span>`;
+  if (v.kind === "time") return esc(v.first === v.last ? v.first : `${v.first} → ${v.last}`);
+  if (v.kind === "text" && v.distinct === v.n) {        // every value its own: identifiers
+    return `<span class="value">${v.distinct.toLocaleString()} distinct:</span>` +
+      v.values.slice(0, 3).map((x) => `<span class="value"><code title="${esc(x.value)}">` +
+      `${esc(x.value)}</code></span>`).join("") + (v.distinct > 3 ? "…" : "");
+  }
+  return v.values.map((x) => `<span class="value"><code title="${esc(x.value)}">` +
+    `${esc(x.value)}</code>${x.meaning ? ` ${esc(x.meaning)}` : ""} <span class="meta">` +
+    `${x.count.toLocaleString()} (${pct(x.count, v.n)})</span></span>`).join("") +
+    (v.distinct > v.values.length ?
+      `<span class="meta">and ${(v.distinct - v.values.length).toLocaleString()} more</span>` : "");
+}
+
+// Equal bins from min to max. A bin holding anything is at least 1.5 px tall, so a lone
+// outlier (an unflagged sentinel, a value in other units) still shows.
+function histogram(v) {
+  const h = v.histogram, W = 6, H = 26, top = Math.max(...h), step = (v.max - v.min) / h.length;
+  const bar = (x, y, w, r = 1) => `M${x},${H}V${(y + r).toFixed(1)}Q${x},${y.toFixed(1)} ` +
+    `${x + r},${y.toFixed(1)}H${x + w - r}Q${x + w},${y.toFixed(1)} ${x + w},${(y + r).toFixed(1)}V${H}Z`;
+  return `<svg class="spark" width="${h.length * W}" height="${H + 1}" role="img" ` +
+    `aria-label="histogram of ${esc(v.name)}">` + h.map((c, i) => {
+      const ht = c ? Math.max(1.5, (c / top) * (H - 1)) : 0;
+      return `<g><title>${esc(`${num(v.min + i * step)} to ${num(v.min + (i + 1) * step)}: ` +
+        c.toLocaleString())}</title><rect class="hit" x="${i * W}" width="${W}" height="${H}"/>` +
+        (c ? `<path class="bar" d="${bar(i * W + 1, H - ht, W - 2)}"/>` : "") + "</g>";
+    }).join("") + `<line class="base" x1="0" x2="${h.length * W}" y1="${H + 0.5}" y2="${H + 0.5}"/></svg>`;
+}
+
 $("output-list").addEventListener("click", (e) => {
   const a = e.target.closest("a.preview");
   if (!a) return;
@@ -865,6 +976,10 @@ $("output-list").addEventListener("click", (e) => {
   openPreview(a.dataset.name, a.dataset.kind);
 });
 $("preview-close").onclick = closePreview;
+$("preview-tabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-tab]");
+  if (b) setTab(b.dataset.tab);
+});
 $("cast-filter").addEventListener("input", renderCastList);
 $("cast-list").addEventListener("click", (e) => {
   const el = e.target.closest(".cast");
@@ -885,7 +1000,7 @@ document.addEventListener("keydown", (e) => {
     closePreview();
     return;
   }
-  if (!pv.name) return;
+  if (!pv.name || pv.tab === "stats") return;
   const inList = e.target === document.body ||
     (e.target instanceof Element && e.target.closest("#cast-list"));
   if ((e.key === "ArrowDown" || e.key === "ArrowUp") && inList) {
