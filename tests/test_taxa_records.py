@@ -1,11 +1,4 @@
-"""Biological data (plankton): a haul's Biological Header and Taxa-Records, through the same
-phase packages a profile uses -- staged, mapped, written, validated.
-
-Before this, plankton was identified, excluded and reported as an unfinished item -- nothing
-could write a Taxa-Record. These pin the record model: a depth RANGE per record, the
-originator's name always kept, a code only when the list has exactly one, and every gap in
-the collection metadata named rather than filled.
-"""
+"""Plankton hauls as a Biological Header plus Taxa-Records: staged, mapped, written, validated."""
 import numpy as np
 import pytest
 
@@ -135,6 +128,7 @@ class TestProcessTaxa:
             assert ds["t_20_originator_s_unit"][0] == "number per sample"
             assert ds["b_7_gear_code"][0] == "101"
             assert ds["b_7_gear_code_originator_text"][0] == "NORPAC Net"
+            assert np.ma.getmaskarray(ds["wod_unique_cast"][:]).all()
             assert ds["b_4_type_of_tow"][0] == "2"
             assert float(ds["b_3_mesh_size"][0]) == 100.0
             assert ds["taxa_row_size"][0] == 5
@@ -143,6 +137,18 @@ class TestProcessTaxa:
                 "Counts per sample; no volume filtered.",
                 "biological field 'Bucket colour' has no Table 6a home: red"]
             assert ds["cast_id"][0] == "0303928_SHU1505-st01-norpac-100um_20151109"
+
+    def test_the_preview_lists_each_haul_s_records(self, lists, tmp_path):
+        from wod_etl.web import preview
+
+        _haul(tmp_path / "staged" / "h1.csv")
+        out = process_taxa(tmp_path / "staged", tmp_path / "out")["outputs"][0]
+        about = preview.describe(out)
+        assert about["level_dimension"] == "taxa_obs"
+        assert [(c["size"], c["time"]) for c in about["casts"]] == [(5, "2015-11-09")]
+        [records] = preview.cast(out, 0)["tables"]
+        names = next(c for c in records["columns"] if c["name"] == "taxon_name_originator")
+        assert names["values"][0] == "Acartia danae" and not names["numeric"]
 
     def test_a_reversed_depth_range_is_not_output(self, lists, tmp_path):
         _haul(tmp_path / "staged" / "bad.csv", upper_depth=150, lower_depth=0)

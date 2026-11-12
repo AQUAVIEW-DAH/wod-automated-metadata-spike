@@ -1,10 +1,4 @@
-"""Single loading point for every WOD reference table.
-
-Before this module existed the tables were read in three places and two of them
-(table_12_qc_flags.json, table_11_range_variables.json) were not read at all -- the QC flag
-meanings were transcribed by hand into two separate modules instead. That is exactly the
-drift this project exists to avoid, so all access goes through here.
-"""
+"""Single loading point for the WOD reference tables in knowledge/wod_code_tables/."""
 import functools
 import json
 from typing import Any, Dict, List, Optional, Tuple
@@ -24,6 +18,7 @@ TABLE_FILES = {
     "table_12_qc_flags": "table_12_qc_flags.json",
     "table_13_gradients": "table_13_gradients.json",
     "appendix_11_ranges": "appendix_11_ranges.json",
+    "appendix_1_country_codes": "appendix_1_country_codes.json",
 }
 
 
@@ -35,14 +30,13 @@ def load_table(name: str) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(
             f"Missing WOD reference table {path}. These are extracted from "
-            f"knowledge/wod_readme.pdf; see knowledge/wod_code_tables/"
-            f"standardization_rules.md. Known tables: {', '.join(sorted(TABLE_FILES))}."
+            f"knowledge/wod_readme.pdf. Known tables: {', '.join(sorted(TABLE_FILES))}."
         )
     return json.loads(path.read_text())
 
 
 def available_tables() -> List[Dict[str, Any]]:
-    """Every table with its title and manual page, for an agent orienting itself."""
+    """Every table with its title and manual page."""
     out = []
     for name in sorted(TABLE_FILES):
         d = load_table(name)
@@ -82,9 +76,7 @@ def wod_secondary_headers() -> Dict[int, str]:
 def variable_specific_headers() -> Dict[int, Dict[str, Any]]:
     """Variable specific second headers keyed by ID (Table 5a/5b, pp.28-29).
 
-    These describe ONE VARIABLE within a cast and repeat per variable, unlike the Table 4a
-    secondary headers which describe the cast. The two are separate namespaces: ID 5 is
-    'Instrument' here and 'Cast/Tow number' in Table 4a.
+    Per variable, and a separate namespace from Table 4a: ID 5 is 'Instrument' here.
     """
     return {int(k): v for k, v in
             load_table("table_5a_variable_specific_headers")["variable_specific_headers"].items()}
@@ -92,11 +84,7 @@ def variable_specific_headers() -> Dict[int, Dict[str, Any]]:
 
 # ----------------------------------------------------------------- Table 6a
 def biological_headers() -> Dict[int, Dict[str, Any]]:
-    """Biological (plankton sampling) header variables keyed by ID (Table 6a/6b, pp.30-31).
-
-    Collection metadata for a plankton cast -- gear, tow, mesh, volume, preservation.
-    Nothing here applies to a profile cast and the profile writer emits none of it.
-    """
+    """Biological (plankton sampling) header variables keyed by ID (Table 6a/6b, pp.30-31)."""
     return {int(k): v for k, v in
             load_table("table_6a_biological_headers")["biological_headers"].items()}
 
@@ -105,9 +93,7 @@ def biological_headers() -> Dict[int, Dict[str, Any]]:
 def taxa_biomass_variables() -> Dict[int, Dict[str, Any]]:
     """Taxa-Record fields keyed by ID (Table 7a/7b, pp.33-35).
 
-    A Taxa-Record is one taxonomic description over a depth RANGE, not a value at one
-    depth. Several fields switch unit on the SIGN of the value -- see `unit_convention`
-    in the table file.
+    Some fields switch unit on the value's sign; see `unit_convention` in the table file.
     """
     return {int(k): v for k, v in
             load_table("table_7a_taxa_biomass")["taxa_variables"].items()}
@@ -136,13 +122,11 @@ def classify_taxa_code(code: int) -> Dict[str, Any]:
             "citation": "Table 8, WOD 2023 User's Manual p.35"}
 
 
-# ------------------------------------------------------- online code tables
 def missing_biological_fields(stated_ids) -> List[str]:
     """The key Table 6a fields a haul does not state, as `"<id> <name>"`.
 
-    Which fields are key is a project judgement (`config.KEY_BIOLOGICAL_FIELD_IDS`); their
-    names come from Table 6a. For an alternative group -- volume filtered or tow distance --
-    every member is listed when none is stated.
+    Key fields are `config.KEY_BIOLOGICAL_FIELD_IDS`; an alternative group is listed in full
+    when none of it is stated.
     """
     from wod_etl.config import KEY_BIOLOGICAL_FIELD_IDS
 
@@ -156,13 +140,11 @@ def missing_biological_fields(stated_ids) -> List[str]:
     return out
 
 
+# ------------------------------------------------------- online code tables
 def code_table_links() -> Dict[str, Any]:
     """Every WOD online code-table link, plus the hub URLs.
 
-    The manual defines the metadata FIELDS; the VALUE code lists live online, linked beside
-    each entry. Those links are PDF annotations and do not survive a text extraction, which
-    is why the 'App' column reads like a dead end. Rebuild with
-    `uv run python -m wod_etl.reference.extract_code_table_links`.
+    Rebuild with `uv run python -m wod_etl.reference.extract_code_table_links`.
     """
     return load_table("code_table_links")
 
@@ -170,14 +152,10 @@ def code_table_links() -> Dict[str, Any]:
 def code_table_link(namespace: str, code: int) -> Optional[Dict[str, Any]]:
     """The published code list for one metadata field, or None if it has no coded values.
 
-    namespace is 'secondary_header' (Table 4a), 'variable_specific_header' (5a),
-    'biological_header' (6a) or 'taxa_variable' (7a).
-
-        code_table_link("secondary_header", 29)   # probe type
-        # {"field": "s_29_probe_type", "name": "Probe Type", "html": ..., "csv": ...}
-
-    None is a real answer, not a gap: a field with no code list carries a plain measurement
-    or free text. Bottom depth (10) is metres, not a code.
+    `namespace` is 'secondary_header' (Table 4a), 'variable_specific_header' (5a),
+    'biological_header' (6a), 'taxa_variable' (7a), 'primary_header' (6: country) or
+    'character_data' (3: principal investigator). Returns e.g.
+    `{"field": "s_29_probe_type", "name": "Probe Type", "html": ..., "csv": ...}`.
     """
     return code_table_links()["links"].get(namespace, {}).get(str(int(code)))
 
@@ -203,12 +181,12 @@ def qc_flag_scales() -> Dict[str, Dict[str, Any]]:
 
 
 def observed_level_flags() -> Dict[int, str]:
-    """Table 12 section 2(b) -- the scale used for measured variables."""
+    """Table 12 section 2(b): the scale for measured variables."""
     return {int(k): v for k, v in qc_flag_scales()["observed_level"]["flags"].items()}
 
 
 def depth_flags() -> Dict[int, str]:
-    """Table 12 section 2(a) -- the scale used for the depth column."""
+    """Table 12 section 2(a): the scale for the depth column."""
     return {int(k): v for k, v in qc_flag_scales()["depth"]["flags"].items()}
 
 
@@ -219,10 +197,7 @@ _STOPWORDS = {"or", "of", "in", "the", "a", "an", "and", "to", "than", "outside"
 def flag_meanings_attr(scale: str) -> str:
     """CF `flag_meanings` string for a scale: one short token per flag, in flag order.
 
-    CF requires space-separated tokens matching flag_values one-for-one. The manual's
-    wording is prose, so it is condensed to the words that carry the meaning -- 'duplicates
-    or inversions in recorded depth (same or less than previous depth)' becomes
-    'duplicates_inversions_depth'.
+    The manual's prose is condensed to key words, e.g. 'duplicates_inversions_depth'.
     """
     import re as _re
 

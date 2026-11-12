@@ -1,6 +1,4 @@
-"""Phase 4 and orchestration: NetCDF writing, manifest, end-to-end run.
-
-Validation lives in test_verify.py, with the audit it belongs with."""
+"""Writers and orchestration: NetCDF writing, manifest, end-to-end run."""
 from pathlib import Path
 
 import netCDF4 as nc
@@ -30,13 +28,31 @@ class TestCFNames:
 
 class TestRaggedWriter:
     def test_single_shared_observation_dimension(self, tmp_path):
-        """Per-variable obs dims broke the coordinate linkage."""
+        """Per-variable observation dimensions would break the coordinate linkage."""
         p = tmp_path / "out.nc"
         write_ragged_profiles([make_cast(dic=True)], str(p))
         with nc.Dataset(p) as ds:
-            assert set(ds.dimensions) == {"casts", "z_obs"}
+            assert {d for d in ds.dimensions if d.endswith("_obs")} == {"z_obs"}
             for v in ("z", "temperature", "dissolved_inorganic_carbon"):
                 assert ds.variables[v].dimensions == ("z_obs",)
+
+    def test_each_cast_lists_its_variables(self, tmp_path):
+        """Table 10a fields 18 and 20: a cast's variable count and codes, as a ragged list."""
+        p = tmp_path / "out.nc"
+        write_ragged_profiles([make_cast(dic=True), make_cast(lat=62.4)], str(p))
+        with nc.Dataset(p) as ds:
+            assert ds["wod_number_of_variables"][:].tolist() == [2, 1]
+            assert ds["wod_number_of_variables"].sample_dimension == "wod_variables"
+            assert ds["wod_variable_codes"][:].tolist() == [1, 21, 1]
+        assert validate_intermediate_netcdf(str(p))["status"] == "PASS"
+
+    def test_cast_and_cruise_numbers_are_left_for_ncei(self, tmp_path):
+        p = tmp_path / "out.nc"
+        write_ragged_profiles([make_cast()], str(p))
+        with nc.Dataset(p) as ds:
+            for name in ("wod_unique_cast", "wod_cruise_number"):
+                assert np.ma.getmaskarray(ds[name][:]).all()
+                assert "assigned by NCEI" in ds[name].comment
 
     def test_row_sizes_sum_to_the_observation_dimension(self, tmp_path):
         p = tmp_path / "multi.nc"
@@ -149,21 +165,21 @@ class TestEndToEnd:
             assert len(ds.dimensions["casts"]) == 2
             assert list(ds.variables["z_row_size"][:]) == [2, 2]
 
-    def test_dry_run_writes_nothing(self, accession, tmp_path):
-        out = tmp_path / "out"
-        res = process_accession(str(accession), dataset_type="XCTD", output_dir=str(out), raw_dir=str(tmp_path / "raw"),
-                                run_id="t_e2e_4", resume=False, dry_run=True)
-        assert res["status"] == "dry_run"
-        assert not list(out.glob("*.nc")) if out.exists() else True
+    def test_resume_does_not_redo_completed_files(self, accession, tmp_path, monkeypatch):
+        import importlib
 
-    def test_resume_does_not_redo_completed_files(self, accession, tmp_path):
+        pa = importlib.import_module("wod_etl.orchestration.process_accession")
         out = tmp_path / "out"
         first = process_accession(str(accession), dataset_type="XCTD", output_dir=str(out),
                                   raw_dir=str(tmp_path / "raw"), run_id="t_e2e_5", resume=False)
-        again = process_accession(str(accession), dataset_type="XCTD", output_dir=str(out),
-                                  raw_dir=str(tmp_path / "raw"), run_id="t_e2e_5", resume=True, dry_run=True)
-        assert set(again["already_done"]) >= {"cast_01.csv", "cast_02.csv", "meta.xml"}
         assert first["counts"]["done"] == 2
+
+        def again(*a, **k):
+            raise AssertionError("a completed file was processed again")
+        monkeypatch.setattr(pa, "process_one_file", again)
+        second = process_accession(str(accession), dataset_type="XCTD", output_dir=str(out),
+                                   raw_dir=str(tmp_path / "raw"), run_id="t_e2e_5", resume=True)
+        assert second["counts"]["done"] == 2
 
     def test_empty_directory_is_reported(self, tmp_path):
         empty = tmp_path / "empty"
@@ -173,12 +189,7 @@ class TestEndToEnd:
 
 
 class TestSecondaryHeadersInMultiCastFiles:
-    """Per-cast Table 4a headers must not be written as file-global attributes.
-
-    The ragged array exists to hold many casts in one file. Taking the first cast's headers
-    as globals relabels every other cast with cast 0's bottom depth and station number, and
-    silently drops any header cast 0 does not carry -- corruption that still validates.
-    """
+    """Per-cast Table 4a headers must not be written as file-global attributes."""
 
     @staticmethod
     def _with_headers(headers, **kw):
@@ -231,9 +242,7 @@ class TestSecondaryHeadersInMultiCastFiles:
 
 
 class TestFilesAreIdentifiedNotJustNamed:
-    """The manifest key, the raw copy and the output name were all the bare basename, so
-    with recursive=True (the default) every subdirectory's data.csv collapsed onto one
-    entry: one manifest item, one cached download, one output file overwritten in turn."""
+    """Same-named files in different subdirectories stay separate items, copies and outputs."""
 
     CAST = ("# LAT: 61.9\n# LON: -172.2\n# DATE: 2023-06-20\n"
             "Depth (m),Temp (deg C)\n0,20\n10,18\n")
@@ -304,12 +313,12 @@ class TestGlobalAttributes:
             "name": "Institution", "value": "Japan Fisheries Research and Education Agency"}
         g = self._globals(tmp_path, [cast], "inst.nc")
         assert g["institution"] == "Japan Fisheries Research and Education Agency"
-        assert g["source"] == "generated by wod-agent-etl"
+        assert g["source"] == "generated by wod-etl"
 
     def test_no_institution_is_claimed_when_the_originator_gave_none(self, tmp_path):
         g = self._globals(tmp_path, [make_cast()], "noinst.nc")
         assert "institution" not in g
-        assert g["source"] == "generated by wod-agent-etl"
+        assert g["source"] == "generated by wod-etl"
 
     def test_casts_that_disagree_do_not_get_one_institution(self, tmp_path):
         a, b = make_cast(), make_cast(lat=62.4)
@@ -320,8 +329,6 @@ class TestGlobalAttributes:
 
 class TestProcessOneFileAcceptsAStringPath:
     def test_out_dir_may_be_a_string(self, tmp_path):
-        """The documented single-file entry point; callers pass a string far more often
-        than a Path, and it used to raise TypeError on the join."""
         src = tmp_path / "cast.csv"
         src.write_text("# LAT: 61.9\n# LON: -172.2\n# DATE: 1985-06-12\n"
                        "Depth (m),Temperature (deg C)\n0,9.1\n10,8.9\n20,8.4\n")
@@ -362,3 +369,18 @@ class TestIncludeAndTracebacks:
                                 raw_dir=str(tmp_path / "raw"), run_id="t_tb", resume=False)
         item = json.loads(Path(res["manifest_path"]).read_text())["items"]["a.csv"]
         assert item["stage"] == "unexpected" and "kaboom" in item["traceback"]
+
+
+class TestNamedTimeZonesAreConvertedOnlyWhenUnambiguous:
+    @pytest.mark.parametrize("zone, when, offset", [
+        ("NZST", None, 12.0), ("JST", None, 9.0), ("AEST", None, 10.0), ("EST", None, None),
+        ("MST", None, None),
+        ("ET", "2024-01-15 12:00", -5.0), ("ET", "2024-07-15 12:00", -4.0),
+        ("America/New_York", "2024-07-15", -4.0), ("CST", None, None), ("IST", None, None),
+        ("local", None, None), ("UTC+10", None, 10.0)])
+    def test_offset(self, zone, when, offset):
+        import pandas as pd
+
+        from wod_etl.time_zones import utc_offset_hours
+
+        assert utc_offset_hours(zone, pd.Timestamp(when) if when else None) == offset

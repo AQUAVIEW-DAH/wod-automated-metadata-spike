@@ -1,5 +1,4 @@
-"""What a cast IS beyond its numbers: when it was taken, what it is called, which codes
-describe it, and what the stager recorded about it -- all of it reaching the NetCDF."""
+"""A cast's time, ids, codes and staging provenance, and how they reach the NetCDF."""
 from pathlib import Path
 
 import numpy as np
@@ -49,13 +48,12 @@ def _process(p, tmp_path, tag="t"):
     return res, nc.Dataset(res["output_path"])
 
 
-# ---------------------------------------------------------------- time of day
 class TestTimeOfDay:
     def test_a_date_without_a_time_is_not_written_as_midnight(self, tmp_path):
         _, ds = _process(_stage(tmp_path), tmp_path)
         assert ds["date"][0] == 20151109
         assert np.ma.is_masked(ds["GMT_time"][0])
-        assert "Do not read it as midnight" in ds["time"].comment
+        assert "not an observed midnight" in ds["time"].comment
         ds.close()
 
     def test_a_known_time_fills_gmt_time(self, tmp_path):
@@ -74,12 +72,12 @@ class TestTimeOfDay:
     def test_a_local_date_is_recorded_not_shifted(self, tmp_path):
         _, ds = _process(_stage(tmp_path, time_zone="local"), tmp_path)
         assert ds["date"][0] == 20151109
-        assert "NOT converted" in ds.getncattr("time_zone_note")
+        assert "was not converted" in ds.getncattr("time_zone_note")
         ds.close()
 
     @pytest.mark.parametrize("zone,hours", [("UTC", 0.0), ("UTC+10", 10.0),
                                             ("GMT-3:30", -3.5), ("+0900", 9.0),
-                                            ("JST", None), ("local", None)])
+                                            ("JST", 9.0), ("CST", None), ("local", None)])
     def test_offsets(self, zone, hours):
         assert utc_offset_hours(zone) == hours
 
@@ -94,7 +92,6 @@ class TestTimeOfDay:
         assert res["outputs_without_time"] is None
 
 
-# ------------------------------------------------------------------- cast ids
 class TestCastIds:
     def test_one_cast_files_no_longer_share_an_id(self, tmp_path):
         ids = []
@@ -126,7 +123,6 @@ class TestCastIds:
                                               "STOCS85A_drop-0013_19850612T1442"]
 
 
-# ---------------------------------------------------------- header lines
 class TestHeaderLinesAreNeverSilent:
     HEADER = ("# Accession: 0303928\n# Platform: Shunyo-Maru\n# Cruise: SHU1505\n"
               "# Station: 11\n# Instrument: SBE CTD/Rosette system\n"
@@ -162,7 +158,6 @@ class TestHeaderLinesAreNeverSilent:
         assert meta["secondary_headers"]["11"]["value"] == 30.0
 
 
-# ------------------------------------------------------------------ code lists
 class TestCodeLists:
     def test_parse_both_layouts(self):
         entries = parse_code_list(UNITS)
@@ -179,7 +174,7 @@ class TestCodeLists:
 
     def test_two_vessels_of_one_name_are_ambiguous_whatever_follows_the_name(
             self, offline_code_lists):
-        """10793 is a 1973 SHUNYO MARU, later renamed. A name cannot tell them apart."""
+        """Code 10793 is an older ship of the same name."""
         cache_code_list(offline_code_lists, "s_3_platform", PLATFORMS)
         r = lookup_code("secondary_header", 3, "Shunyo-Maru")
         assert r["status"] == "ambiguous"
@@ -244,7 +239,6 @@ class TestCodedFieldsInTheOutput:
         ds.close()
 
 
-# ------------------------------------------------------------------ provenance
 class TestProvenanceReachesTheOutput:
     def test_notes_sources_and_the_real_path(self, tmp_path):
         _, ds = _process(_stage(tmp_path), tmp_path)
@@ -253,7 +247,7 @@ class TestProvenanceReachesTheOutput:
         assert g["source_files_raw"].endswith("U2015-015_CTD_Temp.csv")
         assert Path(g["source_file"]).name == "cast.csv"
         assert g["source_format"].startswith("delimited_text")
-        assert "wod-agent-etl" in g["history"]
+        assert "wod-etl:" in g["history"]
         assert g["originator_cruise_id"] == "SHU1505"
         ds.close()
 
@@ -275,8 +269,7 @@ class TestProvenanceReachesTheOutput:
 
 
 class TestDepthFromPressure:
-    """WOD computes the depths of casts measured on pressure surfaces and keeps the pressure
-    as a variable (WOD manual, cast structure)."""
+    """Pressure casts get computed depths and keep pressure as a variable (WOD manual)."""
 
     def _run(self, tmp_path, column):
         d = tmp_path / "in"

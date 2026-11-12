@@ -1,15 +1,14 @@
-"""Check a Taxa-Record file (plankton, biomass): structure, depth ranges, and what a reader
-would miss. The counterpart of `validate_intermediate_netcdf` for `write_taxa_netcdf` output.
+"""Check a Taxa-Record file from `write_taxa_netcdf`: structure and depth ranges.
 
-Errors make the file not output. Warnings are what a report must say: taxa that did not
-resolve to a WOD variable number, and Biological Header fields without which a count per
-sample cannot be turned into a concentration.
+Errors fail the file. Warnings report unresolved taxa and missing Biological Header fields
+needed to turn counts per sample into concentrations.
 """
 from typing import Any, Dict
 
 import numpy as np
 
 from wod_etl.reference import missing_biological_fields
+from wod_etl.verify.validate_intermediate_netcdf import check_standard_names
 
 _MEASUREMENTS = ("t_4_", "t_10_", "t_11_", "t_12_", "t_13_", "t_14_", "t_15_", "t_25_")
 _PER_UNIT = ("t_10_", "t_11_", "t_12_", "t_13_", "t_14_", "t_15_", "t_25_")
@@ -33,6 +32,7 @@ def validate_taxa_netcdf(path: str) -> Dict[str, Any]:
         if errors:
             return _result(errors, warnings)
 
+        check_standard_names(ds, errors, warnings)
         n_obs = len(ds.dimensions["taxa_obs"])
         if int(np.sum(v["taxa_row_size"][:])) != n_obs:
             errors.append("taxa_row_size does not sum to the taxa_obs dimension")

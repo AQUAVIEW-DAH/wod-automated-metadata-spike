@@ -1,7 +1,6 @@
-"""Build the Mapping Contract: the artifact every later phase reads.
+"""Build the mapping contract that every later phase reads.
 
-Takes the Phase 1 profile and the WOD spec and decides, per raw column, which WOD variable
-it is, what unit conversion it needs, and what metadata the file header carries.
+Decides, per raw column, the WOD variable and unit conversion, and maps the header metadata.
 """
 import re
 from typing import Dict, Any, List, Optional
@@ -9,34 +8,27 @@ from typing import Dict, Any, List, Optional
 from wod_etl.mapping.map_metadata import map_metadata
 from wod_etl.mapping.query_wod_spec import (
     DEPTH_SENTINEL_CODE,
-    PER_VOLUME_CODES,
     canonical_unit_text,
     explain_column,
     extract_scale,
     fluorescence_rule,
     extract_unit,
     match_variable,
-    normalize_name,
+    seabird_unit,
     wod_secondary_headers,
     wod_variables,
 )
 
-# Unit tokens looked for in the FULL raw column name, including any bracketed suffix.
-# Order matters: the first match wins, so more specific patterns come first.
+# Unit tokens searched in the full raw column name; the first match wins.
 _UNIT_PATTERNS = [
     ("fahrenheit_to_celsius", r"(?:deg[\s_]*f\b|fahrenheit|\bdegf\b|°\s*f\b)"),
     ("feet_to_meters",        r"(?:\bfeet\b|\bfoot\b|\bft\b)"),
     ("fathoms_to_meters",     r"(?:\bfathom|\bfath\b|\bfm\b)"),
     ("ml_per_l_to_umol_per_kg", r"(?:ml\s*[/·.]?\s*l\b|ml\s*l-?1|milli?liter\s*per\s*liter)"),
-    # mg/l is a very common oxygen unit and was previously undetected, which meant a
-    # milligram-per-litre column was written unchanged into a umol/kg variable.
     ("mg_per_l_to_umol_per_kg", r"(?:\bmg\s*[/·.]?\s*l\b|\bmg\s*l-?1)"),
 ]
 
-# Molar concentration units, split by SI prefix AND by basis, because the prefix is the
-# whole point. A single [µumn]mol/l class conflated milli with micro, so alkalinity and DIC
-# -- whose Table 3a standard unit IS mmol/l -- were detected as micromolar and divided by
-# 1000. Milli and nano are matched before micro only for readability; they are disjoint.
+# Molar concentration units by SI prefix and basis (per volume or per mass).
 _MOLAR_UNIT_PATTERNS = [
     ("mmol", "volume", r"(?:\bmmol\s*[/·.]?\s*l\b|\bmm\s*[/·.]?\s*l\b)"),
     ("nmol", "volume", r"(?:\bnmol\s*[/·.]?\s*l\b|\bnm\s*[/·.]?\s*l\b)"),
@@ -50,13 +42,14 @@ _MOLAR_UNIT_PATTERNS = [
 MOLAR_PREFIX_SCALE = {"mmol": 1e-3, "umol": 1e-6, "nmol": 1e-9}
 
 _MOLAR_ABBREV = re.compile(r"(mmol|umol|nmol)\s*/\s*(l|kg)")
+# A Table 3a standard unit that is a mass concentration (chlorophyll, ug/l).
+_MASS_ABBREV = re.compile(r"^[mun]?g\s*/\s*(?:l|kg)$")
 
-# Header keys we recognise, mapped to Table 4a secondary header IDs.
+# Header key patterns by Table 4a secondary header ID.
 _HEADER_PATTERNS = {
     1:  r"(?:accession|accession[_\s]*(?:no|number)|nodc[_\s]*accession)",
     2:  r"(?:project|programme|program)",
-    # Not 'cruise': a cruise code names a voyage, not the vessel (map_metadata routes it to
-    # the character data). Kept in step with SECONDARY_HEADER_PATTERNS there.
+    # Excludes 'cruise', which names a voyage, as map_metadata.SECONDARY_HEADER_PATTERNS does.
     3:  r"(?:platform|ship|vessel|callsign)",
     4:  r"(?:institut(?:e|ion)|agency|originator[_\s]*institution)",
     5:  r"(?:cast|cast[_\s]*(?:no|number)|tow[_\s]*(?:no|number))",
@@ -72,16 +65,41 @@ _HEADER_PATTERNS = {
 
 _NUM = r"[-+]?\d+(?:\.\d+)?"
 
-# Prose lines in a staged header, skipped before any key is mined out of them.
+# Prose lines in a staged header: kept as notes, not parsed for keys.
 _NOTE_LINE = re.compile(r"\s*#?\s*(?:note|comment|remark)s?\s*[:=]", re.IGNORECASE)
 
-# `# Source: data/raw/.../file.csv` -- one per file a staged cast was built from.
+# `# Source: data/raw/.../file.csv`: a file the staged cast was built from.
 _SOURCE_LINE = re.compile(r"\s*#?\s*source(?:[_\s]*file)?s?\s*[:=]\s*(.+)$", re.IGNORECASE)
-# `TIME_ZONE: UTC+10` -- the zone of the DATE and TIME lines, when it is not UTC.
+# `TIME_ZONE: UTC+10`: the zone of the date and time lines.
 _TIME_ZONE_LINE = re.compile(r"\s*#?\s*time[_\s]*zone\s*[:=]\s*(.+)$", re.IGNORECASE)
 
 # Secondary headers whose value is a measurement rather than an identifier.
 _NUMERIC_HEADER_IDS = {10, 22, 23, 24}
+
+
+# A second sensor ('Temperature of the water body, 2', 'secondary temperature').
+_SECONDARY = re.compile(r",\s*2\s*(?:\(|$)|\bsecondary\b|\b2nd\b|\bsensor\s*2\b", re.I)
+
+
+def _preferred_first(columns: List[str]) -> List[str]:
+    """Columns in file order, with the one to write first among those sharing a variable.
+
+    Primary sensor before secondary, ITS-90 before IPTS-68.
+    """
+    groups: Dict[Any, List[str]] = {}
+    for c in columns:
+        code = match_variable(c)
+        groups.setdefault(code if code is not None else ("col", c), []).append(c)
+    rank = lambda c: (bool(_SECONDARY.search(c)), extract_scale(c) == "IPTS-68")
+    out, done = [], set()
+    for c in columns:
+        code = match_variable(c)
+        key = code if code is not None else ("col", c)
+        if key in done:
+            continue
+        done.add(key)
+        out += sorted(groups[key], key=rank)
+    return out
 
 
 def generate_field_mapping(
@@ -89,19 +107,15 @@ def generate_field_mapping(
     spec_result: Dict[str, Any],
     df: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Produce the strict mapping contract used by Phases 3 and 4.
+    """Produce the mapping contract used by Phases 3 and 4.
 
-    `df` is optional and only used to read the VALUE of a metadata column -- a `Bottom
-    Depth` column becomes secondary header 10 when it is constant down the cast. Without it
-    the metadata field is still identified, just without its value.
+    `df` supplies metadata column values (e.g. a constant `Bottom Depth` column).
     """
     raw_columns = profile_result.get("columns", []) or []
     raw_header_text = profile_result.get("raw_header_block", "") or ""
     variables = wod_variables()
 
-    # Everything that is not a measurement: cast metadata (Table 4a), per-variable metadata
-    # (Table 5a) and the originator's own quality flags. Run first, because it decides which
-    # columns are consumed as metadata and so must not be reported as dropped.
+    # Metadata first: it decides which columns are consumed and so not reported as dropped.
     metadata = map_metadata(raw_header_text, raw_columns, df,
                             spec_result.get("wod_dataset_code"))
     consumed = {m["column"] for m in metadata["metadata_columns"] if m.get("column")}
@@ -112,13 +126,12 @@ def generate_field_mapping(
     dropped: List[Dict[str, Any]] = []
     warnings: List[str] = []
     seen_codes = set()
-    # A flag column that names no variable (`flag`, `QC`) qualifies the whole level: it is
-    # the originator's flag of every variable measured there, kept verbatim.
+    # A flag column naming no variable (`flag`, `QC`) applies to every variable at a level.
     level_flags = [f["flag_column"] for f in metadata["originator_flags"]
                    if f["scope"] == "level or cast"]
     level_flag = level_flags[0] if len(level_flags) == 1 else None
 
-    for col in raw_columns:
+    for col in _preferred_first(raw_columns):
         if col in consumed:
             continue
 
@@ -149,9 +162,7 @@ def generate_field_mapping(
             unmapped_cols.append(col)
             continue
 
-        # Table 3a says which datasets store each variable. A cast written as one that does
-        # not store it -- salinity in an MBT cast, phosphate in a CTD cast -- would carry a
-        # variable WOD has no place for there, so it is left out and reported, never written.
+        # Table 3a lists the datasets storing each variable; others drop it and report why.
         dataset = spec_result.get("wod_dataset_code")
         spec_var = next((s for s in spec_result.get("standard_variables", [])
                          if s.get("wod_code") == code), None)
@@ -163,6 +174,18 @@ def generate_field_mapping(
                           f"{dataset} (Table 3a).",
                 "route": "If it was measured and belongs in WOD, write the file as a dataset "
                          "that stores it: set `dataset` in its decisions.toml entry."})
+            unmapped_cols.append(col)
+            continue
+
+        if molar_to_mass(col, code):
+            dropped.append({
+                "column": col, "variable": f"{var['name']} in a molar unit",
+                "kind": "unit_not_convertible",
+                "reason": f"Table 3a stores {var['name']} in {var['unit_abbrev']}, and the "
+                          f"manual gives no molar mass to convert it with, so the "
+                          f"molar-to-mass conversion is refused.",
+                "route": "Not written. If the submitter gives it in a mass unit (ug/l, "
+                         "mg/m3), stage that column instead."})
             unmapped_cols.append(col)
             continue
 
@@ -178,9 +201,7 @@ def generate_field_mapping(
         conversion = _detect_unit_conversion(col, code)
         mapping = {
             "raw_column": col,
-            # What the originator wrote, kept verbatim. Normalisation drops it in order to
-            # match the name; the conversion applied below is only auditable against it, and
-            # WOD has a field for it: variable specific second header 8.
+            # Kept verbatim to audit the conversion (variable specific second header 8).
             "originator_unit": extract_unit(col),
             "originator_scale": extract_scale(col),
             "wod_code": code,
@@ -199,11 +220,10 @@ def generate_field_mapping(
         if fluor is not None and fluor.get("code") == code:
             mapping["comment"] = fluor["comment"]
             warnings.append(f"Column '{col}' is fluorometer output written as {var['name']} "
-                            f"(code {code}) because its unit is a concentration. Say so "
-                            f"when reporting: it is not extracted chlorophyll-a.")
+                            f"(code {code}) because its unit is a concentration. It is not "
+                            f"extracted chlorophyll-a.")
         if conversion == "molar_rescale":
-            # A parameterised conversion needs its endpoints; the label alone cannot say
-            # whether this is umol/l -> umol/kg or mmol/kg -> mmol/l.
+            # Record the endpoints; the label alone does not give them.
             source, target = molar_units(col, code)
             mapping["conversion_from"] = f"{source[0]}/{'l' if source[1] == 'volume' else 'kg'}"
             mapping["conversion_to"] = f"{target[0]}/{'l' if target[1] == 'volume' else 'kg'}"
@@ -230,12 +250,9 @@ def generate_field_mapping(
         warnings.append(
             "Originator quality flag column(s) "
             + ", ".join(f"'{f['flag_column']}'" for f in unresolved_flags)
-            + " could not be paired with a variable. They are kept and reported rather than "
-              "dropped; say which variable they belong to once you know.")
+            + " could not be paired with a variable. They are kept, not dropped.")
 
-    # Table 3a: 30 is Latitude, 31 is Longitude. Each requirement must be satisfied by ITS
-    # OWN code -- checking membership of the pair let a latitude column stand in for a
-    # missing longitude, so a file with no longitude anywhere reported ready_for_transform.
+    # Table 3a: 30 is Latitude, 31 is Longitude.
     _COORD_CODE = {"latitude": 30, "longitude": 31}
     missing_coords = []
     for req in ("latitude", "longitude"):
@@ -251,8 +268,8 @@ def generate_field_mapping(
     if not has_depth:
         if has_pressure:
             warnings.append(
-                "No depth column found, but pressure (code 25) is present. Converting "
-                "pressure to depth needs latitude and is not done automatically."
+                "No depth column found, but pressure (code 25) is present. Pressure in "
+                "decibars becomes depth only when the cast has a latitude."
             )
         else:
             missing_coords.append("depth")
@@ -269,17 +286,14 @@ def generate_field_mapping(
         "wod_dataset_code": spec_result.get("wod_dataset_code"),
         "dataset_resolution": spec_result.get("dataset_resolution", {}),
         "column_mapping": column_mappings,
-        # The Table 4a headers the OLD parser found, kept for compatibility with anything
-        # reading this key; `secondary_headers` below is the full set, from the header block
-        # AND from metadata columns, each with its published code list.
+        # Header-block Table 4a values, kept for compatibility; prefer `secondary_headers`.
         "extracted_header_metadata": extracted["secondary_headers"],
         "secondary_headers": metadata["secondary_headers"],
-        # Character data (manual p.30): the originator's cruise code and PI. Not secondary
-        # headers; a cruise code written as the platform made a voyage look like a vessel.
+        # Character data (manual p.30): the originator's cruise code and PI.
         "character_data": metadata.get("character_data", {}),
-        # Free-text `# Note:` lines and `# Source:` lines from a staged header. The staged
-        # file is where every derivation is recorded, and these are what carries it into the
-        # output -- before, it stopped at the staged CSV.
+        # Primary header fields stated in the source: the country code (Appendix 1).
+        "primary_header": metadata.get("primary_header", {}),
+        # `# Note:` and `# Source:` lines from a staged header, carried into the output.
         "provenance_notes": extracted["notes"],
         "source_files": extracted["sources"],
         "unresolved_metadata": metadata.get("unresolved", []),
@@ -295,55 +309,65 @@ def generate_field_mapping(
 
 
 def parse_header_block(raw_header_text: str) -> Dict[str, Any]:
-    """Coordinates, date/time, time zone, notes and sources from a `Key: value` header block.
-
-    The same reader the profile contract uses, for a caller with a header and no table to
-    map -- `map_haul` reads a staged haul's position and date this way.
-    """
+    """Coordinates, date/time, time zone, notes and sources from a `Key: value` header block."""
     return _parse_header_block(raw_header_text)
 
 
-def molar_units(raw_col_name: str, wod_code: int):
-    """Return (source, target) molar units for a column, or None if it is not a molar case.
-
-    Each is a `(prefix, basis)` pair such as `("umol", "mass")`. The target comes from the
-    variable's Table 3a standard unit -- never from a hardcoded assumption about which
-    variables are per-mass, because WOD is not consistent: nutrients are umol/kg, alkalinity
-    and DIC are mmol/l, and the noble gases are nmol/kg.
-    """
+def _unit_text(raw_col_name: str) -> str:
+    """A column name as the unit patterns read it, with a Sea-Bird name's unit spelled out."""
     name = canonical_unit_text(raw_col_name).lower()
-    source = None
-    for prefix, basis, pattern in _MOLAR_UNIT_PATTERNS:
-        if re.search(pattern, name):
-            source = (prefix, basis)
-            break
+    unit = seabird_unit(raw_col_name)
+    return f"{name} ({unit})" if unit else name
+
+
+def _molar_source(raw_col_name: str):
+    """The `(prefix, basis)` of a molar unit in a raw column name, or None."""
+    name = _unit_text(raw_col_name)
+    return next(((prefix, basis) for prefix, basis, pattern in _MOLAR_UNIT_PATTERNS
+                 if re.search(pattern, name)), None)
+
+
+def _standard_abbrev(wod_code: int) -> str:
+    variable = wod_variables().get(wod_code) or {}
+    return str(variable.get("unit_abbrev", "")).lower().replace("\u00b5", "u")
+
+
+def molar_units(raw_col_name: str, wod_code: int):
+    """(source, target) molar units, each `(prefix, basis)` like `("umol", "mass")`, or None.
+
+    The target is the variable's Table 3a standard unit.
+    """
+    source = _molar_source(raw_col_name)
     if source is None:
         return None
-
-    variable = wod_variables().get(wod_code) or {}
-    abbrev = str(variable.get("unit_abbrev", "")).lower().replace("\u00b5", "u")
-    m = _MOLAR_ABBREV.search(abbrev)
+    m = _MOLAR_ABBREV.search(_standard_abbrev(wod_code))
     if not m:
-        # The variable's standard unit is not molar at all (chlorophyll is ug/l). Rescaling
-        # a molar source onto it would be meaningless, so leave the values alone.
         return None
     return source, (m.group(1), "volume" if m.group(2) == "l" else "mass")
 
 
-def _detect_unit_conversion(raw_col_name: str, wod_code: int) -> str:
-    """Infer the conversion implied by the units written into a raw column name.
+def molar_to_mass(raw_col_name: str, wod_code: int) -> bool:
+    """Whether a column in a molar unit maps to a variable stored by mass (chlorophyll, ug/l).
 
-    Inspects the FULL name including bracketed units, which is where the unit text lives:
-    'Temp (deg F)', 'Depth [ft]', 'Oxygen (ml/l)'.
+    The manual gives no molar mass to convert with (Table 3b), so the column is not written.
     """
-    name = canonical_unit_text(raw_col_name).lower()
+    return (bool(_MASS_ABBREV.match(_standard_abbrev(wod_code)))
+            and _molar_source(raw_col_name) is not None)
+
+
+def _detect_unit_conversion(raw_col_name: str, wod_code: int) -> str:
+    """The conversion the units in a raw column name imply ('Temp (deg F)', 'Depth [ft]')."""
+    name = _unit_text(raw_col_name)
     for label, pattern in _UNIT_PATTERNS:
         if re.search(pattern, name):
             if label == "ml_per_l_to_umol_per_kg":
                 return "ml_per_l_to_umol_per_kg" if wod_code == 3 else "none"
 
             if label == "mg_per_l_to_umol_per_kg":
-                return "mg_per_l_to_umol_per_kg" if wod_code == 3 else "none"
+                if wod_code == 3:
+                    return label
+                # A mass standard (chlorophyll, ug/l) is the same quantity in another prefix.
+                return "mg_per_l_to_ug_per_l" if _standard_abbrev(wod_code) == "ug/l" else "none"
 
             if label in ("feet_to_meters", "fathoms_to_meters"):
                 return label if wod_code == DEPTH_SENTINEL_CODE else "none"
@@ -369,15 +393,12 @@ def _parse_header_block(raw_header_text: str) -> Dict[str, Any]:
     names = wod_secondary_headers()
 
     for line in raw_header_text.splitlines():
-        # Free-text notes are prose, and staged files put them above the coordinate lines.
-        # Left in scope, a note reading "cast positions fall on the track" yields cast number
-        # "positions fall", and a note quoting a source header supplies the wrong date. They
-        # are collected instead, for the output's `comment`.
+        # Notes are prose, kept for `comment`.
         if _NOTE_LINE.match(line):
             notes.append(_NOTE_LINE.sub("", line, count=1).strip())
             continue
         m = _SOURCE_LINE.match(line)
-        # Only a path is a source FILE: `Source: NABOS` in a data header names a project.
+        # Only a path is a source file; other `Source:` values name a project.
         if m and re.fullmatch(r"\S*(?:[/\\]\S+|\.[A-Za-z0-9]{2,5})", m.group(1).split()[0]):
             sources.append(m.group(1).strip())
             continue
@@ -393,12 +414,8 @@ def _parse_header_block(raw_header_text: str) -> Dict[str, Any]:
         for sec_id, key_pat in _HEADER_PATTERNS.items():
             if str(sec_id) in sec_headers:
                 continue
-            # The key must start the line or follow a delimiter or a column gap -- never sit
-            # mid-sentence, where any English use of "cast" or "station" would match.
-            # The value runs to the end of the line, a delimiter, or a 2+ space column gap
-            # -- NOT to a fixed word count. A two-word cap silently truncated every longer
-            # value ('University of Alaska Fairbanks' -> 'University of'), and a truncated
-            # institution or platform is indistinguishable from what the originator wrote.
+            # The key starts the line or follows a delimiter or column gap, never mid-sentence.
+            # The value runs to the end of the line, a delimiter, or a 2+ space gap.
             m = re.search(rf"(?:^|[,;|]|\s{{2,}})\s*#?\s*{key_pat}\b(\s*[:=]\s*|\s+)"
                           rf"([^\s,;|][^,;|]*?)(?=\s{{2,}}|[,;|]|$)",
                           line, re.IGNORECASE)
@@ -407,8 +424,7 @@ def _parse_header_block(raw_header_text: str) -> Dict[str, Any]:
             value: Any = m.group(2).strip().strip('"\'')
             if not re.search(r"[:=]", m.group(1)) and re.search(r"[:=]", value):
                 continue                     # a longer key: 'Cast duration: 30' is not a cast
-            # Only genuinely numeric headers are coerced. Accession, station and WMO codes
-            # are identifiers: '0287423' must not become 287423.
+            # Only numeric headers are coerced; identifiers keep leading zeros ('0287423').
             if sec_id in _NUMERIC_HEADER_IDS and re.fullmatch(_NUM, value):
                 try:
                     value = float(value)
@@ -416,6 +432,11 @@ def _parse_header_block(raw_header_text: str) -> Dict[str, Any]:
                     pass
             sec_headers[str(sec_id)] = {"name": names.get(sec_id, f"code {sec_id}"), "value": value}
 
+    lon = coords.get("longitude")
+    if isinstance(lon, (int, float)) and 180 < lon <= 360:
+        # WOD longitudes run -180 to 180; 0-360 is a common model and NetCDF convention.
+        coords["longitude"] = lon - 360
+        notes.append(f"longitude {lon:g} written as {lon - 360:g} (WOD uses -180 to 180)")
     return {"secondary_headers": sec_headers, "coordinates": coords, "notes": notes,
             "sources": sources}
 
@@ -435,16 +456,28 @@ def _parse_position(line: str, coords: Dict[str, Any]) -> None:
             coords[key] = _apply_hemisphere(val, m.group(3))
             continue
 
-        # Plain decimal, integer allowed: "LAT: 61", "LAT = -17.3", "Latitude 61.930 N"
+        # Degrees and minutes joined by a hyphen or degree sign: "Latitude: 49-46.9858N".
+        m = re.search(rf"\b{kw}\b[:=\s]+(-?\d{{1,3}}\s*[-°º]\s*\d{{1,2}}(?:\.\d+)?\s*['′]?"
+                      rf"\s*[NSEW]?)", line, re.IGNORECASE)
+        if m:
+            from wod_etl.staging.parse import parse_coordinate
+
+            value = parse_coordinate(m.group(1))
+            if value is not None:
+                coords[key] = value
+                continue
+
+        # Plain decimal or integer, e.g. "Latitude 61.930 N"
         m = re.search(rf"\b{kw}\b[:=\s]+({_NUM})\s*([NSEW])?\b", line, re.IGNORECASE)
         if m:
             coords[key] = _apply_hemisphere(float(m.group(1)), m.group(2))
 
 
 def _parse_station_depth(line: str, sec_headers: Dict[str, Any], names) -> None:
-    """`Stn: KD5408; Lat: 81.529N; Lon: 30.857E; Time: 2008.10.27; Depth: 900m` -- a depth
-    on the line that places the station is the water depth there: secondary header 10. A
-    negative one is a missing-value code (`-999m`), never a depth."""
+    """A depth on the station's position line is its water depth (secondary header 10).
+
+    e.g. `Lat: 81.529N; Lon: 30.857E; Depth: 900m`. A negative depth is a missing-value code.
+    """
     if "10" in sec_headers or not (re.search(r"\blat(?:itude)?\s*[:=]", line, re.IGNORECASE)
                                    and re.search(r"\blon(?:g(?:itude)?)?\s*[:=]", line,
                                                  re.IGNORECASE)):
@@ -463,8 +496,7 @@ def _apply_hemisphere(value: float, hemi: Optional[str]) -> float:
 
 def _parse_datetime(line: str, coords: Dict[str, Any]) -> None:
     if "year" not in coords:
-        # `Time: 2009. 8.18` is a date too: expedition formats label the cast's date `Time`
-        # and pad its fields with spaces.
+        # Some formats label the date `Time` and pad it with spaces: `Time: 2009. 8.18`.
         m = re.search(r"\b(?:date|datetime|obs[_\s]*date|time)\b[:=\s]+(\d{4})\s*[-/.]\s*"
                       r"(\d{1,2})\s*[-/.]\s*(\d{1,2})\b", line, re.IGNORECASE)
         if not m:
@@ -484,8 +516,7 @@ def _parse_datetime(line: str, coords: Dict[str, Any]) -> None:
         if m:
             coords["hour"] = int(m.group(1))
             coords["minute"] = int(m.group(2))
-            # Kept, not rounded away: a cast's time is to the second when the source says
-            # so (knowledge/cast_structure.md: do not silently round).
+            # Seconds are kept, not rounded.
             if m.group(3):
                 coords["second"] = float(m.group(3))
 
@@ -494,17 +525,3 @@ def _parse_datetime(line: str, coords: Dict[str, Any]) -> None:
             m = re.search(rf"\b{kw}\b[:=\s]+(\d{{1,4}})\b", line, re.IGNORECASE)
             if m:
                 coords[key] = int(m.group(1))
-
-
-if __name__ == "__main__":
-    import json
-    from wod_etl.mapping.query_wod_spec import query_wod_spec
-
-    mock_profile = {
-        "source": ".../5-XCTD/xctd_01",
-        "raw_header_block": ("CRUISE: STOCS85A\nDATE: 1985-06-12\nLAT: 61.930 LON: -172.270\n"
-                             "BOTTOM_DEPTH: 2500\nACCESSION: 0287423"),
-        "columns": ["Depth (m)", "Temp (deg F)", "Salinity [PSU]", "Oxygen (ml/l)", "Cond"],
-    }
-    spec = query_wod_spec("XCTD", mock_profile["columns"], depth_increment_m=0.5)
-    print(json.dumps(generate_field_mapping(mock_profile, spec), indent=2))

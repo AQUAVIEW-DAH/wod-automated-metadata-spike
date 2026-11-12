@@ -5,7 +5,7 @@
     23,
     24
   ],
-  "note": "Secondary-header IDs are a SEPARATE namespace from Table 3a variable codes. ID 29 is 'Probe Type' here but variable code 29 is 'Air pressure' in Table 3a.",
+  "note": "Secondary-header IDs are their own namespace: ID 29 is Probe Type here, while variable code 29 (Table 3a) is Air pressure.",
   "csv_field_naming": "s_<id>_<name>, e.g. s_1_accession, s_3_platform, s_9_weather_station",
   "secondary_headers": {
     "1": "Accession Number",

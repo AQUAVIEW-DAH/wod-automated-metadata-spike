@@ -1,41 +1,43 @@
 [project]
-name = "wod-agent-etl"
+name = "wod-etl"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.15.0",
+    # verify: a standard_name's units must convert to its canonical units (UDUNITS bundled).
+    "cf-units>=3.3.1",
+    "fastapi>=0.143.2",
     "httpx>=0.28.1",
     "netcdf4>=1.7.4",
-    # Accessions arrive as spreadsheets often enough that read_any needs an Excel engine;
-    # without one it can only tell you to export the sheet to CSV yourself.
+    # read_any's Excel engine: accessions often arrive as spreadsheets.
     "openpyxl>=3.1.5",
     "pandas>=3.0.5",
-    # Cruise reports state station positions, dates and some measurements only in PDF
-    # tables; wod_etl.staging.extract_pdf_rows reads them, with a page citation.
+    # extract_pdf_rows: some positions, dates and measurements exist only in PDF cruise reports.
     "pypdf>=6.16.1",
+    "uvicorn>=0.54.0",
 ]
 
-# `uv run wod-etl run <accession>`: the whole workflow for one accession, no agent needed.
+# uv run wod-etl web | run | confirm | status
 [project.scripts]
-wod-etl = "wod_etl.orchestration.cli:main"
+wod-etl = "wod_etl.cli:main"
 
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    "pyyaml>=6.0.3",
 ]
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-# The package sits at the repo root so it installs like any other Python project and is
-# not owned by any one agent runtime's directory convention. Agent entry points
-# (the SKILL.md instruction files and the thin per-tool pointers) reference it;
-# nothing references them.
+# The package sits at the repo root.
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["wod_etl*"]
+
+# The browser page `wod-etl web` serves.
+[tool.setuptools.package-data]
+"wod_etl.web" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,18 +1,7 @@
-"""Work out what a file actually is, from its bytes rather than its name.
+"""Identify a file's format from its bytes rather than its name.
 
-An accession does not label its formats. Real submissions carry NetCDF written as `.nc`,
-`.cdf`, `.nc4` or nothing at all; Sea-Bird `.cnv`; fixed-column ASCII as `.dat`, `.asc`,
-`.000`, `.txt` or no extension; spreadsheets as `.xlsx`; and plain CSV named `.dat`. An
-extension-driven reader gets all of those wrong in the same direction: it calls read_csv on
-bytes that are not text and records a parse error instead of a format.
-
-    from wod_etl.discovery import sniff_format
-    sniff_format("data/raw/0287423/2-CTD/cast_01")
-    # {"format_family": "netcdf", "reader": "netcdf", "confidence": "high", ...}
-
-`reader` is the name of the strategy `read_any` will dispatch to. `format_family` is the
-description; where the two differ it is because several families share one reader.
-Never raises -- an unreadable file comes back as a family with `readable: False`.
+`reader` names the `read_any` strategy; `format_family` describes the file (several families
+share a reader). Never raises: an unreadable file has `readable: False`.
 """
 import csv
 import re
@@ -21,25 +10,24 @@ from typing import Any, Dict, List, Optional
 
 from wod_etl.config import TEXT_ENCODINGS
 
-# Leading bytes that identify a container outright. Order matters only in that longer
-# signatures are checked first; none of these overlap.
+# Leading bytes that identify a container outright.
 MAGIC = [
     (b"\x89HDF\r\n\x1a\n", "netcdf4_hdf5", "netcdf",
-     "HDF5 container -- NetCDF-4 and plain HDF5 share it"),
+     "HDF5 container (NetCDF-4 and plain HDF5 share it)"),
     (b"CDF\x01", "netcdf_classic", "netcdf", "NetCDF classic (CDF-1)"),
     (b"CDF\x02", "netcdf_64bit_offset", "netcdf", "NetCDF 64-bit offset (CDF-2)"),
     (b"CDF\x05", "netcdf_64bit_data", "netcdf", "NetCDF 64-bit data (CDF-5)"),
     (b"PK\x03\x04", "zip_container", "spreadsheet",
-     "ZIP container: .xlsx/.ods are ZIPs, but so is an actual archive -- see `note`"),
+     "ZIP container: .xlsx/.ods are ZIPs, but so is an actual archive"),
     (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "ole2_container", "spreadsheet",
      "OLE2 container: legacy .xls/.doc"),
     (b"%PDF", "pdf", "none", "PDF document"),
-    (b"\x1f\x8b", "gzip", "none", "gzip stream -- decompress before reading"),
-    (b"BZh", "bzip2", "none", "bzip2 stream -- decompress before reading"),
-    (b"\xfd7zXZ\x00", "xz", "none", "xz stream -- decompress before reading"),
+    (b"\x1f\x8b", "gzip", "none", "gzip stream: decompress before reading"),
+    (b"BZh", "bzip2", "none", "bzip2 stream: decompress before reading"),
+    (b"\xfd7zXZ\x00", "xz", "none", "xz stream: decompress before reading"),
     (b"SQLite format 3\x00", "sqlite", "none", "SQLite database"),
     (b"\x00\x01\x00\x00Standard Jet DB", "access_db", "none", "MS Access database"),
-    # Pictures -- a station map, a photo of the gear. Documentation, never a table.
+    # Images are documentation, never a table.
     (b"\xff\xd8\xff", "image", "none", "JPEG image"),
     (b"\x89PNG\r\n\x1a\n", "image", "none", "PNG image"),
     (b"GIF87a", "image", "none", "GIF image"),
@@ -50,38 +38,28 @@ MAGIC = [
 
 SNIFF_BYTES = 65536
 
-# Text that says "this is a Sea-Bird converted data file" -- the header is its own dialect
-# (`# name 0 = prDM: Pressure, Digiquartz [db]`) and carries the column names.
+# Sea-Bird .cnv markers; column names are in `# name 0 = prDM: Pressure, Digiquartz [db]` lines.
 _CNV_MARKERS = ("*END*", "# name 0 =", "* Sea-Bird", "* SBE ")
 
-# Delimiters worth testing, in the order a tie is broken. Whitespace is last because it is
-# also what separates fixed-width columns, and calling a fixed-width file whitespace-
-# delimited is the failure that produces ragged rows and a phantom column.
+# Delimiters in tie-break order. Whitespace is handled apart: it also separates fixed-width columns.
 _DELIMITERS = [(",", "comma"), ("\t", "tab"), (";", "semicolon"), ("|", "pipe")]
 
-# Two data rows is the fewest that can agree on a shape. A one-cast file with two levels is
-# real, and rejecting it as unstructured loses data; the fixed-width test keeps its own,
-# stricter minimum because inferring column boundaries from two rows infers noise.
+# Two rows are the fewest that can agree on a shape; fixed-width boundaries from few rows are noise.
 MIN_CONSISTENT_ROWS = 2
 MIN_ROWS_FOR_FIXED_WIDTH = 4
 
-# Below this share of numeric fields a block of lines is prose, not a table. Readmes and
-# cruise logs are full of dates, station numbers and depths in sentences; without this test
-# they sniff as whitespace-delimited data and fail three phases later as a parse error
-# instead of being excluded during triage where they belong.
+# Below this share of numeric fields, a block of lines is prose (readme, log), not a table.
 MIN_NUMERIC_FIELD_FRACTION = 0.5
 
-# A delimited table earns a lower bar: a station list is legitimately station id, a
-# coordinate written '49-46.9858S', a date and a time, of which only some parse as floats.
+# Lower bar for delimited tables: a station list mixes ids, coordinates ('49-46.9858S') and dates.
 MIN_NUMERIC_FIELD_FRACTION_DELIMITED = 0.2
 
 
 def sniff_format(path: str, num_bytes: int = SNIFF_BYTES) -> Dict[str, Any]:
     """Identify a file's format from its content.
 
-    Returns {"format_family", "reader", "confidence", "readable", "evidence", ...}.
-    `reader` is one of: "netcdf", "spreadsheet", "delimited", "fixed_width", "sea_bird_cnv",
-    "none". "none" means there is no tabular data to read, not that the file is broken.
+    Returns {"format_family", "reader", "confidence", "readable", "evidence", ...}. A `reader`
+    of "none" means there is no table to read, not that the file is broken.
     """
     p = Path(path)
     if not p.exists():
@@ -113,25 +91,39 @@ def sniff_format(path: str, num_bytes: int = SNIFF_BYTES) -> Dict[str, Any]:
         return _result("binary_unknown", "none", "medium", readable=False, size_bytes=size,
                        evidence=[f"no encoding in {list(TEXT_ENCODINGS)} decodes it",
                                  f"first bytes: {head[:16]!r}"],
-                       note="An unrecognised binary. Ask the submitter or the accession "
-                            "readme what wrote it before guessing a layout.")
+                       note="An unrecognised binary: the submitter or the accession readme "
+                            "may say what wrote it.")
 
     return {**_sniff_text(text, size), "encoding": encoding, "size_bytes": size}
 
 
-# ----------------------------------------------------------------- text
 def _sniff_text(text: str, size: int) -> Dict[str, Any]:
     lines = [l for l in text.splitlines() if l.strip()]
     if not lines:
         return _result("empty", "none", "high", readable=False,
                        evidence=["decodes as text but holds only blank lines"])
 
+    from wod_etl.discovery.known_formats import is_wod_csv, probe_header, tsk_header
+
+    if is_wod_csv(text):
+        return _result("wod_csv", "wod_csv", "high",
+                       evidence=["WOD CSV markers: CAST blocks and a VARIABLES table"],
+                       note="WOD's own CSV export: one block per cast.")
+    tsk = tsk_header(text)
+    if tsk:
+        return _result("tsk_xctd", "tsk_xctd", "high",
+                       evidence=[f"Tsurumi-Seiki header: probe {tsk['probe']}, {tsk['n']} levels"],
+                       note="Tsurumi-Seiki XCTD/XBT export.")
+    probe = probe_header(text)
+    if probe:
+        return _result("probe_dat", "probe_dat", "high",
+                       evidence=[f"{probe['probe']} header line with cruise, date and position"],
+                       note="XCTD/XBT file with unlabelled columns.")
     if any(m in text for m in _CNV_MARKERS):
         return _result("sea_bird_cnv", "sea_bird_cnv", "high",
                        evidence=[f"Sea-Bird marker {m!r}" for m in _CNV_MARKERS if m in text],
-                       note="Column names live in the '# name N = ' header lines, not in a "
-                            "header row. Units are in that header too -- fold them into the "
-                            "name so unit detection can see them.")
+                       note="Column names and units are in the '# name N = ' header lines, "
+                            "not in a header row.")
 
     structured = _structured_text(text)
     if structured:
@@ -139,11 +131,7 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
 
     body = _likely_data_lines(lines)
 
-    # A header row plus ONE data row is a legible table, and it is exactly the shape of the
-    # "one file per depth level" archive: each file holds a single level of one cast. The
-    # data-row test needs a digit, so the header never counts and such a file scored one row
-    # and sniffed as prose -- unreadable, and therefore invisible to the cross-file check
-    # that would have spotted the shape.
+    # A header plus one data row is still a table, e.g. one file per depth level of a cast.
     if len(body) == 1:
         pair = _header_plus_one_row(lines, body[0])
         if pair:
@@ -153,23 +141,20 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
                                      f"splitting into {count} fields"],
                            delimiter=char, delimiter_name=name, row_consistency=1.0,
                            single_data_row=True,
-                           note="One data row. If the folder holds many files like this, "
-                                "they are levels of one cast rather than one cast each -- "
-                                "combine them before staging.")
+                           note="One data row. Many files like this in one folder are "
+                                "levels of one cast, to be combined before staging.")
 
     if len(body) < MIN_CONSISTENT_ROWS:
         return _result("unstructured_text", "none", "medium", readable=False,
                        evidence=[f"only {len(body)} line(s) look like data rows"],
-                       note="Readme, log or metadata. It may still hold coordinates or a "
-                            "sentinel legend -- read it during triage, do not process it.")
+                       note="Readme, log or metadata: not processed, but it may hold "
+                            "coordinates or a sentinel legend.")
 
     delim = _best_delimiter(body)
     numeric = (_numeric_field_fraction(body, delim[0]) if delim else _numeric_fraction(body))
 
-    # A delimiter that holds across every row is stronger evidence of a table than numeric
-    # density is, because a legitimate table may be mostly text columns -- a station list
-    # is names, coordinate strings and dates. But prose is not rescued by punctuation: a
-    # markdown table or a comma-heavy paragraph clears the delimiter test and nothing else.
+    # A consistent delimiter outweighs numeric density, since a real table may be mostly
+    # text; prose with punctuation still fails the lower numeric bar.
     if delim and numeric >= MIN_NUMERIC_FIELD_FRACTION_DELIMITED:
         char, name, consistency = delim
         return _result("delimited_text", "delimited",
@@ -186,9 +171,8 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
                                  f"their fields are numeric",
                                  "no delimiter splits them consistently" if not delim
                                  else f"delimiter {delim[1]} found but the content is prose"],
-                       note="Prose with numbers in it -- a readme, a cruise log, a station "
-                            "narrative. Read it during triage: coordinates and sentinel "
-                            "legends live in files like this. Do not process it as data.")
+                       note="Prose with numbers in it (a readme or a cruise log): not data, "
+                            "but it may hold coordinates or sentinel legends.")
 
     fw = _fixed_width_columns(body)
     if fw:
@@ -197,15 +181,15 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
                                  f"{len(body)} sampled rows with no single delimiter"],
                        colspecs=fw,
                        note="Boundaries are inferred from where every sampled row has a "
-                            "space. Verify them against the accession's format description "
-                            "before trusting the split -- a column that is full in the "
-                            "sample and empty later will shift every field after it.")
+                            "space; a column full in the sample and empty later shifts every "
+                            "field after it. The accession's format description can confirm "
+                            "them.")
 
     return _result("ragged_text", "delimited", "low",
                    evidence=["numeric rows, but no delimiter and no stable column boundary"],
                    delimiter=r"\s+",
-                   note="Rows do not agree on a shape. Usually several blocks concatenated, "
-                        "or a wrapped record. Look at it by hand before staging.")
+                   note="Rows do not agree on a shape: usually several blocks concatenated, "
+                        "or a wrapped record.")
 
 
 def _structured_text(text: str) -> Optional[Dict[str, Any]]:
@@ -220,19 +204,17 @@ def _structured_text(text: str) -> Optional[Dict[str, Any]]:
             json.loads(stripped)
             looks_json = True
         except ValueError:
-            # The sniff window truncates a large file mid-structure, so a parse failure is
-            # not a verdict. Require a quoted key or a nested container instead.
+            # A truncated sniff window can break the parse; look for a quoted key instead.
             looks_json = bool(re.search(r'"[^"\n]{1,64}"\s*:', stripped[:4096]))
         if looks_json:
             return _result("json", "none", "medium", readable=False,
                            evidence=["parses as JSON, or carries quoted keys"],
-                           note="Metadata sidecar, or data in a shape only its own "
-                                "submitter documents. Read the keys, then stage a table "
-                                "from it.")
+                           note="Metadata, or data in a layout only its submitter "
+                                "documents; a table staged from it can be processed.")
     if lead == "<":
         family = "xml"
-        note = ("XML. In an NCEI accession this is usually ISO 19115 metadata -- read it "
-                "for coordinates, instrument and time coverage, not for measurements.")
+        note = ("XML; in an NCEI accession usually ISO 19115 metadata, which gives "
+                "coordinates, instrument and time coverage but no measurements.")
         return _result(family, "none", "medium", readable=False,
                        evidence=["text begins with an XML/SGML tag"], note=note)
     return None
@@ -255,12 +237,7 @@ def _numeric_fraction(rows: List[str]) -> float:
 
 
 def _numeric_field_fraction(rows: List[str], char: str) -> float:
-    """Share of delimited fields that are numbers or coordinates, splitting as csv does.
-
-    Splitting on every comma and space instead breaks one quoted remark into a dozen words
-    and dilutes the count; and a station list's positions are written `142°18'E` or
-    `49-46.9858S`, which are numbers in every sense but float()'s.
-    """
+    """Share of csv-split fields that are numbers or coordinates such as `49-46.9858S`."""
     from wod_etl.staging.parse import parse_coordinate
 
     total = numeric = 0
@@ -284,9 +261,7 @@ def _numeric_field_fraction(rows: List[str], char: str) -> float:
     return numeric / total if total else 0.0
 
 
-# `LAT: 21.000000`, `DATE: 2015-11-09` -- a header line a staged cast writes above its table.
-# It contains digits, so it used to count as a data row with no delimiter in it, and a staged
-# cast of three levels (a bottle cast) failed the consistency test and sniffed as prose.
+# A `Key: value` header line such as `LAT: 21.000000`, which is not a data row.
 _KEY_VALUE_LINE = re.compile(r"^\s*[A-Za-z][A-Za-z0-9_ ]{0,30}\s*[:=]\s+\S")
 
 
@@ -326,13 +301,7 @@ def _header_plus_one_row(lines: List[str], row: str):
 
 
 def _separator_count(line: str, char: str) -> int:
-    """How many times `char` separates fields in `line`, ignoring any inside quotes.
-
-    A raw character count is fooled by a quoted free-text column: a station list whose last
-    field is `"CTD, trawl, NORPAC, 2m-ring net"` on one row and `"CTD, NORPAC"` on the next
-    has a different comma count on every row, failed the consistency test, and was filed as
-    prose -- unreadable, so triage never saw the positions in it.
-    """
+    """How many times `char` separates fields in `line`, ignoring any inside quotes."""
     if char not in line:
         return 0
     if '"' not in line:
@@ -418,23 +387,24 @@ def _disambiguate_zip(path: Path) -> Dict[str, Any]:
                 "note": f"claims to be a ZIP but will not open: {e}"}
     if any(n.startswith("xl/") for n in names):
         return {"format_family": "spreadsheet_xlsx", "reader": "spreadsheet",
-                "note": "Excel workbook. Every sheet is a candidate table; name the one "
-                        "you read in the staged copy's provenance."}
+                "note": "Excel workbook: each sheet is read as a table."}
+    if any(n.startswith("word/") for n in names):
+        return {"format_family": "word_document", "reader": "none", "readable": False,
+                "note": "Word document: documentation, not data."}
+    if any(n.startswith("ppt/") for n in names):
+        return {"format_family": "presentation", "reader": "none", "readable": False,
+                "note": "Slide presentation: documentation, not data."}
     if "mimetype" in names:
         return {"format_family": "opendocument", "reader": "spreadsheet",
                 "note": "OpenDocument spreadsheet."}
     return {"format_family": "archive_zip", "reader": "none", "readable": False,
             "member_count": len(names), "members": names[:20],
-            "note": "A real archive. Extract it into data/raw/ and list the members; do "
-                    "not process the archive itself."}
+            "note": "A zip archive: not read; its members can be once it is extracted."}
 
 
-# Families that are documentation or a container by nature. A caller skips these; anything
-# else that will not read is a failure, because something put it in a data folder and it did
-# not parse -- and a silent skip there is how a real cast file with an unrecognised layout
-# disappears from a run.
+# Documentation and container families, which callers skip; any other unreadable file is a failure.
 DOCUMENT_FAMILIES = {"pdf", "gzip", "bzip2", "xz", "sqlite", "access_db", "archive_zip",
-                     "json", "xml", "zip_container", "image"}
+                     "json", "xml", "zip_container", "image", "word_document", "presentation"}
 
 
 def _result(family: str, reader: str, confidence: str, readable: Optional[bool] = None,

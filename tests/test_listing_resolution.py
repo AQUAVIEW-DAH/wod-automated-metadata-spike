@@ -1,4 +1,4 @@
-"""Getting from what a person cites -- a landing page, a number, a tarball -- to the files."""
+"""Getting from what a person cites (a landing page, a number, a tarball) to the files."""
 import io
 import tarfile
 import zipfile
@@ -88,6 +88,44 @@ class TestRetries:
         assert n["calls"] == 3
 
 
+class TestUnreachableServices:
+    """A service that timed out is not tried again in the run; others on its host still are."""
+
+    def test_a_service_that_timed_out_is_skipped_and_its_neighbours_are_not(self, tmp_path):
+        from wod_etl.discovery import download_file
+        from wod_etl.http_util import Unreachable
+
+        calls = []
+
+        def handler(request):
+            calls.append(request.url.path)
+            if request.url.path.startswith("/data/oceans"):
+                raise httpx.ReadTimeout("The read operation timed out", request=request)
+            return httpx.Response(200, text="ok")
+
+        listing = "https://www.ncei.noaa.gov/data/oceans/archive/arc0139/0189574/"
+        code_list = "https://www.ncei.noaa.gov/data/oceans/woa/WOD/CODES/CSV/s_29_probe_type.csv"
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(httpx.ReadTimeout):
+                get_with_retries(listing, retries=3, client=client)
+            with pytest.raises(Unreachable, match="did not answer earlier in this run"):
+                get_with_retries(code_list, client=client)
+            assert get_with_retries("https://www.ncei.noaa.gov/metadata/geoportal/rest/x",
+                                    client=client).text == "ok"
+        assert len(calls) == 4                  # three tries, then only the catalogue
+        res = download_file(code_list, dest_dir=str(tmp_path))
+        assert res["status"] == "error" and res["attempts"] == 0
+
+    def test_a_404_does_not_mark_a_service(self):
+        def handler(request):
+            return httpx.Response(404 if request.url.path.endswith("gone") else 200, text="ok")
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(httpx.HTTPStatusError):
+                get_with_retries("https://x.test/a/b/gone", client=client)
+            assert get_with_retries("https://x.test/a/b/here", client=client).text == "ok"
+
+
 class TestLandingPageResolution:
     @pytest.mark.parametrize("ref", [
         "https://www.ncei.noaa.gov/access/metadata/landing-page/bin/iso?id=gov.noaa.nodc:303535",
@@ -106,6 +144,18 @@ class TestLandingPageResolution:
         assert res["version"]["available"] == ["1.1", "2.2"]
         assert res["source"] == ROOT + "2.2/"
 
+    def test_a_folder_that_cannot_be_listed_fails_the_whole_listing(self, fake_ncei,
+                                                                     monkeypatch):
+        real = lrd_module.get_with_retries
+
+        def data_down(url, **kw):
+            if url.endswith("2.2/data/"):
+                raise httpx.ReadTimeout("The read operation timed out")
+            return real(url, **kw)
+        monkeypatch.setattr(lrd_module, "get_with_retries", data_down)
+        res = list_remote_directory(ROOT, recursive=True)
+        assert res["items"] == [] and f"could not list {ROOT}2.2/data/" in res["error"]
+
     def test_an_unreadable_landing_page_still_names_the_page_to_open(self, monkeypatch):
         def down(url, **_kw):
             raise httpx.ConnectError("503 forever")
@@ -117,8 +167,7 @@ class TestLandingPageResolution:
 
     def test_the_metadata_catalogue_is_asked_first_and_answers_when_the_page_does_not(
             self, fake_ncei, monkeypatch):
-        """NCEI's landing page renders on request and can time out for minutes; the ISO
-        record from the catalogue names the same archive bundle in under a second."""
+        """The landing page can time out; the catalogue's ISO record names the same bundle."""
         real = lrd_module.get_with_retries
 
         def landing_down(url, **kw):
@@ -134,14 +183,13 @@ class TestLandingPageResolution:
         assert r["url"] == ROOT and "geoportal" in r["resolved_from"]
         assert not any("landing-page" in c for c in fake_ncei)
 
-    def test_process_accession_keys_are_relative_to_the_resolved_version(self, fake_ncei,
-                                                                        tmp_path):
-        from wod_etl.orchestration import process_accession
+    def test_keys_are_relative_to_the_resolved_version(self, fake_ncei):
+        from wod_etl.orchestration.process_accession import _item_key
 
-        res = process_accession("0303535", output_dir=str(tmp_path / "o"),
-                                raw_dir=str(tmp_path / "r"), dry_run=True, resume=False)
-        keys = {w["key"] for w in res["would_process"]} | {w["key"] for w in res["would_skip"]}
-        assert "data/tsg.csv" in keys and "NCEI-Readme.txt" in keys
+        listing = list_remote_directory("0303535", recursive=True)
+        keys = {_item_key(listing["source"], i["path"], i["name"])
+                for i in listing["items"] if not i["is_dir"]}
+        assert {"data/tsg.csv", "NCEI-Readme.txt"} <= keys
 
 
 class TestLocalArchives:

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>wod-etl</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="bar">
+    <strong class="brand">wod-etl</strong>
+    <input id="source" type="text" autocomplete="off" spellcheck="false"
+           placeholder="Accessions, separated by commas: landing-page URL, number (0189574), NCEI data URL or local folder">
+    <button id="run" title="Resolve, fetch and triage each accession, and propose decisions">Run</button>
+    <button id="confirm" title="Write what the reviewed decisions include, and verify it" disabled>Confirm</button>
+    <select id="recent" title="Accessions run before"><option value="">Open…</option></select>
+  </div>
+  <nav id="batch" class="batch" hidden>
+    <button id="prev" class="small" title="Previous accession ([)">‹</button>
+    <button id="next" class="small" title="Next accession (])">›</button>
+    <div id="batch-list" class="batch-list"></div>
+    <span id="batch-count" class="batch-count"></span>
+    <button id="confirm-all" class="small" disabled
+            title="Confirm every accession waiting for review with nothing left to settle">Confirm ready</button>
+    <button id="batch-clear" class="small" title="Forget this list; the runs stay">Clear</button>
+  </nav>
+  <ol id="stages" class="stages"></ol>
+  <div id="outcome" class="outcome"></div>
+  <ul id="problems" class="problems"></ul>
+</header>
+
+<main>
+  <section class="panel" id="inputs">
+    <h2>Input files <span id="inputs-count" class="count"></span></h2>
+    <div id="file-list" class="scroll"><p class="empty">Run an accession to see its files.</p></div>
+  </section>
+
+  <section class="panel" id="editor-panel">
+    <h2>decisions.toml <span id="dirty" class="dirty" hidden>unsaved</span>
+      <span class="actions">
+        <button id="reload" class="small" disabled>Reload</button>
+        <button id="save" class="small" disabled title="Ctrl/Cmd+S">Save</button>
+      </span>
+    </h2>
+    <div class="editor">
+      <pre id="gutter" aria-hidden="true"></pre>
+      <div class="code">
+        <pre id="highlight" aria-hidden="true"></pre>
+        <textarea id="decisions" spellcheck="false" wrap="off" disabled
+                  placeholder="decisions.toml appears here after Run"></textarea>
+      </div>
+    </div>
+    <div id="editor-msg" class="msg"></div>
+  </section>
+
+  <section class="panel" id="outputs">
+    <h2>Output files <span id="outputs-count" class="count"></span></h2>
+    <div id="output-list" class="scroll"><p class="empty">Confirm writes the WOD files here.</p></div>
+  </section>
+
+  <section class="panel" id="preview">
+    <h2><span id="preview-name"></span> <span id="preview-count" class="count"></span>
+      <span id="preview-tabs" class="tabs">
+        <button class="small on" data-tab="preview">Preview</button>
+        <button class="small" data-tab="stats" title="Descriptive statistics of each variable">Statistics</button>
+      </span>
+      <span class="actions">
+        <a id="preview-download" class="button small" download>Download</a>
+        <button id="preview-close" class="small" title="Esc">Close</button>
+      </span>
+    </h2>
+    <div class="preview-body">
+      <div class="cast-pane">
+        <input id="cast-filter" type="search" autocomplete="off" spellcheck="false"
+               placeholder="Filter casts">
+        <div id="cast-list" class="scroll"></div>
+      </div>
+      <div id="preview-main" class="scroll">
+        <div id="file-info"></div>
+        <div id="cast-view"></div>
+      </div>
+    </div>
+    <div id="stats-view" class="scroll"></div>
+  </section>
+</main>
+
+<footer>
+  <details id="activity">
+    <summary>Activity <span id="activity-state"></span>
+      <span class="links"><a id="report-link" target="_blank">report.md</a>
+        <a id="log-link" target="_blank">run.log</a></span></summary>
+    <pre id="lines"></pre>
+  </details>
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

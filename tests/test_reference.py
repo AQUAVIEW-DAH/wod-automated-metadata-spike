@@ -1,5 +1,6 @@
-"""The knowledge base: table loading, flag derivation, and agent-facing lookup."""
-from pathlib import Path
+"""The knowledge base: table loading, flag derivation, and the knowledge index."""
+
+import re
 
 import pytest
 
@@ -10,10 +11,8 @@ from wod_etl.reference import (
     load_table,
     observed_level_flags,
     qc_flag_scales,
-    query_wod_knowledge,
     range_check_variables,
     range_levels,
-    search_manual,
     unit_constants,
     wod_datasets,
     wod_secondary_headers,
@@ -28,7 +27,6 @@ class TestTableLoading:
             assert load_table(name), name
 
     def test_no_table_is_orphaned(self):
-        """Every JSON in the knowledge dir must be reachable through the loader."""
         from wod_etl.config import CODE_TABLES_DIR
         on_disk = {p.name for p in CODE_TABLES_DIR.glob("*.json")}
         declared = set(TABLE_FILES.values())
@@ -64,7 +62,7 @@ class TestFlagsComeFromTable12:
             assert all(t.replace("_", "").isalnum() for t in tokens)
 
     def test_module_constants_are_verified_against_the_table(self):
-        """apply_qc_auditing asserts its constants at import; prove the guard works."""
+        """apply_qc_auditing checks its flag constants against the table at import."""
         # importlib, not `from ... import`: the package __init__ binds that name to the
         # function, which shadows the submodule.
         import importlib
@@ -85,7 +83,6 @@ class TestReferenceContent:
         assert all(x["standard_unit"] for x in v.values())
 
     def test_secondary_headers_are_a_separate_namespace(self):
-        """Header id 29 is Probe Type; variable code 29 is Air pressure."""
         assert wod_secondary_headers()[29] == "Probe Type"
         assert wod_variables()[29]["name"] == "Air pressure"
 
@@ -99,128 +96,39 @@ class TestReferenceContent:
         assert unit_constants()["molar_volume_o2_stp_l_per_mole"] == pytest.approx(22.3916)
 
 
-class TestQueryWodKnowledge:
-    def test_variable_by_name(self):
-        m = query_wod_knowledge("temperature", kind="variable")["matches"]
-        assert m[0]["wod_code"] == 1
-        assert "p.18" in m[0]["citation"]
+class TestCfStandardNames:
+    """The CF Standard Name Table, and the names the code writes and reads against it."""
 
-    def test_variable_by_code(self):
-        m = query_wod_knowledge(3, kind="variable")["matches"]
-        assert m[0]["name"] == "Oxygen"
+    def test_an_alias_resolves_to_its_current_name(self):
+        from wod_etl.reference import is_alias, resolve_standard_name
+        assert is_alias("chlorophyll_concentration_in_sea_water")
+        assert resolve_standard_name("chlorophyll_concentration_in_sea_water") == \
+            "mass_concentration_of_chlorophyll_in_sea_water"
+        assert resolve_standard_name(" Sea_Water_Temperature ") == "sea_water_temperature"
+        assert resolve_standard_name("sea_water_temperature status_flag") is None
+        assert resolve_standard_name(None) is None
 
-    def test_flag_lookup_reports_every_scale(self):
-        m = query_wod_knowledge(6, kind="flag")["matches"]
-        scales = {x["scale"] for x in m}
-        assert {"observed_level", "depth"} & scales or len(scales) >= 2
-        assert all("p.55" in x["citation"] for x in m)
+    def test_vocabulary_names_the_table_version(self):
+        from wod_etl.reference import standard_name_vocabulary
+        assert re.fullmatch(r"CF Standard Name Table v\d+", standard_name_vocabulary())
 
-    def test_xctd_is_explained_not_invented(self):
-        r = query_wod_knowledge("XCTD", kind="dataset")
-        assert any("2 m" in (x.get("note") or "") or x.get("code") for x in r["matches"])
+    def test_written_names_are_current_and_their_units_convert(self):
+        from cf_units import Unit
 
-    def test_secondary_header_lookup(self):
-        m = query_wod_knowledge("probe type", kind="secondary_header")["matches"]
-        assert m[0]["id"] == 29
+        from wod_etl.reference import canonical_units
+        from wod_etl.writers.generate_netcdf_ragged import CF_STANDARD_NAMES, CF_UNITS
 
-    def test_threshold_at_depth(self):
-        m = query_wod_knowledge("temperature", kind="gradient", depth_m=1000)["matches"]
-        assert m[0]["applicable_at_depth"]["MGV"] == pytest.approx(0.7)
+        for code, name in CF_STANDARD_NAMES.items():
+            canonical = canonical_units(name)
+            assert canonical is not None, f"{code}: {name} is not a current standard name"
+            units = CF_UNITS[wod_variables()[code]["standard_unit"]]
+            assert Unit(units).is_convertible(Unit(canonical)), (code, units, canonical)
 
-    def test_range_at_depth_carries_the_basin_caveat(self):
-        m = query_wod_knowledge("oxygen", kind="range", depth_m=3000)["matches"]
-        assert m[0]["applicable_at_depth"]["max"] == pytest.approx(392.0)
-        assert "basin" in m[0]["caveat"]
+    def test_names_read_from_input_are_current(self):
+        from wod_etl.mapping.query_wod_spec import STANDARD_NAME_LABELS
+        from wod_etl.reference import canonical_units
+        from wod_etl.staging.moorings import _NOT_OF_THE_WATER_STANDARD
 
-    def test_every_match_is_citable(self):
-        r = query_wod_knowledge("salinity")
-        assert r["match_count"] > 0
-        assert all("citation" in m for m in r["matches"])
-
-    def test_unknown_kind_is_rejected(self):
-        assert "error" in query_wod_knowledge("x", kind="banana")
-
-    def test_no_match_is_not_an_error(self):
-        r = query_wod_knowledge("zzz_nonexistent_zzz")
-        assert r["match_count"] == 0 and "error" not in r
-
-
-class TestSearchManual:
-    def test_finds_prose_not_in_any_table(self):
-        r = search_manual("fall-rate", max_hits=3)
-        if "error" in r:
-            pytest.skip("page cache not built")
-        assert r["hit_count"] >= 1
-        assert all("p." in h["citation"] for h in r["hits"])
-
-    def test_missing_term_returns_no_hits(self):
-        r = search_manual("zzzz_not_in_the_manual_zzzz")
-        if "error" in r:
-            pytest.skip("page cache not built")
-        assert r["hit_count"] == 0
-
-
-class TestKnowledgeRouting:
-    """The wod-reference skill promises that common questions are answerable without
-    opening the 131-page manual. These guard that promise against drift.
-
-    The index is the skill body itself; the prose files it routes to live in knowledge/.
-    """
-
-    ROOT = Path(__file__).resolve().parents[1]
-    KNOWLEDGE = ROOT / "knowledge"
-    INDEX = ROOT / ".claude" / "skills" / "wod-reference" / "SKILL.md"
-
-    def test_index_and_prose_references_exist(self):
-        assert self.INDEX.is_file(), "the wod-reference skill is the knowledge index"
-        for name in ("datasets.md", "cast_structure.md", "accession_field_guide.md",
-                     "wod_code_tables/standardization_rules.md"):
-            assert (self.KNOWLEDGE / name).is_file(), f"missing knowledge doc: {name}"
-
-    def test_index_links_all_resolve(self):
-        import re
-        for link in re.findall(r"\]\(([^)#]+)\)", self.INDEX.read_text()):
-            if link.startswith(("http", "#")):
-                continue
-            assert (self.INDEX.parent / link).resolve().exists(), f"dead link in index: {link}"
-
-    def test_index_routes_to_every_prose_reference(self):
-        """A prose file the index does not name is a file nobody will find."""
-        text = self.INDEX.read_text()
-        for name in ("datasets.md", "cast_structure.md", "accession_field_guide.md",
-                     "wod_code_tables/standardization_rules.md"):
-            assert name in text, f"the wod-reference skill does not route to {name}"
-
-    @pytest.mark.parametrize("question,terms", [
-        ("plankton is not a Table 3a variable", ["Biological Header", "upper and lower depth"]),
-        ("SUR is one cast per cruise",          ["one cast per cruise", "Julian year-day"]),
-        ("surface data skips vertical checks",  ["no vertical checks"]),
-        ("bottom depth is a secondary header",  ["Bottom Depth"]),
-        ("buoy datasets are distinguishable",   ["moored", "profiling float", "drifting"]),
-        ("the 29/29 collision is explained",    ["Probe Type", "Air pressure"]),
-        ("CTD vs OSD is by resolution",         ["depth increment"]),
-        ("degree-decimal-minute coordinates",   ["decimal minutes"]),
-        ("nitrite is excluded",                 ["nitrite"]),
-    ])
-    def test_common_questions_are_answered_in_prose(self, question, terms):
-        """If one of these fails, the answer moved or was lost and the next run will go
-        back to the PDF for it."""
-        text = "\n".join(p.read_text() for p in self.KNOWLEDGE.rglob("*.md")).lower()
-        missing = [t for t in terms if t.lower() not in text]
-        assert not missing, f"{question}: knowledge docs no longer cover {missing}"
-
-    def test_search_manual_finds_the_deferred_appendices(self):
-        """The middle tier: content we deliberately did NOT extract must still be locatable
-        without paging through the PDF.
-
-        Skips without the page cache, like the other two search_manual tests.
-        knowledge/wod_readme_db/page_text.json is gitignored -- it is rebuildable from the
-        PDF with `uv run python -m wod_etl.reference.index_manual` -- so a fresh clone has
-        no cache and this asserted against an error dict rather than against the manual.
-        """
-        from wod_etl.reference import search_manual
-        for term in ("Reiniger-Ross", "WMO square"):
-            result = search_manual(term)
-            if "error" in result:
-                pytest.skip("page cache not built")
-            assert result["hit_count"] > 0, f"search_manual cannot find {term}"
+        unknown = [n for n in {*STANDARD_NAME_LABELS, *_NOT_OF_THE_WATER_STANDARD}
+                   if canonical_units(n) is None]
+        assert not unknown, unknown

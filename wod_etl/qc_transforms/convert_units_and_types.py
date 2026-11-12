@@ -1,12 +1,10 @@
-"""Deterministic unit and type conversions driven by the Phase 2 mapping contract.
+"""Unit conversions and numeric coercion for the columns in the mapping contract.
 
-Every conversion applied is recorded in the returned log with the constant used and where
-that constant comes from, so the provenance survives into the NetCDF metadata.
+Each conversion is logged with its constant and source, for the NetCDF metadata.
 """
 import json
 from typing import Dict, Any, Tuple, List
 
-import numpy as np
 import pandas as pd
 
 from wod_etl.config import (
@@ -15,7 +13,6 @@ from wod_etl.config import (
     SEAWATER_DENSITY_PROVENANCE,
 )
 from wod_etl.mapping.generate_field_mapping import MOLAR_PREFIX_SCALE
-from wod_etl.mapping.query_wod_spec import PER_VOLUME_CODES
 
 FEET_TO_METERS = 0.3048
 FATHOMS_TO_METERS = 1.8288
@@ -36,8 +33,7 @@ def _molar_mass_o2() -> float:
 def _molar_factor(source: str, target: str, density_kg_m3: float):
     """Multiplier taking a molar concentration from `source` to `target`, or None.
 
-    Units are written 'umol/kg', 'mmol/l'. A litre of seawater weighs density/1000 kg, so
-    per-volume -> per-mass divides by that and the reverse multiplies by it.
+    Units are written 'umol/kg', 'mmol/l'. A basis change (l <-> kg) applies seawater density.
     """
     if not source or not target:
         return None
@@ -91,9 +87,7 @@ def convert_units_and_types(
         entry = {"column": col, "wod_code": code, "conversion": conversion}
 
         if conversion == "molar_rescale":
-            # One parameterised molar conversion instead of a label per prefix/basis pair.
-            # Two independent steps: a decimal rescale between SI prefixes, and -- only if
-            # the basis changes -- a division or multiplication by the density of seawater.
+            # SI-prefix rescale, plus a seawater-density factor if the basis changes.
             src, tgt = mapping.get("conversion_from"), mapping.get("conversion_to")
             factor = _molar_factor(src, tgt, seawater_density_kg_m3)
             if factor is None:
@@ -128,6 +122,11 @@ def convert_units_and_types(
                           "provenance": "molar mass of O2 from WOD Table 3b atomic weights "
                                         "p.19 (Lide, 1992); then " + SEAWATER_DENSITY_PROVENANCE})
             density_used = True
+
+        elif conversion == "mg_per_l_to_ug_per_l":
+            df_clean[col] = df_clean[col] * 1000.0
+            entry.update({"from": "mg/l", "to": "ug/l", "constant": 1000.0,
+                          "provenance": "exact definition"})
 
         elif conversion == "feet_to_meters":
             df_clean[col] = df_clean[col] * FEET_TO_METERS
@@ -175,26 +174,3 @@ def _attach_time(df: pd.DataFrame, contract: Dict[str, Any], warnings: List[str]
         return df
     df["iso_date"] = ts
     return df
-
-
-if __name__ == "__main__":
-    raw = pd.DataFrame({
-        "Depth (ft)": [0.0, 32.8, 82.0],
-        "Temp (deg F)": [69.8, 67.1, 57.6],
-        "Oxygen (ml/l)": [4.70, 4.59, 4.03],
-        "DIC (umol/kg)": [2088.8, 2091.2, 2094.0],
-    })
-    contract = {
-        "parsed_coordinates": {"year": 1985, "month": 6, "day": 12},
-        "column_mapping": [
-            {"raw_column": "Depth (ft)", "wod_code": 0, "conversion_needed": "feet_to_meters"},
-            {"raw_column": "Temp (deg F)", "wod_code": 1, "conversion_needed": "fahrenheit_to_celsius"},
-            {"raw_column": "Oxygen (ml/l)", "wod_code": 3, "conversion_needed": "ml_per_l_to_umol_per_kg"},
-            {"raw_column": "DIC (umol/kg)", "wod_code": 21, "conversion_needed": "molar_rescale",
-             "conversion_from": "umol/kg", "conversion_to": "mmol/l"},
-        ],
-    }
-    out, log = convert_units_and_types(raw, contract)
-    print(out.to_string(index=False))
-    print()
-    print(json.dumps(log, indent=2))

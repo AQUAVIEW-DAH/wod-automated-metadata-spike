@@ -5,9 +5,9 @@
     30,
     31
   ],
-  "note": "A FOURTH namespace. The biological header records how a plankton sample was COLLECTED -- gear, tow, mesh, volume, preservation, counting. It hangs off the cast, one per cast, and is the metadata half of the plankton path; the measurements themselves are Taxa-Records (Table 7a). No biological header applies to a profile cast, and the profile NetCDF writer in this repository does not emit any of them.",
+  "note": "How a plankton sample was collected (gear, tow, mesh, volume, preservation, counting), one set per cast; the measurements are Taxa-Records (Table 7a).",
   "csv_field_naming": "b_<id>_<name>, e.g. b_21_institutes (used for both counting and voucher institution)",
-  "appendix_column": "'App' is the manual appendix holding that header's code list (Appendix 4.x, pp.71). Those code lists live in the WOD online code tables, not in this repository. A header with no appendix carries a plain measured value in the stated unit.",
+  "appendix_column": "'App' is the manual appendix naming the header's code list (Appendix 4, p.71); the lists are online. No appendix means a plain value in the stated unit.",
   "biological_headers": {
     "1": {
       "name": "Water volume filtered",

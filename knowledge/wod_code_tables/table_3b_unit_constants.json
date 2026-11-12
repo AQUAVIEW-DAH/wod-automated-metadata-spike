@@ -5,7 +5,7 @@
   "notes": [
     "Standard atomic weights scaled to Carbon-12 (Lide, 1992).",
     "Molar volume of O2 at STP from Garcia and Gordon (1992).",
-    "The manual gives no seawater-density constant here; converting µmol/l to µmol/kg requires in-situ density, or an assumed value if density is unavailable."
+    "Per-volume values are converted to per-mass with the sample's density, or a constant 1025 kg/m3 when it is not reported (p.15). DIC, alkalinity and chlorophyll stay per-volume (Table 3a)."
   ],
   "molar_volume_o2_stp_l_per_mole": 22.3916,
   "atomic_weights_g_per_mole": {

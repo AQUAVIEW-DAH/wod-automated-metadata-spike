@@ -1,33 +1,27 @@
-"""WOD standard specifications, loaded from the reference tables in knowledge/wod_code_tables/.
+"""Match column names to WOD variables and resolve WOD datasets.
 
-The tables are transcribed from the World Ocean Database 2023 User's Manual with page
-citations. Nothing here is hardcoded from memory -- if a value looks wrong, check the JSON
-against the manual rather than editing this module.
-
-  Table 2  (p.17) -- dataset names          -> table_2_datasets.json
-  Table 3a (p.18) -- measured variables     -> table_3a_variables.json
-  Table 4a (p.23) -- secondary header codes -> table_4a_secondary_headers.json
+Uses Tables 2, 3a and 4a from knowledge/wod_code_tables/; fix values in the JSON, not here.
 """
 import re
 from typing import Dict, Any, List, Optional
 
+from wod_etl.terms import english_terms
 from wod_etl.config import HIGH_RES_DEPTH_INCREMENT_M
-from wod_etl.reference import wod_datasets, wod_secondary_headers, wod_variables
+from wod_etl.reference import (resolve_standard_name, wod_datasets, wod_secondary_headers,
+                               wod_variables)
 
-# Aliases are OUR matching hints, not part of the WOD standard. They are deliberately kept
-# separate from the manual-derived tables above so the two never get confused.
+# Matching hints of our own, not part of the WOD standard.
 VARIABLE_ALIASES = {
-    # NOT potential temperature. Theta is a DERIVED quantity -- in-situ temperature adjusted
-    # for adiabatic compression -- and aliasing it here made a cast claim Temperature twice
-    # when both columns were present, and silently mislabelled theta as in-situ when only
-    # theta was. It can be converted back to in-situ temperature if pressure and salinity
-    # are known, but that is a computation done during staging, not a rename. See NOT_STORED.
+    # Not potential temperature, which is derived (see NOT_STORED).
     1: ["temperature", "temp", "t", "temp_c", "t_deg_c", "sst", "water_temperature",
-        "t090c", "t190c", "t068c", "t168c", "tv290c", "t090", "t190"],
+        "t090c", "t190c", "t068c", "t168c", "tv290c", "tv268c", "t090", "t190", "t068", "t168"],
     2: ["salinity", "sal", "psal", "psu", "practical_salinity", "sal00", "sal11", "psal00", "psal11",
         "salnty"],
-    3: ["oxygen", "o2", "doxy", "dissolved_oxygen", "do",
-        "sbeox0ml_l", "sbeox1ml_l", "sbeox0mm_kg", "sbeox1mm_kg", "sbox0ml_l", "sbox1ml_l"],
+    # Sea-Bird names carry their unit; `seabird_unit` spells it out for conversion.
+    3: ["oxygen", "o2", "doxy", "oxy", "dissolved_oxygen", "do",
+        "sbeox0ml_l", "sbeox1ml_l", "sbeox0mm_kg", "sbeox1mm_kg", "sbox0ml_l", "sbox1ml_l",
+        "sbeox0mg_l", "sbeox1mg_l", "sbeox0mm_l", "sbeox1mm_l",
+        "oxml_l", "oxmg_l", "oxmm_kg", "oxmm_l"],
     4: ["phosphate", "po4", "phos"],
     6: ["silicate", "sio3", "sio4", "sio2", "silicic_acid", "si"],
     8: ["nitrate", "no3", "nitrate_nitrite", "no2_no3", "nitrate_and_nitrite"],
@@ -35,13 +29,12 @@ VARIABLE_ALIASES = {
     11: ["chlorophyll", "chl", "chla", "chl_a", "chlorophyll_a",
          "flsp", "flspp", "flecoafl", "flc", "fleco_afl", "chl_fluorescence"],
     17: ["alkalinity", "alk", "talk", "ta", "total_alkalinity"],
-    20: ["pco2", "xco2", "partial_pressure_co2"],
+    20: ["pco2", "xco2", "partial_pressure_co2", "partial_pressure_of_co2",
+         "partial_pressure_of_carbon_dioxide"],
     21: ["dic", "tco2", "dissolved_inorganic_carbon"],
     24: ["transmissivity", "beam_attenuation", "transmission"],
     25: ["pressure", "press", "pres", "dbar", "prdm", "prsm", "prdb", "prm", "pr"],
-    # 'air_temp' must be spelt out: the fallback picks the LONGEST matching alias, and
-    # 'air_temperature' does not match the token 'air_temp' while code 1's 'temp' does --
-    # so an air temperature column was resolving to water temperature.
+    # 'air_temp' stops the longest-alias fallback picking code 1's 'temp'.
     26: ["air_temperature", "airtemp", "atemp", "air_temp", "airtemperature",
          "dry_bulb", "dry_bulb_temperature"],
     29: ["air_pressure", "barometric_pressure", "baro"],
@@ -61,18 +54,13 @@ VARIABLE_ALIASES = {
     43: ["oxygen_18", "o18", "18o", "d18o", "delta_18o", "delta_o18"],
 }
 
-# Depth is the vertical coordinate, not a WOD measured variable. Code 25 is Pressure, a
-# distinct variable. We use a sentinel of 0 internally to mean "this column is the depth
-# axis in meters".
+# Depth is the vertical axis, not a WOD variable (25 is Pressure): sentinel code 0, in metres.
 DEPTH_SENTINEL_CODE = 0
-DEPTH_ALIASES = ["depth", "dep", "z", "deph", "depth_m", "depth_meters",
+DEPTH_ALIASES = ["depth", "dep", "z", "deph", "dpth", "depth_m", "depth_meters",
                  # Sea-Bird export names: depth in salt water / fresh water, metres or feet.
                  "depsm", "depfm", "depsf", "depff", "dpthm"]
 
-# Columns that contain the word 'depth' and are NOT the vertical axis. The fallback matched
-# 'depth' inside 'bottom_depth' and handed the seafloor sounding to the depth axis, which
-# then set every level of the cast to the same depth. Bottom depth is secondary header 10;
-# the others are per-cast metadata too. See wod_etl/mapping/map_metadata.py.
+# 'Depth' columns that are not the vertical axis (bottom depth is secondary header 10).
 NOT_THE_DEPTH_AXIS = re.compile(
     r"^(?:bottom|water|station|sounding|seafloor|sea_floor|max|maximum|min|minimum|total|"
     r"cast|sensor|intake|calibration|target|nominal|upper|lower|start|end|bot)_"
@@ -80,99 +68,192 @@ NOT_THE_DEPTH_AXIS = re.compile(
     r"|^(?:depth|dep)_(?:to_)?(?:bottom|seafloor|sea_floor|of_(?:station|sensor|water))(?:_|$)"
     r"|^sounding(?:_|$)")
 
-# Standard units that are per-VOLUME, not per-mass (Table 3a). A molar-to-mass conversion
-# must never be applied to these.
+# Variables whose standard unit is per volume, not per mass (Table 3a).
 PER_VOLUME_CODES = {11, 17, 21}
 
-# Columns that LOOK like WOD variables and are not. Recognising them by name is the point:
-# an unexplained entry in `unmapped_columns` is indistinguishable from a column nobody
-# thought about, and the fix an agent reaches for -- adding an alias -- is exactly wrong for
-# every one of these. `reason` says why there is no code; `route` says what to do instead.
+# Columns that look like WOD variables but have no Table 3a code; never alias them.
+# `reason` says why, `route` what to do instead.
 NOT_STORED = {
     "potential_temperature": {
         "aliases": ["potential_temperature", "pot_temp", "pot_t", "ptmp", "ptemp", "theta",
                     "potemp", "potential_temp", "theta0", "tpot"],
-        # An alias list cannot cover every spelling of a two-word name, and every miss here
-        # falls through to the 'temperature' fallback and becomes code 1. The pattern does.
-        "patterns": [r"^(?:pot|poten|potential)_?.*temp", r"^theta(_|$)", r"_theta$"],
+        # Patterns catch spellings the alias list misses.
+        "patterns": [r"^(?:pot|poten|potential)_?.*temp", r"^potemp", r"^theta(_|$)",
+                     r"_theta$"],
         "reason": "Potential temperature is derived, not measured. Table 3a code 1 is "
                   "in-situ temperature; there is no code for theta.",
-        "route": "If the file ALSO has in-situ temperature, map that and drop this. If theta "
-                 "is all there is, convert it to in-situ during staging -- it needs pressure "
-                 "and salinity -- and record the conversion. Never alias it to code 1: with "
-                 "both columns present the cast claims Temperature twice, and with only "
-                 "theta present the cast silently reports the wrong quantity.",
+        "route": "Not written. If the file has no in-situ temperature, convert theta to "
+                 "in-situ during staging (it needs pressure and salinity) and record the "
+                 "conversion.",
+    },
+    "conservative_temperature": {
+        "aliases": ["conservative_temperature", "cons_temp", "conservative_temp"],
+        "patterns": [r"(?:^|_)conservative_?temp"],
+        "reason": "Conservative temperature (TEOS-10) is derived from in-situ temperature, "
+                  "salinity and pressure. Table 3a code 1 is in-situ temperature.",
+        "route": "Not written; an in-situ temperature column is written as code 1.",
+    },
+    "teos10_salinity": {
+        "aliases": ["absolute_salinity", "reference_salinity", "preformed_salinity", "abs_sal"],
+        "patterns": [r"(?:^|_)(?:absolute|reference|preformed)_?sal"],
+        "reason": "A TEOS-10 salinity in g/kg, not the practical salinity Table 3a code 2 "
+                  "stores.",
+        "route": "Not written. A practical salinity column is written as code 2; with only "
+                 "this one, convert it to practical salinity during staging.",
+    },
+    "size_fractionated_chlorophyll": {
+        "aliases": [],
+        # '20 µm Chlorophyll a' normalises to '20_m_chlorophyll_a' (µ is dropped).
+        "patterns": [r"^(?:\d+_)*\d+_(?:um|m|micron)_.*chl", r"chl.*_\d+_?(?:um|micron)(?:_|$)"],
+        "reason": "A size fraction of chlorophyll. WOD has one chlorophyll code (11), for the "
+                  "total.",
+        "route": "Not written; a total chlorophyll column is written as code 11.",
+    },
+    "oxygen_saturation": {
+        "aliases": ["oxygen_saturation", "o2_saturation", "o2sat", "oxy_sat", "oxsat",
+                    "doxy_sat", "do_sat", "percent_oxygen_saturation",
+                    "sbeox0ps", "sbeox1ps", "oxps"],
+        # Sea-Bird 'oxsatML/L' and 'oxsolML/L' are the saturation concentration.
+        "patterns": [r"(?:^|_)(?:o2|oxy|oxygen|doxy|do)_?sat(?:uration)?(?:_|$)",
+                     r"(?:^|_)saturation(?:_|$)", r"^ox(?:sat|sol)"],
+        "reason": "Oxygen saturation, as a percentage or as the saturation concentration, is "
+                  "derived from temperature and salinity. WOD stores the measured "
+                  "concentration (code 3).",
+        "route": "Not written; the concentration column is written as code 3.",
     },
     "conductivity": {
-        "aliases": ["conductivity", "cond", "c0s_m", "c1s_m", "c0ms_cm", "condwat", "cndc"],
+        "aliases": ["conductivity", "cond", "c0s_m", "c1s_m", "c0ms_cm", "c1ms_cm", "c0us_cm",
+                    "c1us_cm", "condwat", "cndc"],
         "reason": "WOD stores salinity, not conductivity. No Table 3a code.",
-        "route": "Drop it and report the drop. Salinity is usually already derived in the "
-                 "same file; if it is not, deriving it needs temperature and pressure and "
-                 "belongs in staging.",
+        "route": "Not written. Salinity is usually already derived in the same file; if it "
+                 "is not, derive it during staging (it needs temperature and pressure).",
     },
     "density": {
         "aliases": ["density", "sigma_t", "sigma_theta", "sigma_0", "sigma0", "sigmat",
                     "sigma", "dens", "rho", "density_anomaly"],
         "patterns": [r"^sigma(_|\d|$)"],
         "reason": "Derived from temperature, salinity and pressure. No Table 3a code.",
-        "route": "Drop it and report the drop. Note that 'sigma-t' normalises to a token "
-                 "ending in '_t', which is why the single-character alias 't' is barred "
-                 "from fallback matching.",
+        "route": "Not written.",
     },
     "sound_velocity": {
         "aliases": ["sound_velocity", "sound_speed", "svel", "svcm", "sv", "soundspeed"],
-        "patterns": [r"sound_?(speed|velocity)"],
+        "patterns": [r"sound_?(speed|velocity)", r"speed_of_sound"],
         "reason": "Derived. No Table 3a code.",
-        "route": "Drop it and report the drop.",
+        "route": "Not written.",
     },
     "nitrite": {
         "aliases": ["nitrite", "no2"],
         "reason": "WOD deliberately excludes nitrite alone (manual p.49). Code 8 is nitrate, "
                   "or nitrate+nitrite.",
-        "route": "Drop a nitrite-only column. A nitrate+nitrite column IS storable: map it "
-                 "to code 8 and set variable specific second header 17 (Contains nitrite).",
+        "route": "A nitrite-only column is not written; a nitrate+nitrite column is written "
+                 "as code 8 with variable specific second header 17 (Contains nitrite).",
     },
     "ammonium": {
         "aliases": ["ammonium", "ammonia", "nh4", "nh3"],
         "reason": "No Table 3a code.",
-        "route": "Drop it and report the drop.",
+        "route": "Not written.",
     },
     "turbidity": {
         "aliases": ["turbidity", "ntu", "cdom", "fdom", "obs_turbidity"],
-        "reason": "No Table 3a code. Code 24 is Transmissivity, which is a different "
-                  "measurement -- do not substitute one for the other.",
-        "route": "Drop it and report the drop.",
+        "reason": "No Table 3a code. Code 24 is Transmissivity, a different measurement "
+                  "that cannot stand in for it.",
+        "route": "Not written.",
     },
 }
 
-# alias -> registry key, built once so match failures can be explained in one lookup.
+# alias -> NOT_STORED key.
 _NOT_STORED_BY_ALIAS = {a: k for k, v in NOT_STORED.items() for a in v["aliases"]}
 _NOT_STORED_PATTERNS = [(re.compile(p), k)
                         for k, v in NOT_STORED.items() for p in v.get("patterns", [])]
 
+# What a NetCDF variable declares it holds, as the term the matcher resolves. A quantity WOD
+# does not store resolves to its NOT_STORED entry. Keys are current CF standard names
+# (knowledge/cf_standard_names.json); a test checks them.
+STANDARD_NAME_LABELS = {
+    **dict.fromkeys(["sea_water_temperature", "sea_surface_temperature"], "Temperature"),
+    "sea_water_potential_temperature": "Potential temperature",
+    "sea_water_conservative_temperature": "Conservative temperature",
+    **dict.fromkeys(["sea_water_salinity", "sea_water_practical_salinity",
+                     "sea_surface_salinity"], "Salinity"),
+    "sea_water_absolute_salinity": "Absolute salinity",
+    "sea_water_reference_salinity": "Reference salinity",
+    "sea_water_preformed_salinity": "Preformed salinity",
+    **dict.fromkeys(["mole_concentration_of_dissolved_molecular_oxygen_in_sea_water",
+                     "moles_of_oxygen_per_unit_mass_in_sea_water",
+                     "volume_fraction_of_oxygen_in_sea_water",
+                     "mass_concentration_of_oxygen_in_sea_water"], "Oxygen"),
+    "fractional_saturation_of_oxygen_in_sea_water": "Oxygen saturation",
+    **dict.fromkeys(["mole_concentration_of_phosphate_in_sea_water",
+                     "moles_of_phosphate_per_unit_mass_in_sea_water"], "Phosphate"),
+    **dict.fromkeys(["mole_concentration_of_silicate_in_sea_water",
+                     "moles_of_silicate_per_unit_mass_in_sea_water"], "Silicate"),
+    **dict.fromkeys(["mole_concentration_of_nitrate_in_sea_water",
+                     "moles_of_nitrate_per_unit_mass_in_sea_water"], "Nitrate"),
+    **dict.fromkeys(["mole_concentration_of_nitrate_and_nitrite_in_sea_water",
+                     "moles_of_nitrate_and_nitrite_per_unit_mass_in_sea_water"],
+                    "Nitrate + Nitrite"),
+    **dict.fromkeys(["mole_concentration_of_nitrite_in_sea_water",
+                     "moles_of_nitrite_per_unit_mass_in_sea_water"], "Nitrite"),
+    **dict.fromkeys(["mole_concentration_of_ammonium_in_sea_water",
+                     "moles_of_ammonium_per_unit_mass_in_sea_water"], "Ammonium"),
+    "sea_water_ph_reported_on_total_scale": "pH",
+    **dict.fromkeys(["mass_concentration_of_chlorophyll_in_sea_water",
+                     "mass_concentration_of_chlorophyll_a_in_sea_water"], "Chlorophyll"),
+    **dict.fromkeys(["sea_water_alkalinity_expressed_as_mole_equivalent",
+                     "sea_water_alkalinity_per_unit_mass_expressed_as_mole_equivalent"],
+                    "Alkalinity"),
+    **dict.fromkeys(["partial_pressure_of_carbon_dioxide_in_sea_water",
+                     "surface_partial_pressure_of_carbon_dioxide_in_sea_water"], "pCO2"),
+    **dict.fromkeys(["mole_concentration_of_dissolved_inorganic_carbon_in_sea_water",
+                     "moles_of_dissolved_inorganic_carbon_per_unit_mass_in_sea_water"],
+                    "Dissolved inorganic carbon"),
+    "volume_beam_attenuation_coefficient_of_radiative_flux_in_sea_water": "Beam attenuation",
+    **dict.fromkeys(["sea_water_pressure", "sea_water_pressure_due_to_sea_water"], "Pressure"),
+    "depth": "Depth",
+    "air_temperature": "Air temperature",
+    **dict.fromkeys(["air_pressure", "air_pressure_at_mean_sea_level"], "Air pressure"),
+    "latitude": "Latitude",
+    "longitude": "Longitude",
+    **dict.fromkeys(["mole_concentration_of_cfc11_in_sea_water",
+                     "moles_of_cfc11_per_unit_mass_in_sea_water"], "CFC-11"),
+    "mole_concentration_of_cfc12_in_sea_water": "CFC-12",
+    "sea_water_electrical_conductivity": "Conductivity",
+    "sea_water_sigma_t": "Sigma-t",
+    "sea_water_sigma_theta": "Sigma-theta",
+    "sea_water_density": "Density",
+    "speed_of_sound_in_sea_water": "Sound velocity",
+    "sea_water_turbidity": "Turbidity",
+}
+
+# PMEL EPIC codes (epic.key, https://www.pmel.noaa.gov/epic/) for the same purpose. Units come
+# from the variable's own `units`, as some EPIC unit labels are ambiguous ('MG AT/L').
+EPIC_CODE_LABELS = {
+    1: "Pressure", 3: "Depth", 9: "Air pressure", 915: "Air pressure",
+    **dict.fromkeys([20, 25, 28, 32], "Temperature"), 21: "Air temperature",
+    **dict.fromkeys([40, 41, 42], "Salinity"), **dict.fromkeys([50, 51], "Conductivity"),
+    55: "Beam attenuation", **dict.fromkeys([60, 65], "Oxygen"), 62: "Oxygen saturation",
+    70: "Sigma-t", 71: "Sigma-theta", 80: "Sound velocity",
+    **dict.fromkeys([152, 182, 282], "Nitrate"), **dict.fromkeys([154, 184, 284], "Nitrite"),
+    185: "Nitrate + Nitrite", **dict.fromkeys([156, 186, 286], "Phosphate"),
+    **dict.fromkeys([158, 181, 188, 288], "Silicate"), **dict.fromkeys([189, 289], "Ammonium"),
+    159: "pH", **dict.fromkeys([901, 903, 931, 935, 3031], "Fluorescence"),
+    **dict.fromkeys([906, 932, 937], "Chlorophyll"), 1701: "CFC-11", 1702: "CFC-12",
+}
+
 
 def normalize_name(name: str) -> str:
-    """Reduce a raw column name to a comparable token.
+    """A raw column name as a token for matching: 'Temp (C)' -> 'temp', 'Depth, m' -> 'depth'.
 
-    'Temp (C)' -> 'temp', 'Sal_PSU [psu]' -> 'sal_psu', 'Depth, m' -> 'depth'
-    Unit suffixes in brackets or after a comma are stripped; the remainder is lowercased
-    and reduced to underscore-separated words.
-
-    The stripped unit text is NOT lost -- `extract_unit` recovers it from the same name, and
-    the mapping contract records it per column as the originator's unit (variable specific
-    second header 8). Normalisation is for MATCHING only; nothing should treat the
-    normalised form as the column's identity.
+    `extract_unit` recovers the stripped unit.
     """
-    s = str(name).strip().lower()
+    s = english_terms(str(name)).strip().lower()
     s = re.sub(r"[\(\[\{].*?[\)\]\}]", " ", s)   # drop bracketed unit text
     s = re.split(r"[,;]", s)[0]                    # drop trailing ", m" style units
     s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
     return s
 
 
-# Submitters paste headers out of Word and journal PDFs, so a unit arrives as `µmol kg−1`
-# (U+2212) or `μmol/kg` (Greek mu) as often as plain ASCII. Both read as µmol/kg to a human
-# and as nothing to a regex.
+# Typographic unit characters, folded for matching.
 _UNIT_CHAR_FOLD = str.maketrans({
     "\u03bc": "\u00b5",                      # Greek mu -> micro sign (identical on screen)
     **dict.fromkeys("\u2010\u2011\u2012\u2013\u2014\u2015\u2212\u207b", "-"),  # dashes, minus
@@ -181,45 +262,46 @@ _UNIT_CHAR_FOLD = str.maketrans({
     **dict.fromkeys("\u2044\u2215", "/"),            # fraction and division slashes
     **dict.fromkeys("\u00b7\u2022\u22c5", "."),       # middle dots used as a separator
     **dict.fromkeys("\u00a0\u2009\u202f", " "),       # non-breaking and thin spaces
+    "\u2103": "\u00b0C",                    # ℃ as one character
 })
 
 
 def canonical_unit_text(text: str) -> str:
-    """Fold typographic unit characters onto one spelling.
-
-    For MATCHING only. `extract_unit` still returns what the originator wrote, because
-    that is what reaches variable specific second header 8.
-    """
+    """Fold typographic unit characters onto one spelling, for matching only."""
     return str(text).translate(_UNIT_CHAR_FOLD)
 
 
 def extract_unit(name: str) -> Optional[str]:
-    """The unit text a raw column name carries, verbatim, or None.
+    """The unit text in a raw column name, verbatim, or None: `Temperature (deg C)` -> 'deg C'.
 
-    The counterpart to `normalize_name`: what that function throws away in order to match,
-    this one keeps in order to record. `Temperature (deg C)` -> 'deg C', `DO [ml/l]` ->
-    'ml/l', `Depth, m` -> 'm', `PRES (decibar)` -> 'decibar'.
-
-    This is what the originator wrote, not a WOD unit. It is preserved because the
-    conversion applied downstream is only auditable against the unit the source declared --
-    and because WOD has a field for exactly this, variable specific second header 8.
+    Recorded as the originator's unit (variable specific second header 8).
     """
     raw = str(name).strip()
     for candidate in reversed(re.findall(r"[\(\[\{]\s*([^\)\]\}]*?)\s*[\)\]\}]", raw)):
-        # A bracket may hold a scale AND a unit: '[ITS-90, deg C]'. Try the whole thing,
-        # then each comma-separated part from the right, so the unit is found either way.
+        # A bracket may hold a scale and a unit ('[ITS-90, deg C]'): try each part.
         for part in [candidate] + [p.strip() for p in reversed(candidate.split(","))]:
             if _looks_like_unit(part):
                 return part
     tail = re.split(r"[,;]", raw)
     if len(tail) > 1 and _looks_like_unit(tail[-1].strip()):
         return tail[-1].strip()
-    return None
+    seabird = _SEABIRD_OXYGEN_UNIT.match(raw)
+    return seabird.group(1) if seabird else None
 
 
-# Measurement scales named in a column header. These are variable specific second header 3
-# (Scale, Appendix 3.1), not units -- recording them as units would be wrong, and dropping
-# them loses the only statement of which standard the numbers are on.
+# Sea-Bird oxygen short names end in their unit: 'Sbeox0ML/L', 'OxMg/L', 'Sbeox0Mm/Kg'.
+# 'Mm' is micromoles.
+_SEABIRD_OXYGEN_UNIT = re.compile(r"^(?:sbe?ox\d?|ox)(ml/l|mg/l|mm/kg|mm/l)$", re.I)
+_SEABIRD_UNITS = {"ml/l": "ml/l", "mg/l": "mg/l", "mm/kg": "umol/kg", "mm/l": "umol/l"}
+
+
+def seabird_unit(name: str) -> Optional[str]:
+    """A Sea-Bird oxygen short name's unit in the usual spelling: 'Sbeox0Mm/Kg' -> 'umol/kg'."""
+    m = _SEABIRD_OXYGEN_UNIT.match(str(name).strip())
+    return _SEABIRD_UNITS[m.group(1).lower()] if m else None
+
+
+# Measurement scales in a column header: variable specific second header 3 (Appendix 3.1).
 _SCALE_PATTERNS = [
     (r"\bits[-_\s]?90\b", "ITS-90"),
     (r"\bipts[-_\s]?68\b", "IPTS-68"),
@@ -233,22 +315,23 @@ _SCALE_PATTERNS = [
 ]
 
 
-def extract_scale(name: str) -> Optional[str]:
-    """The measurement scale a column header names, e.g. 'ITS-90' or 'PSS-78'.
+# Sea-Bird temperature short names give the scale in their digits: t068C is IPTS-68.
+_SEABIRD_TEMPERATURE = re.compile(r"^t(?:0|1|v2)(68|90)c?$")
 
-    Sea-Bird writes `t090C: Temperature [ITS-90, deg C]`; the scale is half of what that
-    bracket says and is not a unit. WOD has a field for it: variable specific second header
-    3 (Appendix 3.1).
-    """
+
+def extract_scale(name: str) -> Optional[str]:
+    """The measurement scale a column header names, e.g. 'ITS-90' or 'PSS-78'."""
     raw = str(name).lower()
     for pattern, label in _SCALE_PATTERNS:
         if re.search(pattern, raw):
             return label
+    seabird = _SEABIRD_TEMPERATURE.match(normalize_name(name).split("_")[0])
+    if seabird:
+        return "IPTS-68" if seabird.group(1) == "68" else "ITS-90"
     return None
 
 
-# A bracketed suffix is not always a unit: 'Temperature (secondary sensor)' and
-# 'Salinity (bottle)' are qualifiers. Units are short and made of unit-ish characters.
+# Units are short and use unit characters; these words mark a qualifier or a scale.
 _UNIT_LIKE = re.compile(r"^[A-Za-zµ°‰%/·^\-\d\s.]+$")
 _NOT_UNITS = {"secondary", "primary", "bottle", "ctd", "sensor", "sensors", "corrected",
               "raw", "average", "mean", "adjusted", "calculated", "derived", "unknown",
@@ -257,15 +340,13 @@ _NOT_UNITS = {"secondary", "primary", "bottle", "ctd", "sensor", "sensors", "cor
 
 
 def _looks_like_unit(text: str) -> bool:
-    """A bracketed suffix is a unit, a qualifier, or a scale. Only the first is a unit."""
+    """Whether a bracketed suffix is a unit, not a qualifier ('bottle') or a scale."""
     text = canonical_unit_text(text or "").strip()
     if not text or len(text) > 24 or not _UNIT_LIKE.match(text):
         return False
     words = [w for w in re.split(r"[^a-z0-9]+", text.lower()) if w]
     if not words:
         return bool(re.fullmatch(r"[µ°‰%]+", text))   # symbol-only units: ‰, %, °
-    # A qualifier word anywhere disqualifies it: 'secondary sensor' is not a unit, and
-    # neither is 'ITS-90' on its own -- that is a scale, and extract_scale claims it.
     return not any(w in _NOT_UNITS for w in words)
 
 
@@ -285,26 +366,16 @@ def _not_stored_key(norm: str, exact_only: bool = False) -> Optional[str]:
 
 
 # ------------------------------------------------------------ fluorescence
-# A fluorometer reports chlorophyll fluorescence. WOD has no fluorescence variable; it has
-# Chlorophyll (code 11, ug/l), and a fluorometer calibrated to a chlorophyll concentration IS
-# how most profile chlorophyll is measured. So the UNIT decides, not the name:
-#   * a mass concentration (ug/l, mg/m3, ppb)  -> code 11, with a comment saying it is
-#     fluorometer-derived rather than extracted;
-#   * RFU, volts, counts, or anything else      -> no code. It cannot be written as ug/l
-#     without a calibration nobody has supplied, so it is dropped and reported;
-#   * no unit at all                            -> no code, unless the name is a Sea-Bird
-#     calibrated channel (flSP, flECO-AFL...), whose output is a concentration by definition.
-# This used to depend on someone renaming the column to 'Chlorophyll' during staging, which
-# hid the decision and was easy to get wrong in either direction.
+# WOD has no fluorescence variable. A fluorometer column maps to Chlorophyll (code 11) when
+# its unit is a mass concentration (ug/l, mg/m3, ppb), or with no unit when it is a Sea-Bird
+# calibrated channel. Otherwise it is dropped and reported.
 _FLUOR_NAME = re.compile(r"(?:^|_)(?:chl_?)?fluor(?:escence|ometer|o)?(?:_|$)|^fl(?:u)?(?:_|$)")
 SEABIRD_FLUOR_CHANNELS = {"flsp", "flspp", "flecoafl", "fleco_afl", "flc", "flscufa",
                           "flspr", "wetstar", "chl_fluorescence"}
 _MASS_CONCENTRATION = re.compile(
-    r"^(?:[µu]g\s*/\s*l|[µu]g\s*l-?1|mg\s*/\s*m\s*\^?\s*3|mg\s*m-?3|ppb|[µu]g/dm3)$", re.I)
-# Fluorescence of something that is NOT chlorophyll. CDOM/FDOM are in NOT_STORED, and the
-# phycobilins, tracer dyes and oil have no Table 3a code either -- yet CDOM is routinely
-# reported in 'ppb' (quinine sulfate equivalents) and phycocyanin in 'ug/l', so a unit test
-# alone would write them as Chlorophyll. The rule does not claim them; the registry does.
+    r"^(?:(?:[µu]|micro)g(?:rams?)?\s*/\s*l(?:it(?:er|re))?|[µu]g\s*l-?1|mg\s*/\s*m\s*\^?\s*3|"
+    r"mg\s*m-?3|ppb|[µu]g/dm3)$", re.I)
+# Non-chlorophyll fluorophores, which may share chlorophyll's units; the rule skips them.
 _OTHER_FLUOROPHORE = re.compile(
     r"(?:^|_)(?:cdom|fdom|dom|phyco\w*|rhodamine|rwt|uranine|fluorescein|oil|crude|"
     r"hydrocarbons?|tryptophan|trp)(?:_|$)")
@@ -335,8 +406,8 @@ def fluorescence_rule(column_name: str) -> Optional[Dict[str, Any]]:
                        f"has no fluorescence variable." if unit_text else
                        "Fluorescence with no stated unit: it may be a concentration or a raw "
                        "signal, and only a concentration can be written as Chlorophyll."),
-            "route": ("Drop it and report the drop. If the submitter supplies a calibration "
-                      "to ug/l, apply it in staging and name the column with that unit."
+            "route": ("Not written. If the submitter supplies a calibration to ug/l, apply it "
+                      "in staging and name the column with that unit."
                       if unit_text else
                       "Find the unit (ISO metadata, readme, instrument export) and put it in "
                       "the staged column name: 'Fluorescence (ug/l)' maps to Chlorophyll, "
@@ -344,12 +415,7 @@ def fluorescence_rule(column_name: str) -> Optional[Dict[str, Any]]:
 
 
 def explain_column(column_name: str) -> Optional[Dict[str, Any]]:
-    """Why a column has no WOD code, when the reason is known.
-
-    Returns None for a column that simply was not recognised -- that one may need an alias.
-    Returns a reason and a route for the ones that must NOT be aliased, because they have no
-    Table 3a code at all and mapping them onto an adjacent one is worse than dropping them.
-    """
+    """Why a column has no WOD code: a reason and route, or None if it is unrecognised."""
     norm = normalize_name(column_name)
     fluor = fluorescence_rule(column_name)
     if fluor is not None and fluor["code"] is None:
@@ -365,22 +431,53 @@ def explain_column(column_name: str) -> Optional[Dict[str, Any]]:
             "route": entry["route"], "do_not_alias": True}
 
 
-# Aliases shorter than this are matched only as a WHOLE column name, never as a word inside
-# one. The single-character alias 't' is the dangerous one: 'Sigma-t (kg/m3)' normalises to
-# 'sigma_t', and 't' matched it, handing density to WOD code 1, Temperature. '_t_' is a
-# common qualifier token ('pot_t', 'cond_t') so it can never be trusted mid-name, while
-# two-character aliases ('o2', 'do', 'ta') are chemistry symbols that do not occur as
-# incidental tokens -- and 'o2_umol' must keep resolving. A column spelt as exactly a short
-# alias is caught by the exact-match pass above regardless of this rule.
+def declared_standard_name(attrs) -> str:
+    """A NetCDF variable's CF `standard_name`, lower case, with a deprecated alias replaced by
+    its current name. `attrs` is a dict or a variable."""
+    get = attrs.get if isinstance(attrs, dict) else (lambda k: getattr(attrs, k, None))
+    raw = str(get("standard_name") or "").strip()
+    return (resolve_standard_name(raw) or raw).lower()
+
+
+def declared_label(attrs) -> Optional[str]:
+    """The WOD term a NetCDF variable's attributes declare: its CF `standard_name`, else its
+    EPIC code (`epic_code`, or an `epic_key` such as 'T_20'). `attrs` is a dict or a variable."""
+    get = attrs.get if isinstance(attrs, dict) else (lambda k: getattr(attrs, k, None))
+    label = STANDARD_NAME_LABELS.get(declared_standard_name(attrs))
+    if label:
+        return label
+    epic = get("epic_code")
+    if epic is None:
+        m = re.search(r"_(\d+)$", str(get("epic_key") or "").strip())
+        epic = m.group(1) if m else None
+    try:
+        return EPIC_CODE_LABELS.get(int(str(epic).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def prefer_declared(label: str, attrs, units: str = "") -> str:
+    """`label`, unless the variable declares a different quantity: then the declared term
+    with `units`. The declaration states what the originator measured."""
+    declared = declared_label(attrs)
+    if not declared:
+        return label
+    declared = f"{declared} ({units})" if units else declared
+    return label if _identity(label) == _identity(declared) else declared
+
+
+def _identity(label: str):
+    return match_variable(label), (explain_column(label) or {}).get("variable")
+
+
+# Shorter aliases match only a whole name, not a token ('t' would match 'sigma_t').
 MIN_FALLBACK_ALIAS_LEN = 2
 
 
 def match_variable(column_name: str) -> Optional[int]:
-    """Return the WOD variable code for a raw column name, or None.
+    """The WOD variable code for a raw column name, or None.
 
-    Matching is on the normalized name, exact alias first, then a whole-word alias match.
-    Longer aliases win so 'air_temperature' is not captured by 'temp', and aliases shorter
-    than MIN_FALLBACK_ALIAS_LEN never take part in the fallback at all.
+    Exact alias first, then the longest whole-word alias at least MIN_FALLBACK_ALIAS_LEN long.
     """
     norm = normalize_name(column_name)
     if not norm:
@@ -393,10 +490,8 @@ def match_variable(column_name: str) -> Optional[int]:
     if fluor is not None:
         return fluor["code"]
 
-    # A name WOD does not store must be blocked before the alias fallback, or it is captured
-    # by the variable it is named after: 'potential_temperature' contains 'temperature', and
-    # the fallback duly returned code 1. Exact matches are checked first in both directions
-    # so 'nitrate_nitrite' still resolves to code 8 rather than being blocked as nitrite.
+    # Block names WOD does not store before the fallback ('potential_temperature' contains
+    # 'temperature'). Exact checks come first so 'nitrate_nitrite' still resolves to 8.
     if _not_stored_key(norm, exact_only=True):
         return None
 
@@ -419,33 +514,9 @@ def match_variable(column_name: str) -> Optional[int]:
 
 
 def resolve_column(query: str, columns: List[str]) -> Dict[str, Any]:
-    """Which of these columns does a human's name for one of them refer to?
+    """The column a plain name refers to ('latitude' -> 'LAT'), by tiers tried in order.
 
-    "Rename the latitude column to Latitude" does not say that the column is spelt `LAT`,
-    and the caller should not have to know. This answers that, and **refuses to choose
-    between two candidates** rather than picking one.
-
-        resolve_column("latitude", ["LAT", "LON", "Depth (m)"])
-        # {"column": "LAT", "wod_code": 30, "matched_by": "wod_code",
-        #  "confidence": "high", "ambiguous": False, ...}
-
-    Four tiers, tried in order and reported in `matched_by`:
-
-    | tier         | test                                        | catches                  |
-    | ---          | ---                                         | ---                      |
-    | `exact`      | string equality                             | the caller knew the name |
-    | `normalized` | `normalize_name` equality                   | `latitude` -> `LATITUDE` |
-    | `wod_code`   | both resolve to the same WOD variable code  | `latitude` -> `LAT`      |
-    | `substring`  | normalised substring, `confidence: "low"`   | last resort              |
-
-    Two or more hits at the winning tier gives `column: None` and `ambiguous: True` with
-    the candidates listed. That is the real case for a Sea-Bird cast: `t090C` and `t190C`
-    are the primary and secondary temperature sensor and **both resolve to code 1**, so
-    "the temperature column" genuinely does not identify one of them.
-
-    A query that lands on a column WOD does not store is refused with `explain_column`'s
-    reason, so asking for "the temperature column" cannot quietly return a potential
-    temperature.
+    Several hits at one tier give `ambiguous: True`; a column WOD does not store is refused.
     """
     cols = [c for c in columns if c and c.strip()]
     out: Dict[str, Any] = {"query": query, "column": None, "wod_code": None,
@@ -475,9 +546,8 @@ def resolve_column(query: str, columns: List[str]) -> Dict[str, Any]:
         if len(hits) > 1:
             out["ambiguous"] = True
             out["note"] = (f"{len(hits)} columns match {query!r} at the {tier} tier: "
-                           f"{hits}. Name the one you mean. Sensor-indexed pairs such as "
-                           f"t090C/t190C resolve to the same WOD code by design -- they "
-                           f"are the primary and secondary sensor, not duplicates.")
+                           f"{hits}. Sensor pairs such as t090C/t190C share a WOD code as "
+                           f"the primary and secondary sensor.")
             return out
         column = hits[0]
         refusal = explain_column(column)
@@ -495,11 +565,10 @@ def resolve_column(query: str, columns: List[str]) -> Dict[str, Any]:
 
 
 def resolve_dataset(dataset_type: str, depth_increment_m: Optional[float] = None) -> Dict[str, Any]:
-    """Resolve an instrument/dataset label to a real WOD dataset code (Table 2).
+    """Resolve an instrument/dataset label to a WOD dataset code (Table 2).
 
-    XCTD and CTD are routed by RESOLUTION, not instrument (manual p.19): a depth increment
-    below 2 m is high-resolution and belongs to CTD, anything coarser belongs to OSD. When
-    depth_increment_m is unknown the routing is reported as unresolved rather than guessed.
+    CTD-like labels are routed by resolution (manual p.19): a depth increment below 2 m is
+    CTD, coarser is OSD. With no increment the routing is reported as unresolved.
     """
     datasets = wod_datasets()
     label = (dataset_type or "").upper().strip()
@@ -534,10 +603,9 @@ def query_wod_spec(
     variable_query: Optional[List[str]] = None,
     depth_increment_m: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Query WOD standard specifications for a dataset and set of variables.
+    """WOD's definition of a dataset and of each queried variable.
 
-    variable_query accepts raw column names or keywords; each is matched to a WOD code.
-    Omit it to get every Table 3a variable.
+    `variable_query` takes column names or keywords; omit it for every Table 3a variable.
     """
     resolved = resolve_dataset(dataset_type, depth_increment_m)
     variables = wod_variables()
@@ -585,12 +653,3 @@ def query_wod_spec(
         "secondary_header_rules": {str(k): v for k, v in wod_secondary_headers().items()},
         "source": "WOD 2023 User's Manual, Tables 2/3a/4a via knowledge/wod_code_tables/",
     }
-
-
-if __name__ == "__main__":
-    import json
-
-    print(json.dumps(query_wod_spec("XCTD", ["Temp (C)", "Sal_PSU", "Depth (m)"],
-                                    depth_increment_m=0.5), indent=2)[:1400])
-    print("\n--- XCTD with unknown resolution ---")
-    print(json.dumps(query_wod_spec("XCTD")["dataset_resolution"], indent=2))

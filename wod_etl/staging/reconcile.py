@@ -1,26 +1,6 @@
-"""Check station positions and dates against every other source in the accession.
+"""Check station positions and dates across sources and along the cruise track.
 
-A position or date taken from ONE file is a claim, not a fact. Accessions routinely state
-each station two or three times -- a station list, a trawl log, a table in the cruise report,
-a map -- and the copies disagree more often than anyone checks. A run that takes the station
-list on trust writes the disagreement into the output with nothing said: 0303928 put station
-11 at 142°12'E, as three text sources say, while the submitter's own map and the trawl at
-that station put it a degree further east.
-
-    from wod_etl.staging import reconcile_stations, check_track
-
-    report = reconcile_stations({
-        "SHU1505_StationInfo.csv": stations,             # from read_station_list
-        "SHU1505_TrawlInfo.csv": trawls,
-        "cruise report p.4 Table 1": table1,             # from extract_pdf_rows
-    }, position_tolerance_km=10)
-    report["conflicts"]
-
-    track = check_track(stations)                        # in occupation order
-    track["flags"]
-
-Neither changes anything. They return disagreements to resolve and say which source said
-what; deciding is a judgement to record in the staged notes.
+Neither changes anything; both report disagreements and which source said what.
 """
 import datetime as dt
 import math
@@ -56,19 +36,13 @@ def reconcile_stations(
 ) -> Dict[str, Any]:
     """Compare every station's position and date across sources.
 
-    `sources` maps a source name -- cite it as you would in a staged note, `"report p.4
-    Table 1"` -- to `{station: {"latitude", "longitude", "date"}}`, the shape
-    `read_station_list` returns. Station keys are compared through `normalise_station`, so
-    `St-01` in one source meets `1` in another.
+    `sources` maps a source name (e.g. `"report p.4 Table 1"`) to `{station: {"latitude",
+    "longitude", "date"}}`, as `read_station_list` returns. Station keys are compared through
+    `normalise_station`. `position_tolerance_km` is how far apart two positions may be and
+    still agree; allow more for sources sampled apart, such as a trawl and a CTD station.
 
-    `position_tolerance_km` is how far apart two statements of one station may be and still
-    agree. Choose it for what the sources ARE: a station list and a report table should
-    agree exactly (positions are typed to the arc-minute, ~2 km), while a trawl is towed
-    some distance from the CTD station and differs by a few km as a matter of course.
-
-    Returns `conflicts` (each naming the field, every source's value and the spread),
-    `single_source` (stations only one source states -- unverified, which is not the same
-    as wrong), and per-station detail.
+    Returns `conflicts` (field, each source's value, spread), `single_source` (stations only
+    one source states) and per-station detail.
     """
     by_station: Dict[str, Dict[str, Dict[str, Any]]] = {}
     labels: Dict[str, str] = {}
@@ -112,7 +86,7 @@ def reconcile_stations(
                     "values": {s: (v["latitude"], v["longitude"])
                                for s, v in row["sources"].items()},
                     "note": f"{spread:.1f} km apart, beyond the {position_tolerance_km} km "
-                            f"tolerance. One of these is not where the station was."})
+                            f"tolerance."})
 
         if "date" in compare:
             dates = {s: v["date"] for s, v in row["sources"].items() if v["date"]}
@@ -120,8 +94,7 @@ def reconcile_stations(
             if len(set(dates.values())) > 1:
                 conflicts.append({
                     "station": labels[station], "field": "date", "values": dates,
-                    "note": "the sources give different dates. Look for a third source -- a "
-                            "fishing log, a time-stamped event -- before choosing one."})
+                    "note": "the sources give different dates."})
         detail[labels[station]] = row
 
     return {
@@ -131,9 +104,8 @@ def reconcile_stations(
         "conflicts": conflicts,
         "single_source": single,
         "stations": detail,
-        "note": ("Every conflict is a value to confirm with the submitter or settle from a "
-                 "third source. Record the decision in the staged notes either way."
-                 if conflicts else None),
+        "note": ("Each conflict needs the submitter or a third source to settle it; set "
+                 "its resolution in decisions.toml." if conflicts else None),
     }
 
 
@@ -158,23 +130,13 @@ def check_track(
     max_speed_knots: float = 20.0,
     bounding_box: Optional[Tuple[float, float, float, float]] = None,
 ) -> Dict[str, Any]:
-    """Look along the cruise track for a station that is not where its neighbours say.
+    """Flag stations along the cruise track that are not where their neighbours suggest.
 
-    `stations` is the stations in OCCUPATION order: the dict `read_station_list` returns,
-    or a list of entries with `latitude`, `longitude` and optionally `date`/`time`.
-
-    Three checks, each a flag rather than a verdict:
-
-    * **an outlying step** -- a hop between consecutive stations more than
-      `outlier_factor` times the median hop. A survey line run at even spacing makes a
-      mistyped degree stand out at once; an irregular cruise will raise false alarms, so
-      read the steps.
-    * **time running backwards** -- a station dated before the one occupied before it.
-    * **an impossible speed** -- only when both stations have a time of day: the hop
-      divided by the elapsed time, above `max_speed_knots`.
-
-    `bounding_box` is `(lon_min, lon_max, lat_min, lat_max)`, e.g. from the accession's ISO
-    metadata or NCEI's `<accession>_lonlat.txt`: every station outside it is flagged.
+    `stations` is in occupation order: the dict `read_station_list` returns, or a list of
+    entries with `latitude`, `longitude` and optionally `date`/`time`. A step is flagged when
+    it is over `outlier_factor` times the median hop, runs back in time, or exceeds
+    `max_speed_knots` (when both stations have a time). `bounding_box` is
+    `(lon_min, lon_max, lat_min, lat_max)`; stations outside it are flagged.
     """
     entries = list(stations.values()) if isinstance(stations, dict) else list(stations)
     name = lambda e, i: str(e.get("station", i))
@@ -190,8 +152,7 @@ def check_track(
         step = {"from": name(a, i - 1), "to": name(b, i), "km": round(km, 2)}
         (ta, ka), (tb, kb) = _stamp(a), _stamp(b)
         if ta and tb:
-            # A date-only stamp sits at 00:00, so against a timed station on the same day it
-            # would read as earlier. Without both times, only the dates can be compared.
+            # A date-only stamp sits at 00:00, so compare dates unless both have times.
             backwards = tb < ta if (ka and kb) else tb.date() < ta.date()
             if backwards:
                 flags.append({"check": "time_backwards", "from": step["from"], "to": step["to"],
@@ -215,8 +176,8 @@ def check_track(
                 flags.append({"check": "outlying_step", "from": s["from"], "to": s["to"],
                               "evidence": f"{s['km']:.1f} km, {s['km'] / median:.2f}x the "
                                           f"median hop of {median:.1f} km",
-                              "note": "Check this station's position against every other "
-                                      "source: a mistyped degree or minute looks like this."})
+                              "note": "A hop this long often means a mistyped degree or "
+                                      "minute in the position."})
 
     if bounding_box:
         lon_min, lon_max, lat_min, lat_max = bounding_box

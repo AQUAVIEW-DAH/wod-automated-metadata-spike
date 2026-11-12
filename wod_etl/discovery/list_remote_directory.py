@@ -1,8 +1,6 @@
 """List an open HTTP directory index (Apache/NGINX) or a local folder.
 
-Parses the size and last-modified text that servers print beside each link, and refuses to
-follow links that leave the starting directory -- NCEI's "Parent Directory" link is an
-absolute path rather than '../', so a naive filter walks upward into the whole archive.
+Never follows links that leave the starting directory.
 """
 import logging
 import os
@@ -36,16 +34,9 @@ def list_remote_directory(
 ) -> Dict[str, Any]:
     """List the contents of a local folder, a local archive, or an open HTTP directory index.
 
-    Three inputs are resolved before anything is listed:
-
-    * an NCEI landing page, `/archive/accession/<n>` URL or bare accession number is turned
-      into its data directory (see `resolve_accession_url`) and that is listed, with the
-      resolution recorded under `resolved_from`;
-    * a versioned accession directory (`1.1/`, `2.2/`, each a full copy of the bundle) is
-      narrowed to the latest version, so a recursive crawl does not process every file once
-      per version;
-    * a local `.tar`, `.tar.gz`, `.tgz` or `.zip` is extracted under `data/raw/` and the
-      extracted folder is listed.
+    An NCEI landing page, accession URL or bare number is first resolved to its data directory
+    (`resolved_from`). A versioned accession is narrowed to its latest version (`2.2/`), and a
+    local archive is extracted under `data/raw/`.
     """
     if os.path.isfile(url_or_path) and _is_archive(url_or_path):
         return _list_archive(url_or_path, recursive, filter_extension)
@@ -125,6 +116,9 @@ def list_remote_directory(
 
         if recursive and is_dir and _depth < _MAX_RECURSION_DEPTH:
             sub = list_remote_directory(full_url, True, filter_extension, visited, _depth + 1)
+            if sub.get("error"):                # a partial listing would pass for the whole
+                return {**sub, "source": url_or_path, "total_items": 0, "items": [],
+                        "error": f"could not list {full_url}: {sub['error']}"}
             items.extend(sub.get("items", []))
 
     result = {
@@ -138,10 +132,7 @@ def list_remote_directory(
     return result
 
 
-# An NCEI accession is usually cited by its metadata landing page or by its bare number, and
-# neither is a directory. Crawled, they yield a valid HTTP 200 with zero data files, which
-# reads downstream as "empty accession -- check the URL" and sends the reader looking for a
-# typo that is not there.
+# A landing page or bare accession number is not a directory; crawled, it lists no files.
 _LANDING_PAGE = re.compile(
     r"landing-page|/metadata/|gov\.noaa\.nodc[:.](\d+)|catalog\.data\.gov", re.IGNORECASE)
 _ACCESSION_URL = re.compile(r"/archive/accession/(\d+)", re.IGNORECASE)
@@ -158,22 +149,17 @@ def accession_number(text: str):
     return None
 
 
-# A folder named as NCEI writes an accession -- seven digits, zero-padded (0062621) -- or an
-# archive of one. A bare 5-6 digit folder is too often a date (201511, 151109) to be read as
-# an accession, and output named for the wrong accession is worse than one named for none.
+# A folder named as NCEI writes an accession (seven digits, zero-padded) or an archive of one.
+# A bare 5-6 digit folder is too often a date (201511) to count.
 _ACCESSION_COMPONENT = re.compile(
     r"^(?:0(\d{6})|0*(\d{5,7})\.(?:tar\.gz|tgz|tar\.bz2|tar|zip))$", re.IGNORECASE)
 
 
 def accession_for(text_or_path) -> Optional[str]:
-    """The accession id as NCEI writes it -- seven digits, zero-padded -- or None.
+    """The accession id as NCEI writes it (seven digits, zero-padded), or None.
 
-    Works on everything an accession is cited as or stored under: a landing page, an
-    `/archive/accession/<n>` or `/archive/arc0238/<n>/` URL, a bare number, a tarball name,
-    and a local path such as `data/staging/0303928/CTD_20261012` -- a folder named as NCEI
-    writes an accession, seven digits zero-padded; `201511` in a path is a date, not one. `accession_number` returns
-    the number with its leading zeros stripped (`303928`) and finds nothing in a path; this is
-    the one to key files and folders by.
+    Unlike `accession_number`, it keeps the padding and also reads archive names and local
+    paths, so it can key files and folders.
     """
     text = str(text_or_path or "").strip()
     if not text:
@@ -197,15 +183,12 @@ def _is_accession_reference(text: str) -> bool:
                 or _BARE_ACCESSION.match(str(text)))
 
 
-# The landing page is rendered client-side, but its static HTML still carries the FTP link
-# (and a JSON-LD copy of it): ftp://ftp-oceans.ncei.noaa.gov/nodc/archive/arc0238/0303535/.
-# The HTTPS directory is the same path under /data/oceans/.
+# The archive path (`/archive/arc<NNNN>/<accession>/`) in an ISO record or landing page. The
+# HTTPS data directory is the same path under /data/oceans/.
 _ARCHIVE_PATH = re.compile(r"/archive/(arc\d{4})/(\d{5,7})/?", re.IGNORECASE)
 LANDING_PAGE_URL = ("https://www.ncei.noaa.gov/access/metadata/landing-page/bin/iso"
                     "?id=gov.noaa.nodc:{number}")
-# The same ISO record as plain XML from NCEI's metadata catalogue. It answers in under a second
-# where the landing page, rendered on request, can take a minute or time out altogether -- and
-# it carries the same archive path.
+# The same ISO record as plain XML; faster and more reliable than the landing page.
 ISO_RECORD_URL = ("https://www.ncei.noaa.gov/metadata/geoportal/rest/metadata/item/"
                   "gov.noaa.nodc:{number}/xml")
 DATA_DIR_URL = "https://www.ncei.noaa.gov/data/oceans/archive/{arc}/{number}/"
@@ -214,13 +197,8 @@ DATA_DIR_URL = "https://www.ncei.noaa.gov/data/oceans/archive/{arc}/{number}/"
 def resolve_accession_url(text: str) -> Dict[str, Any]:
     """The HTTPS data directory for an accession, from its landing page, URL or number.
 
-    `{"url", "accession_number", "arc", "landing_page", "resolved_from"}` on success. NCEI
-    renders the file listing with JavaScript, so the directory cannot be computed from the
-    number -- but the accession's ISO record names its archive bundle (`arc0238`), the
-    missing piece. It is read from NCEI's metadata catalogue first, and from the landing
-    page's static HTML (which carries the FTP download link) when the catalogue does not
-    answer. Fetched with retries; on failure the result carries `error` and a `hint` naming
-    the page to open by hand.
+    Returns `{"url", "accession_number", "arc", "landing_page", "resolved_from"}`, or a dict
+    with `error` and `hint`. The bundle (`arc0238`) is read from the ISO record or landing page.
     """
     number = accession_number(text)
     if number is None:
@@ -288,8 +266,7 @@ def _is_archive(path: str) -> bool:
 def _list_archive(path: str, recursive: bool, filter_extension: Optional[str]) -> Dict[str, Any]:
     """Extract a downloaded accession archive under data/raw/ and list what it holds.
 
-    Extracted once: a second call lists the existing folder. Members that would land outside
-    the target -- an absolute path or `..` -- are refused, not extracted.
+    Extracts once; later calls list the existing folder. Members outside the target are refused.
     """
     import shutil
     import tarfile
@@ -323,10 +300,8 @@ def _list_archive(path: str, recursive: bool, filter_extension: Optional[str]) -
                             continue
                         safe.append(member)
                     t.extractall(root, members=safe, filter="data")
-        # A truncated download -- what a flaky NCEI transfer leaves -- raises EOFError or
-        # zlib.error from the decompressor, not a TarError. Whatever was extracted is removed:
-        # a non-empty target is read as "already extracted" on the next call, and would be
-        # listed as the whole accession.
+        # A truncated archive raises EOFError or zlib.error, not TarError. Remove partial
+        # output, since a non-empty target counts as already extracted.
         except (OSError, EOFError, ValueError, zlib.error, tarfile.TarError,
                 zipfile.BadZipFile) as e:
             shutil.rmtree(target, ignore_errors=True)
@@ -341,19 +316,12 @@ def _list_archive(path: str, recursive: bool, filter_extension: Optional[str]) -
 
 
 def _diagnose_empty(url_or_path: str) -> Dict[str, Any]:
-    """Say WHY a listing came back empty, when the URL explains it.
-
-    A metadata landing page is not a data directory, and no amount of retrying makes it one.
-    NCEI renders the file listing client-side, so there is no static directory URL to derive
-    -- the reader has to open the accession page and take the data URL off it. Saying that is
-    the whole value here; guessing a URL pattern would be worse than saying nothing.
-    """
+    """Explain an empty listing when the URL accounts for it (e.g. a metadata landing page)."""
     number = accession_number(url_or_path)
     is_landing = bool(_LANDING_PAGE.search(url_or_path)) or bool(_ACCESSION_URL.search(url_or_path))
     if not (is_landing or _BARE_ACCESSION.match(str(url_or_path))):
-        return {"hint": "The page was fetched but held no file links. It may be an index "
-                        "that renders its listing with JavaScript, or a page that is not a "
-                        "directory at all. Open it and check before retrying."}
+        return {"hint": "The page was fetched but held no file links: it may render its "
+                        "listing with JavaScript, or not be a directory."}
 
     where = (f"https://www.ncei.noaa.gov/archive/accession/download/{number}"
              if number else "the accession's download page")
@@ -361,12 +329,9 @@ def _diagnose_empty(url_or_path: str) -> Dict[str, Any]:
         "error": "not an accession data directory: this is an NCEI metadata landing page or "
                  "a bare accession number, so there are no files to list.",
         "accession_number": number,
-        "hint": f"Open {where} and take the data directory URL from it, then point "
-                f"process_accession at that. NCEI renders the file listing client-side, so "
-                f"the directory URL cannot be derived from the accession number -- it lives "
-                f"under /data/oceans/archive/arc<NNNN>/{number or '<accession>'}/ and only "
-                f"that page says which arc bundle. If the files are already downloaded, "
-                f"point at the local folder instead.",
+        "hint": f"Pass the data directory URL that {where} gives, or a local folder of the "
+                f"downloaded files. The directory is /data/oceans/archive/arc<NNNN>/"
+                f"{number or '<accession>'}/, and only NCEI's pages say which arc bundle.",
     }
 
 
@@ -377,11 +342,7 @@ def _normalize(url: str) -> str:
 
 
 def _is_descendant(base: str, candidate: str) -> bool:
-    """True only if candidate sits at or below base.
-
-    This is what stops the parent-directory link being reported as a child. NCEI writes it
-    as an absolute path (/data/oceans/archive/arc0222), so matching on '../' misses it.
-    """
+    """True only if candidate sits below base; NCEI writes parent links as absolute paths."""
     b, c = urlparse(base), urlparse(candidate)
     if (b.scheme, b.netloc) != (c.scheme, c.netloc):
         return False
@@ -481,11 +442,3 @@ def _mtime(path: str) -> Optional[str]:
         return datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc).isoformat()
     except OSError:
         return None
-
-
-if __name__ == "__main__":
-    import json
-    res = list_remote_directory("https://www.ncei.noaa.gov/data/oceans/archive/arc0222/0287423/")
-    print(json.dumps({k: v for k, v in res.items() if k != "items"}, indent=2))
-    for it in res.get("items", [])[:6]:
-        print(" ", json.dumps(it))

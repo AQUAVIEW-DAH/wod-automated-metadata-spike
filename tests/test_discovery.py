@@ -1,4 +1,4 @@
-"""Phase 1: directory listing, peeking, profiling, loading, cast splitting."""
+"""Discovery: directory listing, profiling, loading, cast splitting."""
 import functools
 import http.server
 import socketserver
@@ -7,7 +7,6 @@ import threading
 import pytest
 
 from wod_etl.discovery import (
-    fetch_and_peek_file,
     list_remote_directory,
     load_tabular,
     profile_raw_data,
@@ -79,18 +78,6 @@ class TestListRemoteDirectory:
         assert {"a.csv", "sub"} <= names
 
 
-class TestFetchAndPeek:
-    def test_reads_only_the_requested_prefix(self, tmp_path):
-        p = tmp_path / "big.txt"
-        p.write_text("A" * 10_000)
-        peek = fetch_and_peek_file(str(p), num_bytes=100)
-        assert peek["peek_size_bytes"] == 100
-        assert len(peek["preview_text"]) == 100
-
-    def test_missing_file_returns_error(self):
-        assert "error" in fetch_and_peek_file("/nonexistent/nope.csv")
-
-
 class TestProfileRawData:
     def test_separates_header_from_data(self):
         prof = profile_raw_data(
@@ -103,8 +90,6 @@ class TestProfileRawData:
 
 
 class TestLoadTabular:
-    """The bridge that used to be a manual step between Phase 2 and Phase 3."""
-
     def test_reads_full_file_with_unit_suffixed_columns(self, tmp_path):
         p = tmp_path / "cast.txt"
         p.write_text("# CRUISE: X\nLAT: 61.9 LON: -172.2\n"
@@ -131,8 +116,7 @@ class TestLoadTabular:
         assert df is None and "error" in info
 
     def test_a_malformed_row_is_reported_not_just_dropped(self, tmp_path):
-        """pandas drops a row whose field count is wrong and warns to stderr, which an
-        unattended run never sees. The loss has to reach the caller."""
+        """pandas only warns on stderr; the dropped row must reach the caller."""
         p = tmp_path / "c.csv"
         p.write_text("Depth,Temp\n0.0,9.1\nLEGEND,a,b,c,d\n10.0,8.9\n")
         df, info = load_tabular(str(p), delimiter=",")
@@ -171,14 +155,12 @@ class TestSplitCasts:
 
 
 class TestCommentsBelowTheHeader:
-    """`header_comment_lines` counted comments ANYWHERE in the 8 KB preview and was then
-    used as a skip count, so one mid-file annotation skipped the real column-header row
-    and promoted the first data row to be the header."""
+    """Only leading comment lines are skipped; later ones must not shift the header."""
 
     def _load(self, tmp_path, name, text):
         p = tmp_path / name
         p.write_text(text)
-        profile = profile_raw_data(fetch_and_peek_file(str(p))["preview_text"], str(p))
+        profile = profile_raw_data(p.read_text(), str(p))
         return profile, load_tabular(str(p), profile)
 
     def test_a_mid_file_comment_does_not_eat_the_header(self, tmp_path):
@@ -216,8 +198,7 @@ class TestCommentsBelowTheHeader:
 
 
 class TestRealValuesAreNotSentinels:
-    """'-9', '-99', '9999' and '99999' were in DEFAULT_NA_VALUES. pandas expands them to
-    their float forms, so a real measurement equal to one silently became NaN."""
+    """Values such as -9 or 9999 can be real, so they are not default missing markers."""
 
     @pytest.mark.parametrize("column,value", [
         ("Air temperature (deg C)", "-9"),
@@ -227,49 +208,20 @@ class TestRealValuesAreNotSentinels:
     def test_a_plausible_value_survives(self, tmp_path, column, value):
         p = tmp_path / "v.csv"
         p.write_text(f"Depth (m),{column}\n0,{value}\n10,1.5\n")
-        profile = profile_raw_data(fetch_and_peek_file(str(p))["preview_text"], str(p))
+        profile = profile_raw_data(p.read_text(), str(p))
         df, _ = load_tabular(str(p), profile)
         assert df[column].iloc[0] == pytest.approx(float(value))
 
     def test_unambiguous_sentinels_are_still_missing(self, tmp_path):
         p = tmp_path / "s.csv"
         p.write_text("Depth (m),Temp (deg C)\n0,-999\n10,-9999\n20,1.5\n")
-        profile = profile_raw_data(fetch_and_peek_file(str(p))["preview_text"], str(p))
+        profile = profile_raw_data(p.read_text(), str(p))
         df, _ = load_tabular(str(p), profile)
         assert df["Temp (deg C)"].isna().sum() == 2
 
 
-class TestPeekDecoding:
-    """A peek cuts at a fixed byte count. Landing mid-character was read as evidence the
-    file was latin-1, and load_tabular then decoded the WHOLE file that way -- turning
-    'µmol/l' into 'Âµmol/l' in a column name and defeating unit detection."""
-
-    FULL = "Nitrate (µmol/l),Depth (m)\n1.5,0\n".encode("utf-8")
-
-    @pytest.mark.parametrize("cut", [9, 10, 11, 12])
-    def test_a_cut_multibyte_character_does_not_change_the_verdict(self, cut):
-        from wod_etl.discovery.fetch_and_peek_file import _decode_peek
-        text, encoding = _decode_peek(self.FULL[:cut])
-        assert encoding == "utf-8"
-        assert "Â" not in text
-
-    def test_a_whole_file_still_decodes(self):
-        from wod_etl.discovery.fetch_and_peek_file import _decode_peek
-        text, encoding = _decode_peek(self.FULL)
-        assert encoding == "utf-8"
-        assert "µmol/l" in text
-
-    def test_a_japanese_export_is_detected_rather_than_mojibaked(self):
-        from wod_etl.discovery.fetch_and_peek_file import _decode_peek
-        text, encoding = _decode_peek("経度,緯度\n1,2\n".encode("cp932"))
-        assert encoding == "cp932"
-        assert "経度" in text
-
-
 class TestMissingPathIsAnError:
     def test_a_nonexistent_path_does_not_become_a_phantom_cast(self):
-        """_read returned the path string as its own content, so split_casts produced a
-        one-row cast whose only datum was the path."""
         res = split_casts("/no/such/file.csv", {"detected_delimiter": "','"})
         assert res["casts"] == []
         assert "not found" in res["error"]
@@ -281,8 +233,6 @@ class TestMissingPathIsAnError:
 
 
 class TestSubdirTraversalGuard:
-    """A nested subdir keeps its nesting, but nothing may escape the destination root."""
-
     @pytest.mark.parametrize("subdir,expected", [
         ("run_07/stationA", "run_07/stationA"),
         ("run_07", "run_07"),
@@ -300,8 +250,6 @@ class TestSubdirTraversalGuard:
 
 
 class TestReaderWarningsReachTheCaller:
-    """load_tabular's warnings used to stop at read_any, which is what the run calls."""
-
     def test_a_dropped_row_is_visible_through_read_any(self, tmp_path):
         from wod_etl.discovery import read_any, sniff_format
         p = tmp_path / "cast.csv"
@@ -312,9 +260,6 @@ class TestReaderWarningsReachTheCaller:
 
 
 class TestALocalCopyIsOnlyReusedWhileCurrent:
-    """A staged file regenerated under the same run id was never read again: the cached copy
-    in raw/<run_id>/ was returned as long as it existed."""
-
     def test_an_unchanged_source_is_cached(self, tmp_path):
         from wod_etl.discovery import download_file
 
@@ -340,17 +285,12 @@ class TestALocalCopyIsOnlyReusedWhileCurrent:
         assert (tmp_path / "raw" / "cast.csv").read_text().endswith("10,19\n")
 
 
-# LeConte's CTD units, offset and all, and the time of the first cast in its August 2016 file.
+# Time units and first-cast time from a real CTD file.
 LECONTE_UNITS = "seconds since 1970-01-01 00:00:00 0:00"
 T0 = 1470773808.0                                           # 2016-08-09 20:16:48 UTC
 
 
 class TestNetCDFCastsAreDatedAndPlacedByTheirOwnVariables:
-    """A NetCDF cast's header listed the file's attributes above the cast's own variables,
-    and the parser keeps the first `Date:` it meets. Every cast in a 155-cast file was dated
-    by `date_created` -- when the FILE was made -- while its own `time` stayed a raw count of
-    seconds, and a bounding-box corner stood in for each cast's position."""
-
     @staticmethod
     def _write(path, times, units=LECONTE_UNITS, fill=None, **attrs):
         """Casts along `profile` with a time, lat and lon each, on a shared depth axis."""
@@ -362,7 +302,7 @@ class TestNetCDFCastsAreDatedAndPlacedByTheirOwnVariables:
             ds.createDimension("profile", n)
             ds.createDimension("z", 3)
             t = ds.createVariable("time", "f8", ("profile",), fill_value=fill)
-            t.units, t.calendar = units, "calendar"      # LeConte's: it names no calendar
+            t.units, t.calendar = units, "calendar"      # placeholder, as in the source file
             t[:] = times
             for name, unit, start, step in (("lat", "degrees_north", 56.82, 0.01),
                                             ("lon", "degrees_east", -132.36, -0.01)):
@@ -429,7 +369,7 @@ class TestNetCDFCastsAreDatedAndPlacedByTheirOwnVariables:
         assert self._coords(casts[0])[0] == (2016, 8, 9, 20, 16)
 
     def test_a_mistyped_epoch_leaves_the_cast_undated_and_says_so(self, tmp_path):
-        """LeConte's keel CTD wrote 1070 for 1970, which puts a 2018 cast in 1118."""
+        """An epoch typo (1070 for 1970) would put a 2018 cast in 1118."""
         units = "seconds since 1070-01-01 00:00:00 0:00"
         path = self._write(tmp_path / "keel.nc", [1536014356.5], units=units,
                            time_coverage_start="2018-09-03")
@@ -476,8 +416,7 @@ class TestNetCDFCastsAreDatedAndPlacedByTheirOwnVariables:
 
 
 class TestStationBlockFiles:
-    """Expedition CTD files: a file header, then per station a `Stn:` line, a level count, a
-    line of column names and rows -- one block straight after another."""
+    """A file header, then per station a `Stn:` line, level count, column names and rows."""
 
     @staticmethod
     def _text(levels=(12, 12), stated=(12, 14)):
@@ -519,8 +458,7 @@ class TestStationBlockFiles:
 
 class TestNetCDFStringDimensions:
     def test_a_string_length_dimension_is_not_the_profile_dimension(self, tmp_path):
-        """NCEI's profile template spells each profile's id along `profile_id_length`,
-        which matches the hint 'profile' and is longer than the one profile there is."""
+        """`profile_id_length` contains 'profile' but counts id characters, not profiles."""
         import netCDF4
         import numpy as np
 

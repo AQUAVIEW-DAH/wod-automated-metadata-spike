@@ -1,17 +1,7 @@
-"""End-to-end driver: an accession URL in, standardized NetCDF files out.
+"""Per-file engine behind `wod-etl confirm`: an accession in, WOD NetCDF files out.
 
-This is the entry point an agent calls. It walks every phase for every file, records each
-outcome in a run manifest, and keeps going when an individual file fails. Nothing here
-raises on bad data -- failures become manifest entries so an unattended run completes and
-can be inspected afterwards.
-
-    from wod_etl.orchestration import process_accession
-    result = process_accession("https://www.ncei.noaa.gov/data/oceans/archive/arc0222/0287423/")
-
-`dataset_type` is optional and normally omitted. An accession is rarely one instrument, so
-each file is classified from its own path, header, columns and depth spacing, and files that
-cannot become a WOD profile -- currents, plankton, empty columns, documentation -- are
-skipped with a stated reason rather than failing four phases later.
+Each file is classified and processed on its own, with every outcome recorded in the run
+manifest; bad data never raises.
 """
 import hashlib
 import json
@@ -24,10 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from wod_etl.config import (
-    ABORT_FAILURE_RATE_MIN_SAMPLE,
-    ABORT_IF_FAILURE_RATE_ABOVE,
     NON_DATA_EXTENSIONS,
-    ON_FILE_ERROR,
     PROCESSED_DIR,
     RUN_WOD_QC,
     RAW_DIR,
@@ -48,14 +35,13 @@ from wod_etl.qc_transforms import apply_qc_auditing, convert_units_and_types
 from wod_etl.verify import validate_intermediate_netcdf, verify_output
 from wod_etl.writers import group_by_file, is_wod_file_name, write_ragged_profiles
 from wod_etl.writers.generate_netcdf_ragged import TITLE as WRITER_TITLE
-from wod_etl.writers.wod_files import folder_scope
+from wod_etl.writers.wod_files import accession_subpath, folder_scope
 from wod_etl.orchestration import run_manifest as mf
 from wod_etl import runlog
 
 log = logging.getLogger(__name__)
 
-# Each source file's result, under `output_dir` unless `per_file_dir` names another place:
-# its NetCDF (validated on its own) and its casts, from which the WOD files are assembled.
+# Per-file results (NetCDF and cached casts) that the WOD files are assembled from.
 PER_FILE_DIR = "per_file"
 CACHE_SUFFIX = ".casts.pkl"
 CACHE_VERSION = 1
@@ -69,11 +55,8 @@ def process_accession(
     run_id: Optional[str] = None,
     recursive: bool = True,
     filter_extension: Optional[str] = None,
-    limit: Optional[int] = None,
     resume: bool = True,
     retry_failed: bool = False,
-    dry_run: bool = False,
-    on_error: str = ON_FILE_ERROR,
     dataset_overrides: Optional[Dict[str, str]] = None,
     process_unidentified_as: Optional[str] = None,
     run_qc: Optional[bool] = None,
@@ -83,57 +66,27 @@ def process_accession(
     file_options: Optional[Dict[str, Dict[str, Any]]] = None,
     per_file_dir: Optional[str] = None,
     assemble: bool = True,
+    source_prefix: str = "",
 ) -> Dict[str, Any]:
-    """Process every data file in an accession directory into WOD files.
+    """Process every data file in an accession into WOD files, one per dataset and year.
 
-    The output is WOD's layout: one file per WOD dataset and year, `wod_ctd_2008_0062621.nc`
-    (`writers.wod_files`), in `output_dir`; input that is no accession is named for its folder.
-    Each source file is processed and validated on its own first -- so a file that fails is
-    that file's failure, and a rerun resumes file by file -- and the WOD files are assembled
-    from the results of the files this call answers for (every file listed and included),
-    never from anything else in a shared folder.
+    Each source file is processed and validated alone first, so failures stay per file and
+    reruns resume; WOD files are assembled only from the files this call covers.
 
-    dataset_type   -- leave None (the default) to classify every file on its own evidence.
-                      Pass a code ("CTD", "OSD", ...) only to FORCE one for the whole run,
-                      which is right when the accession really is one instrument and wrong
-                      the moment it is not.
-    dataset_overrides -- {path_prefix: dataset_type}, e.g. {"3-XBT": "XBT"}. Applied to a
-                      file whose key starts with the prefix, overriding classification for
-                      that folder only. This is the answer to "the accession is mixed and
-                      I know what two of the folders are".
-    process_unidentified_as -- what to do with a file that is profile-shaped but names no
-                      instrument. None (the default) skips it and says so. Set it to a
-                      dataset code to process those files under a stated assumption.
-    run_qc         -- whether to run WOD's own observed-level QC. Defaults to config
-                      RUN_WOD_QC, which is OFF: QC is applied downstream, and a flag written
-                      here is one more thing to reconcile. The ORIGINATOR's flag columns are
-                      carried through either way, verbatim and untranslated.
-    verify         -- read the written NetCDF back at the end and check every value against
-                      the manual's acceptable range for that variable at that depth. On by
-                      default, because the failure that matters most is the one that passes
-                      structural validation: a variable in the wrong unit validates cleanly.
-                      Sets `output_verified`; turn it off only for a run whose output you are
-                      about to discard.
-    include        -- process only these keys (paths relative to the listed root). Everything
-                      else in the listing is left out of the manifest entirely. Keys asked for
-                      and not found are returned in `include_missing`. The accession pipeline
-                      uses this to process the files that need no staging in place.
-    accession      -- the accession this run belongs to, for its log in data/runs/<acc>/,
-                      and written into every cast that does not name its own. Worked out
-                      from the source when omitted; with none, nothing is logged.
-    file_options   -- {key: {"drop": [variable, ...], "metadata": {Key: value}}}: variables
-                      of a file not to write, and header values for its casts -- what a
-                      reviewed decisions.toml says about the file.
-    per_file_dir   -- where each source file's own result goes, in a folder per run:
-                      `<per_file_dir>/<run_id>/`, `<output_dir>/per_file/<run_id>/` by default.
-    assemble       -- write the WOD files at the end (the default). The accession pipeline
-                      turns it off to process two sets of files and assemble them together
-                      (`assemble_profiles` with both runs' `per_file_casts`).
+    dataset_type   -- one dataset for the whole run; None classifies each file.
+    dataset_overrides -- {path_prefix: dataset_type}, overriding classification per folder.
+    process_unidentified_as -- dataset for profile-shaped files naming no instrument; None skips.
+    run_qc         -- WOD observed-level QC; None uses config RUN_WOD_QC (off).
+    verify         -- check written values against the manual's ranges (`output_verified`).
+    include        -- process only these keys; keys not found go to `include_missing`.
+    accession      -- picks the run log (inferred if None); if given, written to casts naming none.
+    file_options   -- {key: {"drop": [...], "metadata": {...}}} from the reviewed decisions.
+    per_file_dir   -- results go in `<per_file_dir>/<run_id>/`; default `<output_dir>/per_file/`.
+    assemble       -- write the WOD files at the end; False leaves it to `assemble_profiles`.
+    source_prefix  -- put before each file's key in its casts' `source_file` (`staged/`).
 
-    Returns the run summary: `outputs` are the WOD files written, `per_file_outputs` each
-    source file's own NetCDF and `per_file_casts` the results they were assembled from.
-    Inspect `failures`, `skipped`, `assembly` and the manifest for anything that did not
-    complete.
+    Returns the run summary: `outputs` (WOD files), `per_file_outputs` (each source file's
+    NetCDF), `per_file_casts` (cached casts), `failures` and `assembly`.
     """
     args = {k: v for k, v in locals().items()}
     owned = runlog.active() is None
@@ -156,11 +109,8 @@ def _process_accession(
     run_id: Optional[str] = None,
     recursive: bool = True,
     filter_extension: Optional[str] = None,
-    limit: Optional[int] = None,
     resume: bool = True,
     retry_failed: bool = False,
-    dry_run: bool = False,
-    on_error: str = ON_FILE_ERROR,
     dataset_overrides: Optional[Dict[str, str]] = None,
     process_unidentified_as: Optional[str] = None,
     run_qc: Optional[bool] = None,
@@ -170,6 +120,7 @@ def _process_accession(
     file_options: Optional[Dict[str, Dict[str, Any]]] = None,
     per_file_dir: Optional[str] = None,
     assemble: bool = True,
+    source_prefix: str = "",
 ) -> Dict[str, Any]:
     """The body of `process_accession`, run inside the accession's log."""
     out_dir = Path(output_dir) if output_dir else PROCESSED_DIR
@@ -181,8 +132,7 @@ def _process_accession(
     if listing.get("error"):
         runlog.event(log, logging.ERROR, f"could not list {url_or_path}: {listing['error']}",
                      kind="listing_error", hint=listing.get("hint"))
-        # `hint` is the actionable half when the URL itself is the problem -- a metadata
-        # landing page rather than a data directory. Dropping it leaves only "error".
+        # Keep `hint`: it explains a bad URL (e.g. a landing page, not a data directory).
         return {"status": "error", "stage": "list_remote_directory",
                 "error": listing["error"], "source": url_or_path,
                 "hint": listing.get("hint"),
@@ -191,24 +141,20 @@ def _process_accession(
     candidates = [i for i in listing.get("items", []) if not i["is_dir"]]
     include_missing = None
     root0 = listing.get("source") or url_or_path
-    present = {_norm_source(i["path"]) for i in candidates}
+    source_prefix = source_prefix or accession_subpath(root0, accession
+                                                       or accession_for(url_or_path))
+    present = {_item_key(root0, i["path"], i["name"]) for i in candidates}
     if include is not None:
         wanted = {str(k).replace("\\", "/").strip("/") for k in include}
         candidates = [i for i in candidates
                       if _item_key(root0, i["path"], i["name"]) in wanted]
         found = {_item_key(root0, i["path"], i["name"]) for i in candidates}
         include_missing = sorted(wanted - found) or None
-    # What this call answers for: every file listed and included, whether or not `limit`
-    # lets it be processed now. Its WOD files hold these files' casts and no others.
+    # Files this call answers for: listed and included.
     listed = {_item_key(root0, i["path"], i["name"]) for i in candidates}
-    answered = {_norm_source(i["path"]) for i in candidates}
-    if limit:
-        candidates = candidates[:limit]
     if not candidates:
         return {"status": "empty", "source": url_or_path,
-                # `hint` carries the diagnosis when the URL itself explains the emptiness --
-                # a metadata landing page is not a directory, and "check the URL" sends the
-                # reader hunting for a typo that is not there.
+                # Prefer `hint` when the URL itself explains the emptiness.
                 "message": listing.get("hint")
                            or "no files found; check the URL or filter_extension",
                 "hint": listing.get("hint"),
@@ -216,14 +162,9 @@ def _process_accession(
                 "listing_total": listing.get("total_items", 0)}
 
     rid = run_id or mf.new_run_id(url_or_path)
-    # Each run's per-file results apart: two runs into one output_dir -- two folders of an
-    # accession, each with its own cast.csv -- must not overwrite each other's.
+    # A folder per run, so runs sharing an output_dir do not overwrite each other.
     per_dir = (Path(per_file_dir) if per_file_dir else out_dir / PER_FILE_DIR) / rid
-    # The key must identify the file, not just name it. A bare basename collapses every
-    # subdirectory's data.csv onto one manifest entry, one cached download and one output
-    # file -- so with recursive=True (the default) all but the last were silently lost.
-    # Keys are relative to what was actually LISTED: a landing page resolves to its data
-    # directory, a versioned accession to its latest version, an archive to its extraction.
+    # Keys are root-relative paths, so same-named files in different folders stay distinct.
     root = listing.get("source") or url_or_path
     items = [{"key": _item_key(root, i["path"], i["name"]),
               "url": i["path"], "size_bytes": i.get("size_bytes")}
@@ -234,9 +175,7 @@ def _process_accession(
               "dataset_overrides": dataset_overrides or {}, "run_wod_qc": qc}
     manifest = (mf.resume_or_create(rid, url_or_path, items, config)
                 if resume else mf.create_manifest(rid, url_or_path, items, config))
-    # A file done in an earlier run whose result is gone -- deleted, or from before results
-    # were kept per file -- is done again: the WOD files are assembled from those results.
-    # So is a key that now names another file: a run id reused on another folder.
+    # Redo a done file whose per-file result is gone, or whose key now names another file.
     urls = {it["key"]: it["url"] for it in items}
     for it in list(manifest["items"].values()):
         moved = it["key"] in urls and it.get("url") != urls[it["key"]]
@@ -250,16 +189,12 @@ def _process_accession(
     todo = mf.pending_items(manifest, retry_failed=retry_failed)
     runlog.event(log, logging.INFO,
                  f"run {rid}: {len(manifest['items'])} file(s) listed under "
-                 f"{listing.get('source') or url_or_path}; {len(todo)} to process"
-                 + (" (dry run)" if dry_run else ""),
+                 f"{listing.get('source') or url_or_path}; {len(todo)} to process",
                  kind="run_start", run_id=rid, source=listing.get("source"),
                  listing={k: listing.get(k) for k in ("resolution", "version",
                                                       "extracted_from") if listing.get(k)},
                  to_process=len(todo))
-    if dry_run:
-        return _dry_run(rid, url_or_path, todo, manifest, dataset_type, dataset_overrides)
 
-    attempted = failed = 0
     for entry in todo:
         key = entry["key"]
 
@@ -277,23 +212,21 @@ def _process_accession(
                                       dataset_overrides=dataset_overrides,
                                       process_unidentified_as=process_unidentified_as,
                                       run_qc=qc, accession=accession,
-                                      options=(file_options or {}).get(key))
-        except Exception as e:                       # noqa: BLE001 - unattended run
+                                      options=(file_options or {}).get(key),
+                                      source_prefix=source_prefix)
+        except Exception as e:                       # noqa: BLE001 - reported, not raised
             result = {"ok": False, "stage": "unexpected",
                       "error": f"{type(e).__name__}: {e}",
                       "traceback": traceback.format_exc(limit=4)}
 
         if result.get("skip"):
-            # Not a failure: the file was read and found not to be WOD profile data. It must
-            # not count toward the abort rate, or an accession that is mostly non-profile
-            # data aborts a run that is working exactly as intended.
+            # Not WOD profile data: a skip, not a failure.
             mf.mark(manifest, key, mf.SKIPPED, reason=result["reason"],
                     evidence=result.get("evidence"), stage=result.get("stage"))
             runlog.event(log, logging.INFO, f"skipped {key}: {result['reason']}", kind="file",
                          key=key, status="skipped", reason=result["reason"])
             continue
 
-        attempted += 1
         if result["ok"]:
             mf.mark(manifest, key, mf.DONE,
                     output_path=result["output_path"], cache_path=result["cache_path"],
@@ -320,9 +253,6 @@ def _process_accession(
                          columns_not_written=not_written or None,
                          casts_not_written=len(result.get("skipped_casts") or []) or None)
         else:
-            failed += 1
-            # The traceback of an unexpected exception is the one thing that says where the
-            # code broke; it used to be built here and then dropped.
             mf.mark(manifest, key, mf.FAILED, stage=result["stage"], error=result["error"],
                     detail=result.get("detail"), traceback=result.get("traceback"))
             runlog.event(log, logging.WARNING,
@@ -330,45 +260,24 @@ def _process_accession(
                          key=key, status="failed", stage=result["stage"],
                          error=result["error"], detail=result.get("detail"),
                          traceback=result.get("traceback"))
-            if on_error == "stop":
-                return _abort(manifest, f"on_error='stop' and {key} failed at "
-                                        f"{result['stage']}")
-
-            if (attempted >= ABORT_FAILURE_RATE_MIN_SAMPLE
-                    and failed / attempted > ABORT_IF_FAILURE_RATE_ABOVE):
-                return _abort(manifest,
-                              f"failure rate {failed}/{attempted} exceeded "
-                              f"{ABORT_IF_FAILURE_RATE_ABOVE:.0%}; this usually means "
-                              f"something systematic is wrong rather than the data being "
-                              f"individually bad")
 
     summary = mf.summarize(manifest)
     summary["status"] = "complete" if summary["complete"] else "incomplete"
     summary.update(_run_report(manifest))
     summary["per_file_outputs"] = summary["outputs"]
-    # The results of the files this call answers for -- never whatever else a shared folder
-    # holds: another accession's, a renamed file's, a file no longer listed.
+    # Only this call's files, not whatever else a shared folder holds.
     summary["per_file_casts"] = list(dict.fromkeys(
         it["cache_path"] for key, it in manifest["items"].items()
         if key in listed and it["status"] == mf.DONE and it.get("cache_path")))
-    if assemble and limit:
-        # A trial on a few files is for looking at, not for output: assembled, it would
-        # replace an earlier full run's WOD files with a few files' casts.
-        summary["outputs"] = summary["per_file_outputs"]
-        summary["assembly"] = {"skipped": f"limit={limit}: a trial run is not assembled; "
-                                          f"its per-file results are per_file_outputs"}
-    elif assemble:
-        _remove_old_layout(manifest, out_dir)
+    if assemble:
         scope = accession or accession_for(url_or_path) or folder_scope(root)
-        base = _norm_source(root).rstrip("/\\")
 
         def owns(source: str) -> bool:
-            """Casts this call may replace: those of the files it answers for, and of files
-            that were under its root and are gone from it. Another run's -- another folder,
-            another include batch -- are left where they are."""
-            src = _norm_source(source)
-            under = src.startswith(base + "/") or src.startswith(base + os.sep)
-            return src in answered or (under and src not in present)
+            """Whether this call may replace a source's casts: covered, or gone from root."""
+            if not source.startswith(source_prefix):
+                return False
+            key = source[len(source_prefix):]
+            return key in listed or key not in present
         assembly = assemble_profiles(summary["per_file_casts"], out_dir, scope, owns=owns)
         summary["outputs"] = [f["path"] for f in assembly["files"]]
         summary["assembly"] = assembly
@@ -377,8 +286,7 @@ def _process_accession(
     summary.update(_verify_written_output(out_dir, summary, verify))
     if include is not None:
         summary["include_missing"] = include_missing
-    # How the input was turned into a listing: a landing page resolved, a version chosen, an
-    # archive extracted. It used to be returned only when the listing failed.
+    # How the input was resolved into a listing (landing page, version, archive).
     summary["listing"] = {k: listing[k] for k in ("resolved_from", "resolution", "version",
                                                   "extracted_from") if listing.get(k)} or None
     return summary
@@ -386,17 +294,9 @@ def _process_accession(
 
 def _verify_written_output(out_dir: Path, summary: Dict[str, Any],
                            verify: bool) -> Dict[str, Any]:
-    """Read the output back and judge the numbers, not just the structure.
+    """Read the output back and check that the values are possible, not only the structure.
 
-    `status: "complete"` says every file was written and passed CF and ragged-array checks.
-    It says nothing about whether the values are possible, and the expensive failures are
-    exactly the ones that validate cleanly -- a column in the wrong unit, a bottom-depth
-    column on the vertical axis, a variable that is entirely fill. So the run checks its own
-    output rather than waiting to be asked.
-
-    `output_verified` is a SEPARATE verdict from `status` on purpose: one is about the run
-    finishing, the other about the data being possible, and a run can be complete and
-    unverified. Report both.
+    `output_verified` is separate from `status`: a run can be complete and unverified.
     """
     if not verify:
         return {"output_verified": None,
@@ -408,7 +308,7 @@ def _verify_written_output(out_dir: Path, summary: Dict[str, Any],
     try:
         # The files this run wrote, not whatever else is in the folder.
         report = verify_output(str(out_dir), paths=summary["outputs"])
-    except Exception as e:                           # noqa: BLE001 - unattended run
+    except Exception as e:                           # noqa: BLE001 - reported, not raised
         return {"output_verified": False,
                 "output_verification": {"error": f"{type(e).__name__}: {e}"}}
 
@@ -417,9 +317,7 @@ def _verify_written_output(out_dir: Path, summary: Dict[str, Any],
         "output_verification": {
             "passed": report["passed"],
             "finding_counts": report["finding_counts"],
-            # Only the findings that mean the data cannot be what it claims are lifted into
-            # the summary; the rest stay in `text` so a run report is not drowned by the
-            # handful of extreme levels every real cast has.
+            # Only high and medium findings; the rest stay in `text`.
             "findings": [f for f in report["findings"] if f["severity"] in ("high", "medium")],
             "value_ranges": {n: {"min": v.get("min"), "max": v.get("max"),
                                  "units": v.get("units")}
@@ -433,29 +331,18 @@ def _verify_written_output(out_dir: Path, summary: Dict[str, Any],
 # ------------------------------------------------------------------ WOD files
 def assemble_profiles(caches: List[str], output_dir, scope: str,
                       owns: Optional[Callable[[str], bool]] = None) -> Dict[str, Any]:
-    """Source files' results, written as WOD files in `output_dir`: one per WOD dataset and
-    year, `wod_ctd_2008_<scope>.nc` (`writers.wod_files`).
+    """Write source files' cached casts as WOD files in `output_dir`, one per dataset and year.
 
-    `caches` are the results to write -- each source file's `<stem>.casts.pkl`, as
-    `process_accession` returns them in `per_file_casts` -- and nothing else is assembled.
-    `scope` names the files: the accession, or for input that is not one, its folder's name.
-    It is required: without it the names would be WOD's own (`wod_ctd_2008.nc`).
-    `owns(source)` says whether this call answers for a source file's casts. A WOD file of this
-    scope already in `output_dir` is replaced or removed only if it does for every source the
-    file holds; one holding another run's sources is left as it is, and said. `None`: the
-    caller owns every file of this scope there (the accession pipeline does).
-
-    The casts go through the same writer a single source's do, so what every cast of a file
-    shares is a file attribute and what differs -- the source file, its notes, a column's
-    name -- is written per cast. Each file is validated before it replaces the last one of its
-    name. Files are written one at a time, so an accession is never held in memory whole.
+    `caches` are `per_file_casts` paths; `scope` (the accession or a folder name) names the
+    files. A file of this scope is replaced or removed only if `owns` holds for all its sources
+    (`owns=None`: all). Each file is validated before it replaces the old one.
 
     Returns `{"files": [{"path", "name", "dataset", "year", "casts", "observations",
     "sources": [{"key", "casts"}], "warnings"}], "problems": [...], "removed": [...]}`.
     """
     if not str(scope or "").strip():
-        raise ValueError("assemble_profiles needs a scope -- the accession, or a folder's "
-                         "name -- or its files would carry WOD's own names")
+        raise ValueError("assemble_profiles needs a scope (the accession, or a folder's "
+                         "name), or its files would carry WOD's own names")
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     owned = (lambda path: True) if owns is None else (lambda path: _holds_only(path, owns))
@@ -523,9 +410,7 @@ def assemble_profiles(caches: List[str], output_dir, scope: str,
                      dataset=group["dataset"], year=group["year"], casts=write["cast_count"],
                      sources=[s["key"] for s in group["sources"]])
 
-    # A file of this scope not written now is not this run's output -- a year whose casts
-    # moved, a dataset the review changed, a file that failed above -- if it is this run's
-    # to remove. A `.part` is a write that did not finish.
+    # Remove this scope's owned files not written now, and unfinished `.part` writes.
     removed = []
     for p in sorted(out.iterdir()):
         if not p.is_file():
@@ -545,8 +430,7 @@ def assemble_profiles(caches: List[str], output_dir, scope: str,
 
 
 def _sources_of(path: Path) -> Optional[List[str]]:
-    """The source files a WOD file this package wrote holds casts from; None for any other
-    file -- WOD's own, one written by something else, one that does not open."""
+    """Source files of a WOD file this package wrote; None for any other or unreadable file."""
     import netCDF4
 
     try:
@@ -566,13 +450,6 @@ def _holds_only(path: Path, owns: Callable[[str], bool]) -> bool:
     return sources is not None and all(owns(s) for s in sources)
 
 
-def _norm_source(source: str) -> str:
-    """A source as it can be compared: a URL as it is, a path resolved -- the same folder
-    reached through a symlink, or spelled relative, is the same folder."""
-    text = str(source)
-    return text if "://" in text else os.path.realpath(text)
-
-
 def _load_casts(path: Path) -> Dict[str, Any]:
     with open(path, "rb") as f:
         payload = pickle.load(f)
@@ -583,31 +460,12 @@ def _load_casts(path: Path) -> Dict[str, Any]:
 
 
 def _save_casts(path: Path, key: str, source: str, built: List[Dict[str, Any]]) -> None:
-    """One file's casts as the writer takes them, for `assemble_profiles`: re-reading the
-    NetCDF would lose what the writer decides only when it sees every cast of a file. The
-    pipeline's own working state -- written and read here only."""
+    """Cache one file's built casts for `assemble_profiles` (re-reading the NetCDF is lossy)."""
     tmp = path.with_name(path.name + ".tmp")
     with open(tmp, "wb") as f:
         pickle.dump({"version": CACHE_VERSION, "key": key, "source": source, "casts": built},
                     f, protocol=pickle.HIGHEST_PROTOCOL)
     os.replace(tmp, path)
-
-
-def _remove_old_layout(manifest: Dict[str, Any], out_dir: Path) -> None:
-    """Output this function wrote before the WOD files: one `<source path>.nc` per source
-    file, directly in `output_dir`. Removed only where it is exactly that -- written by this
-    package, from that item's own source file -- since left, it would be read beside the WOD
-    files holding the same casts."""
-    for key, item in manifest["items"].items():
-        old = out_dir / f"{_output_stem(key)}.nc"
-        if not old.is_file() or is_wod_file_name(old.name):
-            continue
-        if _sources_of(old) != [str(item.get("url"))]:
-            continue
-        old.unlink()
-        runlog.event(log, logging.INFO, f"removed {old.name}: one source file's output as "
-                                        f"written before the WOD files",
-                     kind="wod_file", status="removed", names=[old.name])
 
 
 # ------------------------------------------------------------------ per file
@@ -619,26 +477,23 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
                      run_qc: Optional[bool] = None,
                      accession: Optional[str] = None,
                      options: Optional[Dict[str, Any]] = None,
-                     stem: Optional[str] = None) -> Dict[str, Any]:
-    """Run every phase on one file. Returns {"ok": bool, ...} -- never raises.
+                     stem: Optional[str] = None,
+                     source_prefix: str = "") -> Dict[str, Any]:
+    """Fetch, read, map, write and validate one file. Returns {"ok": bool, ...}; never raises.
 
-    `key` is the file's identity within a run -- its path relative to the accession root.
-    It keeps the raw copy, the output name and the classification evidence distinct for two
-    files that share a basename. Defaults to the basename, right for a single ad-hoc file.
-    `accession` is written into every cast that does not name its own (secondary header 1);
-    `options` carries the file's reviewed `drop` and `metadata` (see process_accession).
-    `stem` names its result files, `<stem>.nc` and `<stem>.casts.pkl`; from the key by default.
+    `key` is the path relative to the accession root (default: basename); `source_prefix`
+    plus `key` is what its casts record as `source_file`. `accession` is written into casts
+    that name none; `options` holds the reviewed `drop` and `metadata`; `stem` names the
+    result files (default: from `key`).
     """
-    out_dir = Path(out_dir)          # callers pass a plain string more often than not
+    out_dir = Path(out_dir)
     key = key or os.path.basename(url.rstrip("/")) or url
     subdir = "/".join(filter(None, [run_id, os.path.dirname(key)]))
-    # Keyed on the full relative path, extension and all: two stationX/data.csv, or a .cnv
-    # and a .btl of one cast, must not write each other's result.
+    # From the full relative path with extension, so `x.cnv` and `x.btl` do not collide.
     stem = stem or _result_stem(key)
     out_path = out_dir / f"{stem}.nc"
     cache_path = out_dir / f"{stem}{CACHE_SUFFIX}"
-    # A file processed again replaces its last result or loses it: what fails now must not
-    # be assembled from what was written before.
+    # Clear the last result so a failure now is not assembled from stale output.
     for stale in (out_path, cache_path):
         stale.unlink(missing_ok=True)
 
@@ -655,9 +510,7 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
                      f"measurements",
                      evidence=fmt.get("evidence"))
     if not fmt.get("readable", False):
-        # Not a document, and still unreadable. That is a failure, not a skip: something put
-        # this file in a data folder and it did not parse as any known format. A silent skip
-        # here is how a real cast file with an unrecognised layout disappears from a run.
+        # Unreadable non-documents fail rather than skip, so unknown layouts are not lost.
         return _fail("sniff_format",
                      f"{fmt['format_family']}: {fmt.get('note') or 'no tabular data found'}",
                      detail=fmt.get("evidence"))
@@ -672,14 +525,12 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
     unstorable: List[Dict[str, str]] = []
     for cast in casts:
         cast.setdefault("local_path", local)
-        # The file as it is in the accession, not the working copy it was read from.
-        cast.setdefault("origin", url)
+        # The file as the accession names it: not a local path, nor the working copy.
+        cast.setdefault("origin", source_prefix + key)
         if accession and not re.search(r"^\s*#?\s*accession\b", cast.get("header_block") or "",
                                        re.IGNORECASE | re.MULTILINE):
             cast["header_block"] = (cast.get("header_block") or "") + f"\nACCESSION: {accession}"
-        # Header values the review supplied go BEFORE the file's own lines: the parser keeps
-        # the first value it meets, and a reviewed decision corrects what the file states
-        # (a generic `Instrument: CTD` becomes the model the reviewer names).
+        # Reviewed header values go first: the parser keeps the first value it meets.
         review = "\n".join(f"{k}: {v}" for k, v in ((options or {}).get("metadata")
                                                     or {}).items())
         if review:
@@ -705,8 +556,7 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
         built.append(b)
         qc_summaries.append(b.pop("_qc_summary"))
 
-    # An exact duplicate -- the same time, position and values as a cast already built -- is
-    # written once: a source that lists a cast twice does not hold two casts.
+    # Write exact duplicates (same time, position and values) once.
     seen: Dict[str, str] = {}
     unique = []
     for b in built:
@@ -731,16 +581,14 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
         seen[fingerprint] = cast_id
         unique.append(b)
     built = unique
-    # Columns and levels dropped are counted over the casts that are written: a cast left
-    # out takes nothing out of the output.
+    # Count dropped columns and levels over written casts only.
     levels_dropped = from_pressure = 0
     for b in built:
         unstorable.extend(b.pop("_unstorable", []))
         levels_dropped += b.pop("_levels_dropped", 0)
         from_pressure += b.pop("_from_pressure", False)
 
-    # What the source held that the output does not, said in the output itself: a reader
-    # of the NetCDF should not need the run log to learn a column or a cast was left out.
+    # Record in the output itself which columns and casts were not written.
     file_notes = []
     not_written = sorted({f"{u['column']} ({u['variable']})" for u in unstorable})
     if not_written:
@@ -756,10 +604,7 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
                                                  or []) + file_notes
 
     if not built:
-        # A cast that was excluded on evidence, or holds no measurements at all, is a SKIP:
-        # the pipeline read it correctly and there is nothing to standardize. A cast that
-        # could not be mapped is a FAILURE and must be reported as one, because it usually
-        # means the file needs staging rather than that it holds nothing.
+        # Excluded or empty casts make a skip; unmappable ones a failure (usually needs staging).
         reasons = sorted({s["reason"] for s in skipped_casts})
         kinds = {c.get("skip_kind") for c in classifications if c.get("skip_kind")}
         if kinds and kinds <= {"excluded", "no_data", "unidentified", "sidecar"}:
@@ -771,8 +616,7 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
                      detail=skipped_casts)
 
     # -- write and validate ------------------------------------------------
-    # One file's casts, validated on their own so a file that cannot be written is that
-    # file's failure. The WOD files are assembled from these (`assemble_profiles`).
+    # Validate this file's casts alone, so a write failure stays this file's.
     write = write_ragged_profiles(built, str(out_path))
     if write.get("status") != "success":
         return _fail("generate_netcdf_ragged", write.get("error", "write failed"))
@@ -790,7 +634,7 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
     date_only = sum(1 for v in classifications
                     if v.get("date_known") and v.get("time_of_day_known") is False)
     code_lookups = _coded_header_report(built)
-    # Last, once nothing more can fail: a file whose result is saved is a file that is done.
+    # Saved last: a saved result marks the file done.
     _save_casts(cache_path, key, url, built)
 
     return {
@@ -840,10 +684,12 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
                 run_qc=RUN_WOD_QC, drop=None):
     """Classify, map, convert and QC one cast. Returns (built or None, verdict).
 
-    `drop` names variables the review left out of this file (Table 3a names or the file's
-    own column names, any case): they are not written, and the report says so."""
+    `drop` names variables not to write (Table 3a or column names, any case)."""
     df, derived = _depth_from_pressure(cast["df"], cast.get("header_block", ""))
     header = cast.get("header_block", "") + (f"\n{derived}" if derived else "")
+    df, reversed_note = _shallowest_first(df)
+    if reversed_note:
+        header += f"\nNote: {reversed_note}."
     depth_inc = _depth_increment(df)
 
     verdict = classify_dataset(path=key, columns=[str(c) for c in df.columns],
@@ -855,6 +701,10 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
     verdict["chosen_dataset_type"] = chosen
     verdict["chosen_by"] = source
     verdict["depth_from_pressure"] = bool(derived)
+    df, header, surface = _at_the_surface(df, header, chosen, key)
+    if surface:
+        verdict["surface"] = surface
+        depth_inc = None
 
     if chosen is None:
         verdict["skip_kind"] = "excluded" if verdict.get("exclusion") else "unidentified"
@@ -864,18 +714,14 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
             "no instrument identified from path, header, columns or depth spacing")
         return None, verdict
 
-    # A long-format table names its variables in a cell, so its only measurement column is
-    # 'value' and maps to nothing. Read as it stands it skipped as "a station list or
-    # metadata sidecar", which is wrong twice: it holds measurements, and a file that needs
-    # reshaping is a failure to report, not a skip to file away.
+    # A long-format table needs reshaping: report that, not a sidecar skip.
     if verdict.get("long_format"):
         verdict["skip_kind"] = "needs_staging"
         verdict["skip_reason"] = verdict["long_format"]["action"]
         return None, verdict
 
     spec = query_wod_spec(chosen, [str(c) for c in df.columns], depth_increment_m=depth_inc)
-    # One level has no increment and is no high-resolution profile: a CTD cast of a single
-    # level goes to OSD with the rest of the low-resolution data (manual p.19).
+    # A single-level CTD cast is not high-resolution: it goes to OSD (manual p.19).
     if spec.get("wod_dataset_code") == "CTD" and depth_inc is None and _levels(df) < 2:
         spec = query_wod_spec("OSD", [str(c) for c in df.columns], depth_increment_m=None)
         verdict["single_level_to_osd"] = True
@@ -901,13 +747,13 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
             {"column": m["raw_column"], "kind": "dropped_by_decision",
              "variable": f"{m['wod_name']}, left out by decisions.toml",
              "reason": "the review said not to write it (drop)"} for m in removed)
-    # Every column that is not written is said: one WOD has no code for (from triage), one
-    # the dataset does not store (Table 3a), and one nothing recognised at all.
+    # Every column not written: no WOD code, not in the dataset (Table 3a), a unit with no
+    # conversion, or unrecognised.
     explained = {d["column"] for d in contract.get("dropped_columns") or []} | {
         u["column"] for u in verdict.get("unstorable_columns") or []}
     verdict["unstorable_columns"] = list(verdict.get("unstorable_columns") or []) + [
         d for d in contract.get("dropped_columns") or []
-        if d.get("kind") in ("not_in_dataset", "dropped_by_decision")
+        if d.get("kind") in ("not_in_dataset", "unit_not_convertible", "dropped_by_decision")
     ] + [{"column": c, "variable": "not recognised as a WOD variable", "kind": "unrecognised",
           "reason": "no Table 3a variable matches its name"}
          for c in contract.get("unmapped_columns") or [] if c not in explained]
@@ -915,6 +761,10 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
     verdict["when"] = _when(pc)
     verdict["time_of_day_known"] = pc.get("hour") is not None
     verdict["date_known"] = pc.get("year") is not None
+    if df.empty:
+        verdict["skip_kind"] = "empty"
+        verdict["skip_reason"] = "no levels: the source cast has a header and no data rows"
+        return None, verdict
     if not contract["column_mapping"]:
         verdict["skip_kind"] = "unmappable"
         verdict["skip_reason"] = (
@@ -923,62 +773,45 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
             f"not the row that was read, or none of these are Table 3a variables.")
         return None, verdict
 
-    # Triage question 2, asked here so an unattended run reports what is actually wrong
-    # instead of a validation error three phases later. Two different answers:
+    # Check for measurements now rather than fail validation later.
     measured, empty = _measurement_columns(df, contract)
     if not measured:
         verdict["skip_kind"] = "sidecar"
         verdict["skip_reason"] = (
-            "no measured variable: this file carries coordinates and identifiers but "
-            "nothing from Table 3a. It is a station list or metadata sidecar, not a cast -- "
-            "use it to stage coordinates INTO the cast files that reference it (Phase 0, "
-            "wod_etl/staging/), not as input on its own.")
+            "no measured variable: the file holds coordinates and identifiers but no Table 3a "
+            "variable, so it is a station list or metadata sidecar, not a cast.")
         return None, verdict
     if empty:
         verdict["skip_kind"] = "no_data"
         verdict["skip_reason"] = (
             f"no measurements: every mapped measurement column is empty "
-            f"({', '.join(empty)}). This is the 'Not analyzed' case -- the file is "
-            f"well-formed and holds nothing to standardize.")
+            f"({', '.join(empty)}), e.g. all 'Not analyzed'.")
         return None, verdict
 
-    # A cast with no position or no depth axis cannot become a valid profile. Writing it
-    # anyway produces a NetCDF that fails validation with an error naming the symptom --
-    # "'lat' is entirely missing" -- rather than the cause, so stop here and say where the
-    # value has to come from. A missing TIME is only a validator warning, so it does not
-    # block: it is recorded and reported instead.
+    # No position or depth: stop here and name the cause. A missing time only warns.
     missing = contract.get("missing_required_coordinates") or []
     blocking = [c for c in missing if c in BLOCKING_COORDINATES]
     if blocking:
         verdict["skip_kind"] = "unmappable"
         verdict["skip_reason"] = (
-            f"missing required coordinate(s): {', '.join(blocking)}. They are not in the "
-            f"data file or its header block. Stage them in first -- from a sibling station "
-            f"list, the folder readme, or a cruise report -- and record where each came "
-            f"from (Phase 0, wod_etl/staging/).")
+            f"missing required coordinate(s): {', '.join(blocking)}. Neither the data nor "
+            f"its header block states them.")
         return None, verdict
     verdict["missing_coordinates"] = missing or None
 
-    # Pressure in decibars with a latitude has become depth already (_depth_from_pressure).
-    # What is left here cannot: written anyway, it produces a NetCDF with no depth axis that
-    # fails validation with "'z' is entirely missing", three phases from the cause.
+    # Convertible pressure is already depth (_depth_from_pressure); stop if no depth axis.
     if not any(m["wod_code"] == DEPTH_SENTINEL_CODE for m in contract["column_mapping"]):
         has_pressure = any(m["wod_code"] == 25 for m in contract["column_mapping"])
         verdict["skip_kind"] = "unmappable"
         verdict["skip_reason"] = (
             "pressure but no depth: the pressure is not in decibars, so depth was not "
-            "computed from it. Convert it during staging with "
-            "wod_etl.staging.pressure_to_depth, which needs the cast's latitude, and record "
-            "that depth was derived."
+            "computed from it."
             if has_pressure else
-            "no depth axis: no column resolves to depth, and there is no pressure column to "
-            "derive one from. A profile cannot be written without one.")
+            "no depth axis: no column resolves to depth, and no pressure column to derive "
+            "one from.")
         return None, verdict
 
-    # A level where nothing was measured -- a gridded file's padding below the cast, a bin
-    # the instrument never reached, a pressure the originator blanked T and S at -- carries
-    # only its vertical position, and WOD has no level without a value. Pressure does not
-    # count as a value here: on a CTD it is the coordinate the level was taken at.
+    # Drop levels with no value (WOD has none); pressure, the level's coordinate, does not count.
     import pandas as pd
 
     values = [c for c in measured if next((m["wod_code"] for m in contract["column_mapping"]
@@ -1002,23 +835,85 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
             verdict)
 
 
-# Coordinates the writer cannot do without. `time` is deliberately absent: the validator
-# treats a missing time as a warning, so blocking on it here would reject casts that WOD
-# accepts -- and historical casts with a date but no clock time are common.
+def _shallowest_first(df):
+    """Reverse a cast recorded deepest first (manual p.52), unless it goes both ways."""
+    import pandas as pd
+
+    from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE, match_variable
+
+    depth = next((c for c in df.columns if match_variable(str(c)) == DEPTH_SENTINEL_CODE), None)
+    z = pd.to_numeric(df[depth], errors="coerce").dropna() if depth is not None else None
+    if z is None or len(z) < 3:
+        return df, None
+    steps = z.diff().dropna()
+    steps = steps[steps != 0]
+    if len(steps) and (steps < 0).mean() >= 0.9 and z.iloc[0] > z.iloc[-1]:
+        return (df.iloc[::-1].reset_index(drop=True),
+                "levels recorded deepest first, reversed so the shallowest comes first "
+                "(manual p.52)")
+    return df, None
+
+
+def _at_the_surface(df, header: str, dataset: Optional[str], key: str):
+    """Give surface data a depth axis (manual p.20).
+
+    - SUR track: one cast at 0 m; observations keep latitude and longitude (codes 30, 31) and
+      gain a Julian year-day (code 32, p.37). The header takes the first observation's.
+    - A discrete surface sample ('underway' or 'surface' in name or header): one level at 0 m.
+
+    Returns (df, header, note); unchanged, with note None, when a depth axis exists."""
+    import pandas as pd
+
+    from wod_etl.discovery.read_any import SURFACE_WORDS
+    from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE, match_variable
+    from wod_etl.staging.parse import parse_coordinate
+    from wod_etl.staging.tracks import clock_column, clock_times
+
+    cols = [str(c) for c in df.columns]
+    codes = {c: match_variable(c) for c in cols}
+    if DEPTH_SENTINEL_CODE in codes.values():
+        return df, header, None
+    zero = "depth 0 m: surface data, and no intake or sampling depth is stated (manual p.20)"
+    if dataset != "SUR":
+        if len(df) == 1 and SURFACE_WORDS.search(f"{key} {header}"):
+            return pd.concat([pd.Series([0.0], name="Depth (m)"), df.reset_index(drop=True)],
+                             axis=1), "\n".join(filter(None, [header, f"Note: {zero}."])), zero
+        return df, header, None
+    numeric = lambda c: pd.to_numeric(df[c], errors="coerce").notna().mean() > 0.9
+    lat = next((c for c in cols if codes[c] == 30 and numeric(c)), None)
+    lon = next((c for c in cols if codes[c] == 31 and numeric(c)), None)
+    if not (lat and lon):
+        return df, header, None
+    out = df.drop(columns=[c for c in cols if codes[c] in (30, 31) and c not in (lat, lon)])
+    clock = clock_column(cols)
+    lines = [header, f"Latitude: {parse_coordinate(df[lat].iloc[0])}",
+             f"Longitude: {parse_coordinate(df[lon].iloc[0])}"]
+    note = f"SUR: {len(df)} observations along the track, one cast; {zero}"
+    if clock:
+        when, stated_utc = clock_times(df[clock])
+        if when.notna().any():
+            first = when.dropna().iloc[0]
+            jan1 = pd.Timestamp(year=first.year, month=1, day=1)
+            out["Julian year-day"] = (when - jan1).dt.total_seconds() / 86400.0
+            lines += [f"Date: {first:%Y-%m-%d}", f"Time: {first:%H:%M:%S}"]
+            if stated_utc or "utc" in clock.lower():
+                lines.append("TIME_ZONE: UTC")
+            note += (f"; year-day from 0.00 at 00:00 1 January {first.year} (the manual's "
+                     f"definition on p.37; its worked example implies one more)")
+        out = out.drop(columns=[clock])
+    out.insert(0, "Depth (m)", 0.0)
+    return out, "\n".join(filter(None, lines + [f"Note: {note}."])), note
+
+
+# Coordinates the writer cannot do without; not `time`, as WOD accepts casts without it.
 BLOCKING_COORDINATES = ("latitude", "longitude", "depth")
 
-# Table 3a gives latitude, longitude and julian day variable codes, so the mapping contract
-# calls them measurements. They locate a cast; they are not something measured in it, and a
-# file whose only "measurements" are these has no data in it at all.
+# Table 3a codes that locate a cast rather than measure it (latitude, longitude, julian day).
 _COORDINATE_CODES = {30, 31, 32}
 
 
 def _measurement_columns(df, contract):
-    """(real measurement columns, those of them that are entirely empty).
-
-    The second list is returned only when EVERY measurement column is empty; a file with
-    one empty column among five is normal and must keep going.
-    """
+    """(measurement columns, empty ones); the second is non-empty only if all are empty."""
     import pandas as pd
 
     measured = [m["raw_column"] for m in contract["column_mapping"]
@@ -1033,12 +928,7 @@ def _measurement_columns(df, contract):
 
 
 def _choose_dataset_type(explicit, override, verdict, process_unidentified_as):
-    """Which dataset type this cast is processed as, and on whose authority.
-
-    Precedence: a per-folder override, then a run-wide explicit type, then the file's own
-    evidence. An explicit type deliberately beats an exclusion -- an operator who says
-    'this folder is XBT' has looked at it, and the classifier has not.
-    """
+    """(dataset type, chosen_by): override, explicit type (beats an exclusion), then evidence."""
     if override:
         return override, "dataset_overrides"
     if explicit:
@@ -1067,24 +957,17 @@ def _override_for(key: str, overrides: Optional[Dict[str, str]]) -> Optional[str
 
 # ------------------------------------------------------------------ helpers
 def _prefilter(key: str, dataset_type, dataset_overrides) -> Optional[Dict[str, Any]]:
-    """Skip a file before downloading it, from its path alone.
-
-    Only two things are certain from a name: an extension that is documentation or an
-    archive, and a folder that names content WOD cannot store. Everything else waits until
-    the bytes are in hand.
-    """
+    """Skip by path, before download: non-data extensions, NCEI bundle files, excluded folders."""
     if Path(key).suffix.lower() in NON_DATA_EXTENSIONS:
         return {"reason": f"{Path(key).suffix.lower()} is documentation or a container, "
                           f"not measurements",
                 "stage": "prefilter"}
-    # NCEI's own bundle files, by name. Downloaded and sniffed, the readme and journal are
-    # prose that does not parse -- a FAILURE, since they are not documents by format -- and
-    # `<accession>_lonlat.txt` is two numeric columns that parse as a table.
+    # NCEI bundle files would otherwise fail to parse or read as tables.
     bundle = ncei_bundle_role(Path(key).name)
     if bundle:
         return {"reason": f"NCEI bundle file: {bundle}", "stage": "prefilter"}
     if dataset_type or _override_for(key, dataset_overrides):
-        return None                       # an operator named this folder; do not second-guess
+        return None                       # a dataset named by the caller beats path exclusions
     verdict = classify_dataset(path=key)
     if verdict.get("exclusion") and verdict["exclusion"]["matched_in"] == "path":
         return {"reason": f"not WOD profile data: {verdict['exclusion']['reason']}",
@@ -1094,70 +977,8 @@ def _prefilter(key: str, dataset_type, dataset_overrides) -> Optional[Dict[str, 
     return None
 
 
-def _dry_run(rid, source, todo, manifest, dataset_type, dataset_overrides):
-    """What would happen, with the dataset each file would be processed as.
-
-    A local file is triaged from its head -- format, header text, columns -- exactly as
-    `classify_accession` does, so the answer matches the real run. A dry run on a staged
-    folder used to classify by file NAME only, and eleven CTD casts came back
-    `dataset_type: null` while the real run called them CTD at high confidence. A remote
-    file is still judged by its path, because nothing has been downloaded; each item says
-    which it was.
-    """
-    from wod_etl.discovery import classify_file
-
-    would, skipped, staging, undecided = [], [], [], []
-    for entry in todo:
-        key = entry["key"]
-        pre = _prefilter(key, dataset_type, dataset_overrides)
-        if pre is not None:
-            skipped.append({"key": key, **pre})
-            continue
-        override = _override_for(key, dataset_overrides)
-        local = os.path.exists(str(entry.get("url") or ""))
-        if local:
-            v = classify_file(entry["url"], rel=key)
-            decided_by = "file head (format, header, columns)"
-        else:
-            cd = classify_dataset(path=key)
-            v = {"action": ("exclude" if cd.get("exclusion") else
-                            "process" if cd.get("dataset_type") else "inspect"),
-                 "dataset_type": cd.get("dataset_type"), "confidence": cd["confidence"],
-                 "reason": (cd.get("exclusion") or {}).get("reason"),
-                 "evidence": cd["evidence"]}
-            decided_by = "path only (remote; not downloaded)"
-
-        forced = override or dataset_type
-        if forced and v["action"] not in ("document",):
-            would.append({"key": key, "dataset_type": forced,
-                          "decided_by": "dataset_overrides" if override else "explicit argument",
-                          "evidence": v.get("evidence", [])[:2]})
-        elif v["action"] == "process":
-            would.append({"key": key, "dataset_type": v["dataset_type"],
-                          "decided_by": f"{decided_by} ({v['confidence']} confidence)",
-                          "evidence": v.get("evidence", [])[:2]})
-        elif v["action"] == "stage":
-            staging.append({"key": key, "reason": v["reason"]})
-        elif v["action"] in ("exclude", "document", "sidecar"):
-            skipped.append({"key": key, "reason": v.get("reason") or v["action"],
-                            "stage": "dry_run", "decided_by": decided_by})
-        else:
-            undecided.append({"key": key, "reason": v.get("reason"),
-                              "decided_by": decided_by})
-    return {"status": "dry_run", "run_id": rid, "source": source,
-            "would_process": would, "would_skip": skipped,
-            "needs_staging": staging, "undecided": undecided,
-            "already_done": [k for k, v in manifest["items"].items()
-                             if v["status"] in mf.TERMINAL],
-            "note": "Local files are triaged from their heads, as the real run would. Remote "
-                    "files are judged by path only -- the real run reclassifies them from "
-                    "their content, so those types can change. `needs_staging` fails in a "
-                    "real run; `undecided` is skipped unless process_unidentified_as is "
-                    "set."}
-
-
 def _run_report(manifest) -> Dict[str, Any]:
-    """Dataset mix, skip reasons and dropped columns -- what a run must report."""
+    """Dataset mix, skip reasons and dropped columns for the run summary."""
     types: Dict[str, int] = {}
     skips: Dict[str, int] = {}
     dropped: Dict[str, int] = {}
@@ -1168,8 +989,7 @@ def _run_report(manifest) -> Dict[str, Any]:
     where_not_written: Dict[str, List[str]] = {}
     levels_without_data = from_pressure = 0
     for it in manifest["items"].values():
-        # Casts a written file left out -- no position, nothing measured, a duplicate. The
-        # file is done, so without this they would vanish from the report.
+        # Casts a done file left out (no position, nothing measured, duplicate).
         if it["status"] == mf.DONE:
             levels_without_data += it.get("levels_without_data") or 0
             from_pressure += it.get("casts_depth_from_pressure") or 0
@@ -1194,8 +1014,7 @@ def _run_report(manifest) -> Dict[str, Any]:
     return {"dataset_types": types, "skipped_reasons": skips,
             "unstorable_columns_dropped": dropped,
             "outputs_without_time": no_time or None,
-            # A date with no time of day. Not missing -- WOD accepts it -- but it is written
-            # with a fill GMT_time, and a reader who looks only at `time` sees 00:00.
+            # Date but no time of day: written with a fill GMT_time, so `time` reads 00:00.
             "outputs_without_time_of_day": date_only or None,
             # Coded metadata written as the originator's text because no unique code matched.
             "coded_headers_not_resolved": unresolved_codes or None,
@@ -1206,8 +1025,7 @@ def _run_report(manifest) -> Dict[str, Any]:
 
 
 def _cast_left_out(c: Dict[str, Any]) -> str:
-    """'#98 (2017-09-13T22:03): no latitude, longitude' -- which source profile (counted from
-    0, as the source stores them), when, and why."""
+    """'#98 (2017-09-13T22:03): no latitude': source profile index (from 0), when, why."""
     reason = c["reason"].split(". ")[0]
     m = re.match(r"missing required coordinate\(s\): (.+)", reason)
     reason = (f"duplicate of #{c['duplicate_of']}" if c.get("duplicate_of") is not None else
@@ -1217,7 +1035,7 @@ def _cast_left_out(c: Dict[str, Any]) -> str:
 
 def _log_summary(result: Dict[str, Any]) -> None:
     """One closing line per run, with the fields a report must carry."""
-    if result.get("status") in ("error", "empty", "dry_run"):
+    if result.get("status") in ("error", "empty"):
         runlog.event(log, logging.INFO, f"process_accession ended: {result.get('status')}",
                      kind="run_end", status=result.get("status"),
                      error=result.get("error"), hint=result.get("hint"))
@@ -1233,27 +1051,7 @@ def _log_summary(result: Dict[str, Any]) -> None:
                  skipped_reasons=result.get("skipped_reasons"),
                  output_verified=result.get("output_verified"),
                  findings=verification.get("findings"),
-                 abort_reason=result.get("abort_reason"),
                  manifest=result.get("manifest_path"))
-
-
-def _abort(manifest, reason: str) -> Dict[str, Any]:
-    runlog.event(log, logging.ERROR, f"run aborted: {reason}", kind="abort", reason=reason)
-    summary = mf.summarize(manifest)
-    summary["status"] = "aborted"
-    summary["abort_reason"] = reason
-    summary.update(_run_report(manifest))
-    # Nothing is assembled from a run that stopped on a systematic failure: the WOD files in
-    # output_dir, if any, are an earlier run's. The files it did write are the ones most
-    # worth checking -- whatever went wrong is usually visible in them.
-    summary["per_file_outputs"] = summary["outputs"]
-    summary["outputs"] = []
-    summary["output_verified"] = None
-    summary["output_verification"] = {
-        "skipped": "run aborted, and no WOD file was written from it (any in output_dir are "
-                   "an earlier run's); check the files it did write with "
-                   "verify_output(output_dir, paths=result['per_file_outputs'])"}
-    return summary
 
 
 def _item_key(root: str, path: str, name: str) -> str:
@@ -1266,14 +1064,12 @@ def _item_key(root: str, path: str, name: str) -> str:
 
 
 def _result_stem(key: str) -> str:
-    """'stationA/data.csv' -> 'stationA__data.csv': a source file's result files, named by
-    its path, extension included -- `x.cnv` and `x.btl` are two files."""
+    """'stationA/data.csv' -> 'stationA__data.csv': result-file stem, extension kept."""
     return re.sub(r"[^A-Za-z0-9._-]+", "_", key.replace("/", "__")).strip("_") or "cast"
 
 
 def _result_stems(keys) -> Dict[str, str]:
-    """Every key's stem, made unique: two keys that flatten to one name (`a/b.csv` and
-    `a__b.csv`) each get a digest of their key."""
+    """Every key's stem; keys that flatten to one stem (`a/b.csv`, `a__b.csv`) get a digest."""
     keys = list(keys)
     stems = {k: _result_stem(k) for k in keys}
     counts: Dict[str, int] = {}
@@ -1285,15 +1081,13 @@ def _result_stems(keys) -> Dict[str, str]:
 
 
 def _output_stem(key: str) -> str:
-    """'stationA/data.csv' -> 'stationA__data'. A flat key is unchanged. The name output was
-    written under before the WOD files (and still is for a taxa haul)."""
+    """'stationA/data.csv' -> 'stationA__data': a per-haul output file's stem."""
     stem = key[:-len(Path(key).suffix)] if Path(key).suffix else key
     return re.sub(r"[^A-Za-z0-9._-]+", "_", stem.replace("/", "__")).strip("_") or "cast"
 
 
 def _when(pc: Dict[str, Any]) -> Optional[str]:
-    """A cast's date and time as the report names it -- a source index alone does not say
-    which cast it was."""
+    """A cast's date and time for the report, as `YYYY-MM-DDTHH:MM`."""
     if pc.get("year") is None:
         return None
     text = f"{int(pc['year']):04d}-{int(pc.get('month') or 1):02d}-{int(pc.get('day') or 1):02d}"
@@ -1303,15 +1097,11 @@ def _when(pc: Dict[str, Any]) -> Optional[str]:
 
 
 def _depth_from_pressure(df, header: str):
-    """(df, note): a cast measured on pressure surfaces, given the depth column WOD requires.
+    """(df, note): add the depth column WOD requires to a cast on pressure surfaces.
 
-    Not a judgement call: "Casts with measured data on pressure surfaces have their depths
-    computed, so depth is always present and the pressure value is stored as a variable"
-    (WOD manual, cast structure). Depth is the UNESCO 1983 formula
-    (Fofonoff and Millard) at the cast's own latitude, and the note returned goes into the
-    output's comment. The cast is returned unchanged -- and refused later, saying why --
-    when it has a depth column already, no pressure in decibars (a CTD's pressure with no
-    unit is decibars), or no latitude to compute with.
+    Depth uses the UNESCO 1983 formula (Fofonoff and Millard) at the cast's latitude. Unchanged
+    if the cast has depth already, no pressure in decibars (one with no unit is taken as
+    decibars), or no latitude.
     """
     import numpy as np
     import pandas as pd
@@ -1324,8 +1114,9 @@ def _depth_from_pressure(df, header: str):
         return df, None
     pressure = next((c for c in columns if match_variable(c) == 25), None)
     unit = re.search(r"[(\[]\s*([^)\]]*?)\s*[)\]]", pressure or "")
-    if pressure is None or (unit and not re.fullmatch(r"dbar|decibars?|db", unit.group(1),
-                                                      re.IGNORECASE)):
+    # 'decibar = 10000 pascals' is decibars with an explanation attached.
+    if pressure is None or (unit and not re.match(r"(?:dbar|decibars?|db)\b", unit.group(1),
+                                                  re.IGNORECASE)):
         return df, None
     latitude = (parse_header_block(header).get("coordinates") or {}).get("latitude")
     if latitude is None:
@@ -1374,10 +1165,3 @@ def _skip(stage: str, reason: str, evidence=None) -> Dict[str, Any]:
     """Read successfully, and found not to be WOD profile data. Not a failure."""
     return {"ok": False, "skip": True, "stage": stage, "reason": reason,
             "evidence": evidence}
-
-
-if __name__ == "__main__":
-    import sys
-
-    target = sys.argv[1] if len(sys.argv) > 1 else str(RAW_DIR)
-    print(json.dumps(process_accession(target, limit=5, dry_run=True), indent=2))

@@ -1,33 +1,8 @@
-"""Resolve a coded metadata value against WOD's published code list.
+"""Resolve coded metadata values against WOD's published code lists.
 
-A coded field holds a CODE. `Platform Code` is 4959, not 'Shunyo-Maru'; `Instrument` is 411,
-not 'SBE 911plus'. Writing the originator's text into a coded field produces a file that
-validates and that no WOD tool can read back -- so this looks the text up, and only a value
-that resolves to exactly ONE code is treated as that code.
-
-    from wod_etl.reference.code_lists import lookup_code
-
-    lookup_code("secondary_header", 3, "Shunyo-Maru")
-    # {"status": "ambiguous", "candidates": [{"code": "4959", "label": "SHUNYO MARU"},
-    #                                        {"code": "10793", "label": "SHUNYO MARU (R/V;..."}]}
-
-The lists are fetched from NCEI on first use and cached under
-`config.CODE_LIST_CACHE_DIR`, with the date they were retrieved -- they change between WOD
-releases, so every result says which copy it was checked against. A stale cache is refetched
-after `config.CODE_LIST_MAX_AGE_DAYS`; if that fails the stale copy is used and says so.
-Nothing raises: with no network and no cache the status is `unavailable`.
-
-Statuses, and what a caller does with each:
-
-| status            | meaning                                           | write              |
-| ---               | ---                                               | ---                |
-| `matched`         | exactly one entry's name equals the value         | the code           |
-| `already_a_code`  | the value is a number in the list (or a number)   | the value          |
-| `ambiguous`       | several entries share the name                    | text + candidates  |
-| `no_match`        | no entry has the name; `possible` lists near ones | text + possible    |
-| `unavailable`     | the list could not be read                        | text, unverified   |
-| `not_coded`       | the field has no code list                        | the value as-is    |
-| `disabled`        | lookups are switched off (`WOD_CODE_LOOKUP=0`)     | text, unverified   |
+Only text matching exactly one entry becomes a code. Lists are fetched from NCEI, cached with
+their retrieval date under `config.CODE_LIST_CACHE_DIR`, and refetched after
+`config.CODE_LIST_MAX_AGE_DAYS`. Lookups never raise.
 """
 import csv
 import datetime as dt
@@ -46,8 +21,7 @@ _MEMO: Dict[str, Dict[str, Any]] = {}
 
 
 def code_list_url(namespace: str, field_id: int) -> Optional[str]:
-    """The CSV for a field's code list. The manual links some lists only as PDF or HTML;
-    NCEI publishes the CSV beside them under the same field name."""
+    """The CSV URL for a field's code list; NCEI publishes it beside the PDF or HTML."""
     link = code_table_link(namespace, field_id)
     if not link:
         return None
@@ -63,9 +37,8 @@ def load_code_list(namespace: str, field_id: int, *, fetch: Optional[bool] = Non
                    max_age_days: Optional[float] = None) -> Dict[str, Any]:
     """`{"status", "entries", "url", "retrieved", "field"}` for one field's code list.
 
-    `entries` is a list of `{"code", "label", "names", ...}`: `names` are the normalised
-    forms a value is compared against (the label, its synonyms, the part after a
-    `Category:` prefix).
+    `entries` items are `{"code", "label", "names", ...}`; `names` are the normalised forms
+    a value is matched against.
     """
     link = code_table_link(namespace, field_id)
     if not link:
@@ -89,7 +62,7 @@ def load_code_list(namespace: str, field_id: int, *, fetch: Optional[bool] = Non
     if retrieved:
         try:
             stamp = dt.datetime.fromisoformat(str(retrieved))
-            if stamp.tzinfo is None:          # a hand-edited '2026-01-01' is naive
+            if stamp.tzinfo is None:          # naive dates are UTC
                 stamp = stamp.replace(tzinfo=dt.timezone.utc)
             age_days = (dt.datetime.now(dt.timezone.utc) - stamp).total_seconds() / 86400
         except (TypeError, ValueError):
@@ -131,8 +104,7 @@ def load_code_list(namespace: str, field_id: int, *, fetch: Optional[bool] = Non
 
 
 def _name_index(entries: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    """Normalised name -> the entries carrying it, in list order. Built once per list, so a
-    lookup is a dict hit rather than a scan of every entry (the platform list has >10,000)."""
+    """Normalised name -> the entries carrying it, in list order."""
     index: Dict[str, List[Dict[str, Any]]] = {}
     for e in entries:
         for n in e["names"]:
@@ -160,10 +132,9 @@ def _tokens(text: str) -> List[str]:
 def parse_code_list(text: str) -> List[Dict[str, Any]]:
     """Parse either published layout into entries.
 
-    Most lists are `code_name,<Title>` then `units,<code system>` then `code,label`. The taxa
-    list is `ITIS TSN,PGC code,Rank,Taxonomic Name -[ Author ]-`. A label may hold several
-    synonyms separated by runs of spaces (`ug/l    mg/m3    ppb`), and a `Category: name`
-    prefix (`Temperature: ITS-90`); each is a name the value may match.
+    Most lists are `code_name,<Title>`, `units,<system>`, then `code,label`; the taxa list is
+    `ITIS TSN,PGC code,Rank,Taxonomic Name`. Synonyms separated by runs of spaces and the
+    part after a `Category:` prefix are also names.
     """
     rows = list(csv.reader(io.StringIO(text)))
     rows = [r for r in rows if any(c.strip() for c in r)]
@@ -194,19 +165,18 @@ def parse_code_list(text: str) -> List[Dict[str, Any]]:
             names.add(normalise_label(part))
             if ":" in part:
                 names.add(normalise_label(part.split(":", 1)[1]))
-            # The head before a description: 'COPEPODITE(S) sum of various ... stages' is
-            # named 'COPEPODITE'; 'SHUNYO MARU (R/V; ... renamed ...)A' is 'SHUNYO MARU'.
+            # The head before a parenthesised description is also a name.
             head = part.split("(", 1)[0].strip()
             if head and head != part:
                 names.add(normalise_label(head))
                 if ":" in head:
                     names.add(normalise_label(head.split(":", 1)[1]))
         names.discard("")
-        # An entry the list itself retires is no answer: 'KAPITAN DRANITSYN ... DO NOT
-        # USE' made the ship's name ambiguous with the code to use.
+        # Entries marked "do not use" are never matched.
         if re.search(r"\bdo\s+not\s+use\b", label, re.IGNORECASE):
             names = set()
-        entry = {"code": code, "label": re.sub(r"\s+", " ", label), "names": sorted(names)}
+        entry = {"code": code, "label": re.sub(r"\s+", " ", label), "names": sorted(names),
+                 "synonyms": [x.strip() for x in re.split(r"\s{2,}", label) if x.strip()]}
         if header is not None:
             for name, value in zip(header[1:-1], r[1:-1]):
                 entry[name] = value.strip()
@@ -214,15 +184,17 @@ def parse_code_list(text: str) -> List[Dict[str, Any]]:
     return entries
 
 
-# Lists not downloaded just to confirm a number is in them. The accession list is every NCEI
-# accession there is: fetching it to verify one number cost each run a minute and a half of
-# timeouts, and NCEI assigned the number in the first place. A cached copy is still used.
+# Lists too large to download only to verify a number; a cached copy is still used.
 _NOT_FETCHED_TO_VERIFY = {("secondary_header", 1)}
 
 
 def lookup_code(namespace: str, field_id: int, value: Any, *,
                 fetch: Optional[bool] = None) -> Dict[str, Any]:
-    """Resolve one value against a field's code list. See the module docstring for statuses."""
+    """Resolve one value against a field's code list.
+
+    Statuses: `matched`, `already_a_code`, `ambiguous` (with `candidates`), `no_match` (with
+    `possible`), `unavailable`, `not_coded`, `disabled`.
+    """
     link = code_table_link(namespace, field_id)
     if not link:
         return {"status": "not_coded"}
@@ -252,13 +224,20 @@ def lookup_code(namespace: str, field_id: int, value: Any, *,
     index = listing.get("index") or {}
     want = normalise_label(text)
     hits = list(index.get(want, [])) if want else []
+    if not hits and _name_part(text) != text:
+        # The name alone, without identifiers after it.
+        hits = list(index.get(normalise_label(_name_part(text)), []))
     if not hits:
-        # 'larvae' is the list's 'LARVA', 'nauplii' its 'NAUPLIUS'. Plural endings only.
+        # Try singulars ('larvae' -> 'LARVA').
         for alt in _singulars(want):
             hits = list(index.get(alt, []))
             if hits:
                 break
     codes = list(dict.fromkeys(e["code"] for e in hits))
+    if len(codes) > 1:
+        # One name, several entries: an identifier or brand in the value may pick one.
+        hits = _sharing_an_identifier(text, hits) or _by_brand(text, hits) or hits
+        codes = list(dict.fromkeys(e["code"] for e in hits))
     if len(codes) == 1:
         e = hits[0]
         return {**base, "status": "matched", "code": e["code"], "label": e["label"],
@@ -272,6 +251,180 @@ def lookup_code(namespace: str, field_id: int, value: Any, *,
                 if toks and toks <= set(_tokens(e["label"]))][:10]
     return {**base, "status": "no_match", "candidates": [],
             "possible": [{"code": e["code"], "label": e["label"]} for e in possible]}
+
+
+_IDENTIFIER_WORDS = {"CALL", "SIGN", "CODE", "ICES", "IMO", "BUILT", "SERVICE", "DATE"}
+
+
+def _by_brand(text: str, hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Among entries differing only by maker ('XBT: T7 (SIPPICAN)', 'XBT: T7 (UNKNOWN
+    BRAND)'), the one the value names, else the unknown-brand one."""
+    stated = re.sub(r"[^A-Z0-9]+", " ", str(text).upper()).split()
+    maker = lambda e: (re.findall(r"\(([^)]*)\)", e["label"]) or [""])[0].upper()
+    named = [e for e in hits if maker(e).split() and maker(e).split()[0] in stated]
+    if len({e["code"] for e in named}) == 1:
+        return named
+    unknown = [e for e in hits if maker(e).startswith("UNKNOWN")]
+    return unknown if not named and len(unknown) == 1 else []
+
+
+def _name_part(text: str) -> str:
+    """The name before any identifiers: 'Oshoro Maru (call sign 7JRM)' -> 'Oshoro Maru'."""
+    return re.split(r"[,;(\[]|\s[-\u2013]\s", str(text), maxsplit=1)[0].strip()
+
+
+def _sharing_an_identifier(text: str, hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The one candidate sharing an identifier stated beside the name, else []."""
+    raw = lambda t: set(re.split(r"[^A-Z0-9]+", str(t).upper())) - {""}
+    name = raw(_name_part(text))
+    extra = {t for t in raw(text) - name - _IDENTIFIER_WORDS
+             if len(t) >= 4 and any(ch.isdigit() for ch in t)}
+    if not extra:
+        return []
+    # 'IMO8401365' in a label, '8401365' in a value: compare digit runs too.
+    digits = lambda ts: ts | {re.sub(r"^[A-Z]+", "", t) for t in ts}
+    found = [e for e in hits if digits(raw(e["label"])) & digits(extra)]
+    return found if len({e["code"] for e in found}) == 1 else []
+
+
+# ------------------------------------------------------------- units (v_8)
+def unit_key(text: Any) -> str:
+    """A unit as a comparable string: 'µmol kg−1' and 'micromol per kilogram' are 'umol/kg'."""
+    from wod_etl.mapping.query_wod_spec import canonical_unit_text
+
+    s = canonical_unit_text(str(text)).lower().replace("\u00b5", "u").replace("_", " ")
+    s = s.replace("\u2219", ".").strip()
+    s = re.sub(r"\bper\s*mill?e\b|\u2030|\bper\s*mil\b", "permille", s)
+    for word, short in (("micromol(?:e)?s?", "umol"), ("nanomol(?:e)?s?", "nmol"),
+                        ("picomol(?:e)?s?", "pmol"), ("millimol(?:e)?s?", "mmol"),
+                        ("(?:micro|u)grams?", "ug"), ("(?:milli|m)grams?", "mg"),
+                        ("kilograms?", "kg"), ("lit(?:er|re)s?", "l"), (r"degrees?\s*", "deg")):
+        s = re.sub(rf"\b{word}\b", short, s)
+    s = re.sub(r"\s*\bper\b\s*", "/", s)
+    s = re.sub(r"[\s.*]*([a-z]+)\^?-(\d)", lambda m: f"/{m.group(1)}" +
+               ("" if m.group(2) == "1" else m.group(2)), s)
+    return re.sub(r"[\s\u00b0]+", "", s)
+
+
+# A qualifier that limits an originator-unit code to some variables, or marks an alternate.
+_UNIT_ONLY_FOR = [(re.compile(r"alkalinity\s+only", re.I), {17}),
+                  (re.compile(r"only\s+for\s+cfcs?", re.I), {40, 41, 42})]
+_UNIT_ALTERNATE = re.compile(r"\balternate\b|instead\s+of", re.I)
+
+
+def _unit_synonyms(synonyms: List[str]):
+    """(unit keys, qualifier text) of one originator-units entry."""
+    keys, notes = set(), []
+    for part in synonyms:
+        inner = re.findall(r"\((.*?)\)", part)
+        base = re.sub(r"\(.*?\)", " ", part).strip()
+        if _UNIT_ALTERNATE.search(part) or any(w.search(part) for w, _ in _UNIT_ONLY_FOR):
+            notes.append(part)
+            base = re.split(r"\s+(?=alternate|\()", base, flags=re.I)[0]
+        if base:
+            keys.add(unit_key(base))
+        keys |= {unit_key(i) for i in inner if re.fullmatch(r"[\w/%.\- ]{1,12}", i)
+                 and not re.search(r"only|use|for", i, re.I)}
+    return keys - {""}, " ".join(notes)
+
+
+def lookup_unit(value: Any, wod_code: Optional[int], *,
+                fetch: Optional[bool] = None) -> Dict[str, Any]:
+    """An originator's unit as a v_8_orig_units code, for the variable it measures.
+
+    Statuses as `lookup_code`, plus `standard_unit` for the variable's own WOD unit.
+    """
+    text = str(value or "").strip()
+    base = {"field": "v_8_orig_units", "value": text}
+    if text and is_standard_unit(text, wod_code):
+        return {**base, "status": "standard_unit"}
+    if not config.CODE_LOOKUP:
+        return {**base, "status": "disabled"}
+    listing = load_code_list("variable_specific_header", 8, fetch=fetch)
+    base.update(code_list=listing.get("url"), retrieved=listing.get("retrieved"))
+    if not listing["entries"]:
+        return {**base, "status": "unavailable", "error": listing.get("error")}
+    want = unit_key(text)
+    hits = []
+    for e in listing["entries"]:
+        synonyms = e.get("synonyms") or [e["label"]]
+        keys, notes = _unit_synonyms(synonyms)
+        if want not in keys:
+            continue
+        only = [codes for w, codes in _UNIT_ONLY_FOR if w.search(notes)]
+        if only and wod_code not in set().union(*only):
+            continue
+        rank = (0 if only else 1 if not _UNIT_ALTERNATE.search(notes) else 2,
+                0 if unit_key(synonyms[0]) == want else 1)
+        hits.append((rank, e))
+    if not hits:
+        return {**base, "status": "no_match", "candidates": [], "possible": []}
+    best = min(r for r, _ in hits)
+    top = [e for r, e in hits if r == best]
+    if len({e["code"] for e in top}) == 1:
+        return {**base, "status": "matched", "code": top[0]["code"], "label": top[0]["label"]}
+    return {**base, "status": "ambiguous",
+            "candidates": [{"code": e["code"], "label": e["label"]} for e in top][:20]}
+
+
+# Spellings of the standard units Table 3a abbreviates differently or leaves blank.
+_STANDARD_SPELLINGS = {1: {"degc", "c", "celsius", "degcits-90", "its-90", "degcelsius"},
+                       2: {"", "psu", "pss", "pss-78", "1", "dimensionless", "unitless", "1e-3"},
+                       9: {"", "1", "dimensionless", "unitless"},
+                       25: {"dbar", "decibar", "decibars", "db"},
+                       26: {"degc", "c", "celsius"}, 29: {"mbar", "hpa", "millibar"}}
+
+
+def is_standard_unit(text: str, wod_code: Optional[int]) -> bool:
+    """Whether `text` is the WOD standard unit of variable `wod_code` (Table 3a)."""
+    from wod_etl.reference.load_tables import wod_variables
+
+    var = wod_variables().get(wod_code) or {}
+    key = unit_key(text)
+    return bool(var) and (key == unit_key(var.get("unit_abbrev", "")) or
+                          key in _STANDARD_SPELLINGS.get(wod_code, set()))
+
+
+_TITLES = {"DR", "PROF", "MR", "MRS", "MS", "SIR", "CAPT"}
+
+
+def _person(name: str):
+    """(surname, first initial) from 'Jane A. Smith', 'Smith, Jane' or WOD's 'SMITH; JANE A.'."""
+    text = re.sub(r"^\s*\d+\s+", "", str(name)).upper()
+    if ";" in text or "," in text:
+        surname, given = re.split(r"[;,]", text, maxsplit=1)
+    else:
+        parts = text.split()
+        surname, given = (parts[-1], " ".join(parts[:-1])) if parts else ("", "")
+    given = [t for t in re.findall(r"[A-Z]+", given) if t not in _TITLES]
+    return re.sub(r"[^A-Z]", "", surname), (given[0][0] if given else "")
+
+
+def lookup_investigator(name: Any, *, fetch: Optional[bool] = None) -> Dict[str, Any]:
+    """A principal investigator's WOD code (primary_investigator_list, manual p.30).
+
+    Matched on surname and first initial; only a single match becomes a code. Several names
+    in one value are not resolved.
+    """
+    text = str(name or "").strip()
+    base = {"field": "primary_investigator_list", "value": text}
+    if not text or re.search(r"\band\b|&|/", text, re.IGNORECASE):
+        return {**base, "status": "no_match", "candidates": [], "possible": []}
+    if not config.CODE_LOOKUP:
+        return {**base, "status": "disabled"}
+    listing = load_code_list("character_data", 3, fetch=fetch)
+    base.update(code_list=listing.get("url"), retrieved=listing.get("retrieved"))
+    if not listing["entries"]:
+        return {**base, "status": "unavailable", "error": listing.get("error")}
+    surname, initial = _person(text)
+    hits = [e for e in listing["entries"]
+            if _person(e["label"]) == (surname, initial) and surname]
+    if len({e["code"] for e in hits}) == 1:
+        return {**base, "status": "matched", "code": hits[0]["code"], "label": hits[0]["label"]}
+    if hits:
+        return {**base, "status": "ambiguous",
+                "candidates": [{"code": e["code"], "label": e["label"]} for e in hits][:20]}
+    return {**base, "status": "no_match", "candidates": [], "possible": []}
 
 
 def _singulars(word: str) -> List[str]:
@@ -295,14 +448,13 @@ def describe_lookup(result: Dict[str, Any]) -> str:
     if st == "matched":
         return f"matched {result['code']} {result.get('label', '')}{where}{when}"
     if st == "ambiguous":
-        # 'CTD' names a kind of instrument, and every entry of that kind starts with it:
-        # offering two of them as the choice points at the wrong answer.
+        # A short generic name ('CTD') prefixes many entries; ask for the model instead.
         if len(re.sub(r"[^A-Za-z0-9]", "", str(result.get("value") or ""))) <= 4:
             return (f"{result.get('value')!r} is too general to code{where}{when}: name the "
                     f"model (e.g. 'SBE 19plus') in decisions.toml [metadata] Instrument")
         return (f"ambiguous{where}{when}: " + "; ".join(
             f"{c['code']} {c['label']}" for c in result.get("candidates", [])[:6])
-            + " -- choose one with the submitter")
+            + ". Choose one with the submitter")
     if st == "no_match":
         near = result.get("possible") or []
         return (f"no entry named {result.get('value')!r}{where}{when}"

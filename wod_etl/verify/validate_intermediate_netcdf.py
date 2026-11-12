@@ -1,14 +1,15 @@
 """Audit a generated NetCDF file against CF conventions and WOD intermediate-file rules.
 
-The checks are deliberately capable of failing the files this project used to produce:
-per-variable observation dimensions and non-CF variable names are both hard errors, not
-warnings, because downstream tools cannot recover from either.
+Per-variable observation dimensions and non-CF variable names are errors, not warnings.
 """
 import re
 from typing import Dict, Any, List
 
 import netCDF4 as nc
 import numpy as np
+
+from wod_etl.reference import (canonical_units, is_alias, resolve_standard_name,
+                               standard_name_vocabulary)
 
 CF_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 OBS_DIM = "z_obs"
@@ -17,7 +18,7 @@ REQUIRED_GLOBALS = ["Conventions", "featureType", "wod_dataset_type", "WOD_versi
 
 
 def validate_intermediate_netcdf(nc_file_path: str) -> Dict[str, Any]:
-    """Return a pass/fail report with explicit error and warning lists."""
+    """A pass/fail report with error and warning lists."""
     errors: List[str] = []
     warnings: List[str] = []
     checks: List[str] = []
@@ -27,6 +28,8 @@ def validate_intermediate_netcdf(nc_file_path: str) -> Dict[str, Any]:
             _check_globals(ds, errors, warnings, checks)
             _check_dimensions(ds, errors, checks)
             _check_names(ds, errors, checks)
+            checks.append("cf_standard_names")
+            check_standard_names(ds, errors, warnings)
             _check_coordinates(ds, errors, warnings, checks)
             _check_ragged(ds, errors, warnings, checks)
             _check_qc(ds, errors, warnings, checks)
@@ -88,6 +91,47 @@ def _check_names(ds, errors, checks):
             errors.append(f"Dimension name '{name}' is not a valid CF identifier")
 
 
+def check_standard_names(ds, errors, warnings) -> None:
+    """Each `standard_name` is in the CF Standard Name Table and its `units` convert to the
+    name's canonical units (CF section 3.3). A deprecated alias is a warning."""
+    from cf_units import Unit
+
+    table = standard_name_vocabulary()
+    for name, v in ds.variables.items():
+        declared = str(getattr(v, "standard_name", "") or "").split()
+        if not declared:
+            continue
+        std = declared[0]
+        if canonical_units(std) is None:
+            if not is_alias(std):
+                errors.append(f"'{name}' has standard_name '{std}', which is not in the {table}")
+                continue
+            current = resolve_standard_name(std)
+            warnings.append(f"'{name}' has the deprecated standard_name '{std}'; the {table} "
+                            f"replaces it with '{current}'")
+            std = current
+        if len(declared) > 1:
+            continue                    # a modifier (CF Appendix C) changes the units
+        canonical = canonical_units(std)
+        units = str(getattr(v, "units", "") or "").strip()
+        if not units:
+            if canonical != "1":
+                errors.append(f"'{name}' ({std}) has no units; expected units convertible "
+                              f"to '{canonical}'")
+            continue
+        try:
+            u = Unit(units)
+            if u.is_time_reference():
+                u = Unit(units.split(" since ")[0])
+            ok = u.is_convertible(Unit(canonical))
+        except ValueError:
+            errors.append(f"'{name}' has units '{units}', which UDUNITS cannot read")
+            continue
+        if not ok:
+            errors.append(f"'{name}' has units '{units}', not convertible to '{canonical}', "
+                          f"the canonical units of {std}")
+
+
 def _check_coordinates(ds, errors, warnings, checks):
     checks.append("coordinate_bounds")
     for name, lo, hi in (("lat", -90.0, 90.0), ("lon", -180.0, 180.0)):
@@ -108,12 +152,10 @@ def _check_coordinates(ds, errors, warnings, checks):
     else:
         z = np.ma.filled(ds.variables["z"][:], np.nan).astype(float)
         finite = z[np.isfinite(z)]
-        # A depth axis of nothing but fill passes every structural check while making the
-        # file useless: no measurement can be placed in the water column. This happens when
-        # the depth column failed to map and no one looked at the values, so it is an error.
+        # An all-fill depth axis makes the file useless; usually the depth column did not map.
         if z.size and finite.size == 0:
             errors.append("'z' is entirely missing: the file has no usable depth axis. "
-                          "The depth column probably did not map -- check the contract's "
+                          "The depth column probably did not map; check the contract's "
                           "unmapped_columns and missing_required_coordinates.")
         elif np.any(np.isnan(z)):
             warnings.append(f"'z' is missing for {int(np.isnan(z).sum())} of {z.size} level(s)")
@@ -138,15 +180,14 @@ def _check_ragged(ds, errors, warnings, checks):
     if not data_vars:
         warnings.append("No measured variables found (none carry wod_variable_code)")
 
-    # A variable whose every value is fill is not an error -- the source column existed and
-    # was entirely unanalysed -- but it should never pass unremarked.
+    # An all-fill variable is not an error, but is always reported.
     for name in data_vars:
         vals = np.ma.filled(ds.variables[name][:], np.nan).astype(float)
         if vals.size and not np.isfinite(vals).any():
             warnings.append(f"'{name}' is entirely missing: the source column held no "
                             f"usable values")
 
-    # Every measured variable and z must live on the SAME observation dimension.
+    # Every measured variable and z must share one observation dimension.
     offenders = []
     for name in data_vars + (["z"] if "z" in ds.variables else []):
         dims = ds.variables[name].dimensions
@@ -189,16 +230,14 @@ def _check_qc(ds, errors, warnings, checks):
             continue
         qc = f"{name}_qc"
         if qc not in ds.variables:
-            # No WOD flags is normal: QC is off by default and applied downstream. Say which
-            # of the two situations this is, because "no flags at all" and "the originator's
-            # flags only" are different things to a reader.
+            # No WOD flags is normal (QC is off by default); say whether originator flags exist.
             if f"{name}_qc_originator" in ds.variables:
                 warnings.append(
                     f"Measured variable '{name}' carries the originator's flags "
                     f"('{name}_qc_originator') and no WOD Table 12 flags. Expected when WOD "
                     f"QC is off; the two scales are not interchangeable.")
             else:
-                warnings.append(f"Measured variable '{name}' has no quality flags at all: "
+                warnings.append(f"Measured variable '{name}' has no quality flags: "
                                 f"neither WOD '{qc}' nor originator flags")
             continue
         q = ds.variables[qc]
@@ -210,14 +249,3 @@ def _check_qc(ds, errors, warnings, checks):
         bad = vals[(vals < 0) | (vals > 9)]
         if bad.size:
             errors.append(f"QC array '{qc}' has {bad.size} value(s) outside the 0-9 flag range")
-
-
-if __name__ == "__main__":
-    import json
-    for p in ("data/processed/demo_single.nc", "data/processed/demo_multi.nc"):
-        r = validate_intermediate_netcdf(p)
-        print(f"{p}: {r['status']}  errors={r['error_count']} warnings={r['warning_count']}")
-        for e in r["errors"]:
-            print("   ERROR:", e)
-        for w in r["warnings"]:
-            print("   warn :", w)

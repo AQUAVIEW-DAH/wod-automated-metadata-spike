@@ -1,34 +1,8 @@
-"""Run one accession in two steps, resumably, without an agent: what `wod-etl` does.
+"""Run one accession in two resumable steps: `wod-etl run` and `wod-etl confirm`.
 
-    from wod_etl.orchestration.pipeline import confirm_pipeline, run_pipeline
-    run_pipeline("0303928")        # resolve, fetch, triage -> decisions.toml, for review
-    confirm_pipeline("0303928")    # stage, process, verify what the review included
-
-`wod-etl run` resolves the input (a URL, a number, a folder, a .tar.gz), mirrors the files,
-triages every one of them and writes `data/runs/<accession>/decisions.toml`: per file, what
-it holds, whether it goes into WOD, as which dataset, and why. It never processes anything.
-A person reviews the file and changes what they disagree with. `wod-etl confirm` then checks
-the decisions, stages what needs reshaping, writes the included files as WOD NetCDF -- one file
-per WOD dataset and year, `data/processed/<acc>/wod_ctd_2008_<acc>.nc` -- and verifies them.
-
-Each stage records its status, its outputs, any problems (what failed, why, how to fix it)
-and a FINGERPRINT of its inputs -- the files, the decisions it reads, and the code it runs --
-in `state.json`. Running a command again skips every stage that is done and whose inputs are
-unchanged, and continues from the first that is not:
-
-- a stage that failed reruns, and the process stage resumes per file;
-- a stage whose inputs changed -- a file re-downloaded, a decision edited, the code fixed --
-  reruns from scratch, clearing only the outputs it owns, and so does everything after it
-  that sees the change;
-- so does a finished stage whose output was deleted or edited by hand;
-- `confirm` refuses (exit 2) while a decision is open, or when the files or the triage code
-  changed since the decisions were written: `run` again, and review what it adds.
-
-Both commands write `report.md` however they end, and log everything to the accession's
-`run.log` and `events.jsonl`. Nothing is ever written or cleared outside `data/runs/<acc>/`,
-the mirror `data/raw/<acc>/`, `data/staging/<acc>/pipeline/`, and in `data/processed/<acc>/`
-the WOD files of this accession's naming (`writers.wod_files`) -- plus, once, the
-`pipeline/` folder output went to before it was WOD files.
+`run` resolves, fetches and triages the input and writes decisions.toml for review; `confirm`
+stages, processes and verifies what the review included. Each stage records its status, outputs,
+problems and an input fingerprint in `state.json`, and reruns only when those change.
 """
 import datetime as dt
 import hashlib
@@ -62,19 +36,15 @@ class Locked(RuntimeError):
 
 # --------------------------------------------------------------------- workspace
 class Workspace:
-    """Where one accession's run lives. Paths are read from config when built, so a test can
-    point config at a temporary folder."""
+    """Paths of one accession's run, read from config when built."""
 
     def __init__(self, accession: str):
         self.accession = accession
         self.run_dir = Path(config.RUNS_DIR) / accession
         self.mirror_dir = Path(config.RAW_DIR) / accession
         self.staging_dir = Path(config.STAGING_DIR) / accession / "pipeline"
-        # The output: WOD files, one per dataset and year, `wod_ctd_2008_<acc>.nc`. The
-        # pipeline writes and removes only names of that form here (writers.wod_files).
+        # WOD files, one per dataset and year; only names from writers.wod_files are touched.
         self.processed_dir = Path(config.PROCESSED_DIR) / accession
-        # Where output went before it was WOD files: removed when the accession is processed.
-        self.legacy_output_dir = Path(config.PROCESSED_DIR) / accession / "pipeline"
         self.work_dir = self.run_dir / "work"
         # Each source file's own result, assembled into the WOD files.
         self.per_file_dir = self.work_dir / "per_file"
@@ -106,9 +76,7 @@ def _now() -> str:
 
 @contextmanager
 def _lock(ws: Workspace):
-    """One run per accession at a time -- a person and an agent writing one state.json and
-    one manifest would each undo the other. A lock left by a process that is gone is taken
-    over."""
+    """One run per accession at a time; a lock left by a dead process is taken over."""
     ws.run_dir.mkdir(parents=True, exist_ok=True)
     here = socket.gethostname()
     for _ in range(2):
@@ -159,8 +127,7 @@ def _hash(obj: Any) -> str:
 def _tree(root, keys: Optional[List[str]] = None) -> List[List[Any]]:
     """(relative path, size, mtime) for every file under `root`, or for `keys` only.
 
-    Nanosecond mtimes: a staged file rewritten within the same second at the same size
-    (`PSU` -> `psu`) must still count as changed.
+    Nanosecond mtimes catch a same-size rewrite within one second.
     """
     root = Path(root)
     if not root.exists():
@@ -217,7 +184,10 @@ def _outcome(status: str, summary: str, outputs: Optional[Dict[str, Any]] = None
 
 
 # --------------------------------------------------------------------- 1 resolve
-def _fp_resolve(run: Run) -> str:
+def _fp_resolve(run: Run) -> Optional[str]:
+    # None (always rerun) after a fallback to downloaded files: NCEI may answer next time.
+    if run.out("resolve").get("mode") == "downloaded":
+        return None
     return _hash({"input": run.source})
 
 
@@ -228,8 +198,7 @@ def stage_resolve(run: Run, changed: bool) -> Dict[str, Any]:
     src = run.source
     if os.path.isdir(src):
         root = str(Path(src).resolve())
-        # The pipeline would triage its own state, logs and outputs, and process copies of
-        # its inputs as more inputs, growing with every rerun.
+        # A folder holding the workspace would make the pipeline ingest its own output.
         own = [str(p) for p in (run.ws.run_dir, run.ws.staging_dir, run.ws.processed_dir)
                if p.resolve().is_relative_to(root)]
         if own:
@@ -244,6 +213,14 @@ def stage_resolve(run: Run, changed: bool) -> Dict[str, Any]:
                         {"mode": "local", "data_root": root, "files": n})
     listing = list_remote_directory(src, recursive=True)
     if listing.get("error") or not listing.get("items"):
+        downloaded = _downloaded_files(run.ws.mirror_dir)
+        if downloaded and not os.path.exists(src):
+            return _outcome(
+                "done", f"could not list {src}; using the {downloaded} files downloaded "
+                        f"earlier to {run.ws.mirror_dir}",
+                {"mode": "downloaded", "data_root": str(run.ws.mirror_dir),
+                 "files": downloaded, "listing_error": listing.get("error")},
+                [remedies.for_listing_fallback(listing, src, run.ws.mirror_dir)])
         return _outcome("failed", f"could not list {src}", problems=[
             remedies.for_listing(listing, src)])
     items = [{"key": _rel(listing["source"], i["path"]), "url": i["path"],
@@ -263,6 +240,13 @@ def stage_resolve(run: Run, changed: bool) -> Dict[str, Any]:
                 + ")",
         {"mode": "remote", "source": listing["source"], "files": len(items),
          "resolution": resolution or None, "version": version or None})
+
+
+def _downloaded_files(mirror: Path) -> int:
+    """Files a fetch completed in `mirror` (an interrupted download leaves only `.part`)."""
+    if not mirror.is_dir():
+        return 0
+    return sum(1 for p in mirror.rglob("*") if p.is_file() and p.suffix != ".part")
 
 
 def _rel(root: str, path: str) -> str:
@@ -293,7 +277,13 @@ def stage_fetch(run: Run, changed: bool) -> Dict[str, Any]:
     mirror = run.ws.mirror_dir
     fetched = cached = 0
     problems = []
+    media = [it for it in items if Path(it["key"]).suffix.lower() in config.MEDIA_EXTENSIONS]
+    if media:
+        runlog.event(log, logging.INFO, f"not downloaded: {len(media)} image, video or audio "
+                                        f"file(s)", kind="fetch", skipped=[m["key"] for m in media])
     for it in items:
+        if it in media:
+            continue
         key = it["key"]
         sub = str(Path(key).parent) if str(Path(key).parent) != "." else None
         dest = mirror / key
@@ -314,9 +304,13 @@ def stage_fetch(run: Run, changed: bool) -> Dict[str, Any]:
             if when:
                 os.utime(res["local_path"], (when, when))
     summary = f"{fetched} fetched, {cached} already here, {len(problems)} failed"
+    if media:
+        size = sum(m.get("size") or 0 for m in media) / 1e6
+        summary += f"; {len(media)} image/video/audio file(s) not downloaded ({size:,.0f} MB)"
+    outputs = {"data_root": str(mirror), "media_not_downloaded": [m["key"] for m in media]}
     if problems:
-        return _outcome("failed", summary, {"data_root": str(mirror)}, problems)
-    return _outcome("done", summary, {"data_root": str(mirror)})
+        return _outcome("failed", summary, outputs, problems)
+    return _outcome("done", summary, outputs)
 
 
 def _epoch(iso: Optional[str]) -> Optional[float]:
@@ -332,12 +326,13 @@ def _epoch(iso: Optional[str]) -> Optional[float]:
 
 
 # --------------------------------------------------------------------- 3 triage
-# The code a stage's output comes from is part of its fingerprint, committed or not: a fixed
-# classifier or writer must not leave the triage, or the profiles, it made before standing.
-TRIAGE_CODE = ("wod_etl/discovery", "wod_etl/mapping", "wod_etl/reference",
-               "knowledge/wod_code_tables")
-OUTPUT_CODE = TRIAGE_CODE + ("wod_etl/qc_transforms", "wod_etl/writers", "wod_etl/staging",
+# Code hashed into stage fingerprints, so a code change reruns the stages it affects.
+TRIAGE_CODE = ("wod_etl/discovery", "wod_etl/mapping", "wod_etl/reference", "wod_etl/staging",
+               "wod_etl/config.py", "wod_etl/terms.py", "wod_etl/time_zones.py",
+               "knowledge/wod_code_tables", "knowledge/cf_standard_names.json")
+OUTPUT_CODE = TRIAGE_CODE + ("wod_etl/qc_transforms", "wod_etl/writers",
                              "wod_etl/verify", "wod_etl/orchestration/process_accession.py",
+                             "wod_etl/orchestration/process_taxa.py",
                              "wod_etl/orchestration/recipes.py")
 _CODE_HASHES: Dict[tuple, str] = {}
 
@@ -375,7 +370,7 @@ def stage_triage(run: Run, changed: bool) -> Dict[str, Any]:
     counts = {a: len(report.get(f"{a}_files") or []) for a in
               ("process", "stage", "sidecar", "exclude", "document", "inspect")}
     for f in report["files"]:
-        runlog.event(log, logging.INFO, f"triage {f['path']}: {f['action']} -- {f['data']}",
+        runlog.event(log, logging.INFO, f"triage {f['path']}: {f['action']} ({f['data']})",
                      kind="triage_file", path=f["path"], action=f["action"],
                      include=f["include"], dataset=f["dataset"], data=f["data"],
                      why=f["why"], reason=f["reason"], evidence=f["evidence"])
@@ -386,9 +381,7 @@ def stage_triage(run: Run, changed: bool) -> Dict[str, Any]:
 
 
 def _decision_hash(report: Dict[str, Any]) -> str:
-    """What of a triage the decisions rest on: the files, and what was proposed for each.
-    The wording of `data` and `why` is not in it -- a clearer sentence is no reason to
-    review an accession again."""
+    """Hash of the triage proposals the decisions rest on, excluding `data`/`why` wording."""
     return _hash([(f["path"], f["action"], f.get("include"), f.get("dataset"),
                    f.get("exclusion"), f.get("drop"),
                    {k: (f.get("long_format") or {}).get(k)
@@ -398,10 +391,12 @@ def _decision_hash(report: Dict[str, Any]) -> str:
 
 # --------------------------------------------------------------------- 4 decide, 5 check
 def _decision_sources(decisions: Dict[str, Any]) -> List[str]:
+    """Files the decisions name beyond the triaged ones: script recipe and cross-check inputs."""
     keys = set()
     for r in (decisions.get("profiles") or {}).values():
-        keys |= set(r.get("files") or []) | {r.get("station_list")}
-    keys |= {c.get("file") for c in decisions.get("cross_check") or []}
+        if isinstance(r, dict):
+            keys |= set(r.get("files") or []) | {r.get("station_list")}
+    keys |= {c.get("file") for c in decisions.get("cross_check") or [] if isinstance(c, dict)}
     return sorted(k for k in keys if k and k != dec.PLACEHOLDER)
 
 
@@ -415,10 +410,11 @@ def _fp_decisions(run: Run) -> str:
 
 
 def _settle(run: Run, stage: str, propose: bool) -> Dict[str, Any]:
-    """Append what the decisions file lacks -- an entry for every file no entry decides,
-    when `propose`, and every new station conflict -- then validate it. Returns the outcome's
-    outputs and problems, or `error` when the file cannot be read."""
-    from wod_etl.orchestration.recipes import check_profile_recipe
+    """Append entries for undecided files (if `propose`), then validate and build the plan.
+
+    Returns `{"outputs", "problems", "blocking"}`, or `{"error"}` if the file cannot be read.
+    """
+    from wod_etl.orchestration.recipes import check_profile_recipe, check_taxa_recipe
 
     ws, triage = run.ws, run.triage()
     label = f"{run.command} {run.invocation or _now()}"
@@ -432,38 +428,34 @@ def _settle(run: Run, stage: str, propose: bool) -> Dict[str, Any]:
         decisions, err = run.decisions()
         if err:
             return {"error": err}
-    conflicts, warnings = dec.crosscheck(decisions, run.data_root)
-    added += dec.append(ws.decisions_path, dec.conflict_sections(conflicts, decisions),
-                        ws.accession, label)
-    decisions, err = run.decisions()
-    if err:
-        return {"error": err}
-    checks = {name: check_profile_recipe(r, run.data_root)
-              for name, r in (decisions.get("profiles") or {}).items()}
-    items, plan = dec.validate(decisions, triage, checks, conflicts)
+    draft = dec.build_plan(decisions, triage, [])
+    recipes = draft["profiles"]
+    conflicts, warnings = dec.crosscheck(decisions, run.data_root, recipes, triage)
+    # Checked as the plan will run them: only the files still included.
+    checks = {name: check_profile_recipe(r, run.data_root) for name, r in recipes.items()}
+    taxa_checks = {name: check_taxa_recipe(r, run.data_root)
+                   for name, r in draft["taxa"].items()}
+    items, plan = dec.validate(decisions, triage, checks, conflicts, taxa_checks)
     problems = [remedies.for_open_item(i, stage) for i in items]
-    problems += [remedies.problem(stage, w, "a cross-check source could not be read",
-                                  "Fix the [[cross_check]] entry, or remove it.",
+    problems += [remedies.problem(stage, w, "a source of station positions could not be read",
+                                  "Nothing to do: the check is skipped.",
                                   blocking=False, kind="warning") for w in warnings]
     for c in conflicts:
-        entry = (decisions.get("conflicts") or {}).get(c["id"]) or {}
-        if entry.get("resolution"):
-            runlog.event(log, logging.INFO, f"conflict {c['id']} settled as "
-                                            f"{entry['resolution']!r}: {c['what']}",
-                         kind="decision", id=c["id"], resolution=entry["resolution"],
-                         note=entry.get("note"))
+        runlog.event(log, logging.WARNING, f"station check {c['id']}: {c['what']}; the "
+                                           f"station list is kept",
+                     kind="station_check", id=c["id"], values=c.get("values"))
     included = len(plan["direct"]) + sum(len(r.get("files") or [])
-                                         for r in plan["profiles"].values())
+                                         for r in list(plan["profiles"].values())
+                                         + list(plan["taxa"].values()))
     return {"outputs": {"plan": plan, "conflicts": conflicts, "recipe_checks": checks,
-                        "entries_added": added, "included_files": included},
+                        "taxa_checks": taxa_checks, "entries_added": added,
+                        "included_files": included},
             "problems": problems,
             "blocking": [i for i in items if i["blocking"]]}
 
 
 def stage_decide(run: Run, changed: bool) -> Dict[str, Any]:
-    """`wod-etl run` ends here: an entry for every file, and what must still be filled in
-    before `wod-etl confirm`. It never blocks -- reviewing the file is the next step either
-    way."""
+    """Last `wod-etl run` stage: propose entries and list what to settle; never blocks."""
     res = _settle(run, "decide", propose=True)
     if res.get("error"):
         return _outcome("failed", "decisions.toml cannot be read",
@@ -473,26 +465,26 @@ def stage_decide(run: Run, changed: bool) -> Dict[str, Any]:
         runlog.event(log, logging.INFO,
                      f"decision {e['key']} ({e['files']} file(s)): "
                      f"{'include as ' + str(e['dataset']) if e['include'] else 'leave out'}"
-                     f" -- {e['why']}", kind="decision", key=e["key"], files=e["files"],
+                     f"; {e['why']}", kind="decision", key=e["key"], files=e["files"],
                      include=e["include"], dataset=e["dataset"], data=e["data"], why=e["why"])
     summary = (f"{out['included_files']} file(s) to include, {len(plan['left_out'])} to leave "
                f"out ({out['entries_added']} entr{'y' if out['entries_added'] == 1 else 'ies'} "
                f"added)")
     if res["blocking"]:
-        summary += f"; {len(res['blocking'])} to fill in before confirming"
+        summary += f"; {len(res['blocking'])} to settle before confirming"
     return _outcome("done", summary, out, res["problems"])
 
 
 def stage_check(run: Run, changed: bool) -> Dict[str, Any]:
-    """`wod-etl confirm` starts here: the decisions as reviewed, and the plan the later
-    stages follow. Blocks (exit 2) while anything is still open."""
+    """First `wod-etl confirm` stage: validate the decisions and build the plan. Blocks
+    (exit 2) while anything is open."""
     res = _settle(run, "check", propose=False)
     if res.get("error"):
         return _outcome("failed", "decisions.toml cannot be read",
                         problems=[remedies.for_decisions_syntax(res["error"], "check")])
     out, plan = res["outputs"], res["outputs"]["plan"]
     if res["blocking"]:
-        return _outcome("blocked", f"{len(res['blocking'])} decision(s) to fill in",
+        return _outcome("blocked", f"{len(res['blocking'])} decision(s) to settle",
                         out, res["problems"])
     for p, ds in plan["dataset_overrides"].items():
         options = (plan.get("file_options") or {}).get(p) or {}
@@ -502,16 +494,15 @@ def stage_check(run: Run, changed: bool) -> Dict[str, Any]:
                      + ", as decisions.toml says",
                      kind="decision", key=p, dataset=ds, drop=options.get("drop") or None,
                      metadata=options.get("metadata") or None)
-    return _outcome("done", f"{len(plan['direct'])} file(s) to process as they stand, "
-                            f"{len(plan['profiles'])} recipe(s) to stage, "
+    return _outcome("done", f"{len(plan['direct'])} file(s) to process directly, "
+                            f"{len(plan['profiles']) + len(plan.get('taxa') or {})} recipe(s) "
+                            f"to stage, "
                             f"{len(plan['left_out'])} file(s) left out",
                     out, res["problems"])
 
 
 def _not_ready(run: Run) -> Optional[Dict[str, Any]]:
-    """Why `wod-etl confirm` cannot go ahead yet: no decisions were written, or the files (or
-    the code that triaged them) changed since -- so the reviewed decisions may not describe
-    what is there now."""
+    """Why confirm cannot proceed: no decisions yet, or the files or triage code changed since."""
     stages = run.state["stages"]
     again = f"uv run wod-etl run {run.source}" if run.source else "uv run wod-etl run <input>"
     if (stages.get("decide") or {}).get("status") != "done" \
@@ -530,10 +521,9 @@ def _not_ready(run: Run) -> Optional[Dict[str, Any]]:
             and prior.get("left") == _left_behind(run, name)
         if not current and name == "triage" and prior.get("status") == "done" \
                 and fp is not None and _triages_as_reviewed(run):
-            # The code changed but sorts the files exactly as before: what was reviewed
-            # still describes them, so a new version of wod-etl does not send the person
-            # back to review.
+            # Changed code that triages the files as reviewed needs no new review.
             prior.update({"fingerprint": fp, "left": _left_behind(run, name)})
+            prior.setdefault("outputs", {})["triage_hash"] = _hash(run.triage())
             runlog.event(log, logging.INFO, "triage: the code changed, but it triages the "
                                             "files as reviewed", kind="triage_rechecked")
             current = True
@@ -549,8 +539,7 @@ def _not_ready(run: Run) -> Optional[Dict[str, Any]]:
 
 
 def _triages_as_reviewed(run: Run) -> bool:
-    """Whether triaging the files now proposes what the decisions were written from: the
-    same files, each with the same action, include and dataset."""
+    """Whether a fresh triage matches the one the decisions came from; if so, it is saved."""
     from wod_etl.discovery import classify_accession
 
     recorded = run.out("triage").get("decision_hash")
@@ -558,7 +547,10 @@ def _triages_as_reviewed(run: Run) -> bool:
         report = classify_accession(run.data_root, accession=run.ws.accession)
     except Exception:                                   # noqa: BLE001 - then it is not
         return False
-    return bool(recorded) and not report.get("error") and _decision_hash(report) == recorded
+    same = bool(recorded) and not report.get("error") and _decision_hash(report) == recorded
+    if same:
+        write_json_atomic(run.ws.triage_path, report)
+    return same
 
 
 # --------------------------------------------------------------------- 6 stage
@@ -568,7 +560,8 @@ def _plan(run: Run) -> Dict[str, Any]:
 
 def _fp_stage(run: Run) -> str:
     plan = _plan(run)
-    recipes = plan.get("profiles") or {}
+    recipes = {**(plan.get("profiles") or {}),
+               **{f"taxa.{n}": r for n, r in (plan.get("taxa") or {}).items()}}
     root = Path(run.data_root or "")
     inputs = set()
     scripts = {}
@@ -585,35 +578,47 @@ def _fp_stage(run: Run) -> str:
                   "scripts": scripts, "code": _code_hash(OUTPUT_CODE)})
 
 
+STAGED_KINDS = ("profiles", "taxa")
+
+
 def stage_stage(run: Run, changed: bool) -> Dict[str, Any]:
-    from wod_etl.orchestration.recipes import run_profile_recipe
+    from wod_etl.orchestration.recipes import run_profile_recipe, run_taxa_recipe
 
     plan = _plan(run)
-    final = run.ws.staging_dir / "profiles"
-    building = run.ws.staging_dir / "profiles.building"
-    shutil.rmtree(building, ignore_errors=True)
+    runners = {"profiles": run_profile_recipe, "taxa": run_taxa_recipe}
+    building = {k: run.ws.staging_dir / f"{k}.building" for k in STAGED_KINDS}
+    for d in building.values():
+        shutil.rmtree(d, ignore_errors=True)
     results, problems = [], []
-    for name, recipe in (plan.get("profiles") or {}).items():
-        try:
-            results.append(run_profile_recipe(name, recipe, run.data_root, building,
-                                              run.ws.accession, plan))
-        except Exception as e:                          # noqa: BLE001 - reported to the person
-            runlog.event(log, logging.ERROR, f"recipe profiles.{name} failed: {e}",
-                         kind="recipe", recipe=f"profiles.{name}",
-                         traceback=traceback.format_exc(limit=6))
-            problems.append(remedies.problem(
-                "stage", f"recipe [profiles.{name}] could not be run",
-                f"{type(e).__name__}: {e}",
-                f"Fix [profiles.{name}] in decisions.toml (files, keys, station list, "
-                f"columns) and confirm again.", decisions_key=f"profiles.{name}"))
+    for kind in STAGED_KINDS:
+        for name, recipe in (plan.get(kind) or {}).items():
+            try:
+                results.append(runners[kind](name, recipe, run.data_root, building[kind],
+                                             run.ws.accession, plan))
+            except Exception as e:                      # noqa: BLE001 - reported as a problem
+                runlog.event(log, logging.ERROR, f"recipe {kind}.{name} failed: {e}",
+                             kind="recipe", recipe=f"{kind}.{name}",
+                             traceback=traceback.format_exc(limit=6))
+                files = ", ".join(recipe.get("files") or [])
+                problems.append(remedies.problem(
+                    "stage", f"recipe [{kind}.{name}] could not be run",
+                    f"{type(e).__name__}: {e}",
+                    f"Set include = false in decisions.toml on the file(s) it cannot stage "
+                    f"({files}), and confirm again.", decisions_key=f"{kind}.{name}"))
     if problems:
-        shutil.rmtree(building, ignore_errors=True)
+        for d in building.values():
+            shutil.rmtree(d, ignore_errors=True)
         return _outcome("failed", f"{len(problems)} recipe(s) failed", problems=problems)
-    shutil.rmtree(final, ignore_errors=True)
-    if building.exists():
-        building.rename(final)
-    staged = sum(len(r.get("written") or []) for r in results)
-    return _outcome("done", f"{staged} cast file(s) staged by {len(results)} recipe(s)"
+    for kind in STAGED_KINDS:
+        final = run.ws.staging_dir / kind
+        shutil.rmtree(final, ignore_errors=True)
+        if building[kind].exists():
+            building[kind].rename(final)
+    casts = sum(len(r.get("written") or []) for r in results if r.get("kind") != "taxa")
+    hauls = sum(len(r.get("written") or []) for r in results if r.get("kind") == "taxa")
+    staged = ", ".join(x for x in (f"{casts} cast file(s)" if casts else "",
+                                   f"{hauls} haul file(s)" if hauls else "") if x)
+    return _outcome("done", f"{staged or 'nothing'} staged by {len(results)} recipe(s)"
                             if results else "nothing to reshape",
                     {"recipes": [{k: v for k, v in r.items() if k != "written"}
                                  | {"files": len(r.get("written") or [])} for r in results]})
@@ -628,6 +633,7 @@ def _fp_process(run: Run) -> str:
                   "overrides": plan.get("dataset_overrides"),
                   "options": plan.get("file_options"),
                   "staged": _tree(run.ws.staging_dir / "profiles"),
+                  "staged_taxa": _tree(run.ws.staging_dir / "taxa"),
                   "recipe_types": {n: r.get("dataset_type")
                                    for n, r in (plan.get("profiles") or {}).items()},
                   "code": _code_hash(OUTPUT_CODE)})
@@ -637,20 +643,15 @@ STAGED_PREFIX = "staged/"
 
 
 def stage_process(run: Run, changed: bool) -> Dict[str, Any]:
-    """Every included file, as it stands or as a recipe staged it, into WOD NetCDF: each file
-    processed and validated on its own, then all of them written as WOD's own layout -- one
-    file per dataset and year, `wod_ctd_2008_<acc>.nc`. A file that cannot be written is
-    reported with why and what to do, and the rest are still written: one odd file does not
-    hold back an accession."""
+    """Process every included file (direct or staged) into WOD files, one per dataset and year.
+
+    Each file is processed and validated alone; one that fails is reported and the rest are
+    still written."""
     from wod_etl.orchestration.process_accession import assemble_profiles, process_accession
+    from wod_etl.orchestration.process_taxa import assemble_taxa
 
     ws = run.ws
     plan = _plan(run)
-    if ws.legacy_output_dir.is_dir():
-        shutil.rmtree(ws.legacy_output_dir, ignore_errors=True)
-        runlog.event(log, logging.INFO, f"removed {ws.legacy_output_dir}: the output as it was "
-                                        f"written before the WOD files",
-                     kind="wod_file", status="removed", names=[str(ws.legacy_output_dir)])
     if changed:
         shutil.rmtree(ws.per_file_dir, ignore_errors=True)
     direct = list(plan.get("direct") or [])
@@ -671,13 +672,16 @@ def stage_process(run: Run, changed: bool) -> Dict[str, Any]:
                      if r.get("dataset_type")}
         runs["staged"] = process_accession(
             str(staged_root), run_id=f"{ws.accession}_staged", include=staged,
-            dataset_overrides=overrides or None, **common)
-    if not runs:
+            dataset_overrides=overrides or None, source_prefix=STAGED_PREFIX, **common)
+    taxa_root = ws.staging_dir / "taxa"
+    hauls_staged = taxa_root.is_dir() and any(taxa_root.rglob("*.csv"))
+    if not runs and not hauls_staged:
         shutil.rmtree(ws.per_file_dir, ignore_errors=True)
         # With nothing to assemble, the WOD files of an earlier confirm are removed.
         assemble_profiles([], ws.processed_dir, ws.accession)
+        assemble_taxa(None, ws.processed_dir, ws.accession)
         return _outcome("done", "nothing to process: the decisions include no file",
-                        {"runs": {}, "files": []})
+                        {"runs": {}, "files": [], "taxa_files": []})
 
     problems, transient = [], False
     for which, res in runs.items():
@@ -694,16 +698,8 @@ def stage_process(run: Run, changed: bool) -> Dict[str, Any]:
                                                       staged=which == "staged"))
             transient = transient or (f.get("stage") or "") not in \
                 remedies.DETERMINISTIC_FILE_STAGES
-        if res.get("status") == "aborted":
-            transient = True
-            problems.append(remedies.problem("process", f"the {which} run aborted",
-                                             res.get("abort_reason", ""),
-                                             "Something systematic is wrong; read the first "
-                                             "failure in run.log, fix it, then confirm "
-                                             "again."))
 
-    # Both runs' files together: a staged cast and a direct one of the same dataset and year
-    # are one WOD file. The pipeline owns its accession's WOD files (no `roots`).
+    # Both runs together: direct and staged casts of one dataset and year share a WOD file.
     caches = [c for r in runs.values() for c in r.get("per_file_casts") or []]
     assembly = assemble_profiles(caches, ws.processed_dir, ws.accession)
     label = lambda key: STAGED_PREFIX + key if key in staged else key
@@ -719,16 +715,25 @@ def stage_process(run: Run, changed: bool) -> Dict[str, Any]:
                             f"--from process"))
     files = [{**f, "sources": [{**s, "key": label(s["key"])} for s in f["sources"]]}
              for f in assembly["files"]]
+    # Plankton: one Taxa-Record file per year.
+    taxa = assemble_taxa(taxa_root if hauls_staged else None, ws.processed_dir, ws.accession)
+    problems += [remedies.for_haul_failure(f["file"], f["stage"], f["error"])
+                 for f in taxa["failures"]]
+    if taxa["files"]:
+        problems += remedies.taxa_notes(taxa["taxa"])
     outputs = {"runs": {k: _process_summary(v) for k, v in runs.items()}, "files": files,
-               "removed": assembly["removed"]}
+               "taxa_files": taxa["files"], "taxa": taxa["taxa"] if taxa["files"] else None,
+               "removed": (assembly["removed"] or []) + taxa["removed"] or None}
     done = sum((v.get("counts") or {}).get("done", 0) for v in runs.values())
     failed = sum((v.get("counts") or {}).get("failed", 0) for v in runs.values())
     casts = sum(f["casts"] for f in files)
     summary = (f"{done} file(s) processed into {len(files)} WOD file(s) ({casts} cast(s))"
                + (f", {failed} failed" if failed else ""))
-    # A file that failed for a reason a retry cannot change (it does not map, it does not
-    # read) is reported and the stage is done: rerunning it would fail the same way. A
-    # transient failure fails the stage, so the next confirm retries it.
+    if hauls_staged:
+        n_hauls = sum(f["hauls"] for f in taxa["files"])
+        summary += (f"; {n_hauls} haul(s) into {len(taxa['files'])} Taxa-Record file(s)"
+                    + (f", {len(taxa['failures'])} failed" if taxa["failures"] else ""))
+    # Deterministic failures leave the stage done; transient ones fail it so confirm retries them.
     return _outcome("failed" if transient else "done", summary, outputs, problems)
 
 
@@ -738,19 +743,19 @@ def _process_summary(res: Dict[str, Any]) -> Dict[str, Any]:
             "unstorable_columns_dropped", "outputs_without_time",
             "outputs_without_time_of_day", "coded_headers_not_resolved", "casts_not_written",
             "casts_not_written_in", "levels_without_data", "casts_depth_from_pressure",
-            "manifest_path", "include_missing", "abort_reason")
+            "manifest_path", "include_missing")
     return {k: res.get(k) for k in keys if res.get(k) is not None}
 
 
 # --------------------------------------------------------------------- 8 verify
 def wod_files(ws: Workspace) -> List[Path]:
-    """The WOD files the pipeline wrote for this accession, and nothing else in the folder."""
-    from wod_etl.writers import is_wod_file_name
+    """This accession's WOD profile and Taxa-Record files in the output folder."""
+    from wod_etl.writers import is_output_file_name
 
     if not ws.processed_dir.is_dir():
         return []
     return sorted(p for p in ws.processed_dir.iterdir()
-                  if p.is_file() and is_wod_file_name(p.name, ws.accession))
+                  if p.is_file() and is_output_file_name(p.name, ws.accession))
 
 
 def _fp_verify(run: Run) -> str:
@@ -760,22 +765,48 @@ def _fp_verify(run: Run) -> str:
 
 
 def stage_verify(run: Run, changed: bool) -> Dict[str, Any]:
-    from wod_etl.verify import verify_output
+    """Check profile and Taxa-Record files; the output is verified only if every file passes."""
+    from wod_etl.verify import validate_taxa_netcdf, verify_output
+    from wod_etl.writers import is_taxa_file_name
 
     files = wod_files(run.ws)
     if not files:
-        return _outcome("done", "no profile output to verify", {"output_verified": None})
-    report = verify_output(str(run.ws.processed_dir), paths=[str(p) for p in files])
-    problems = [remedies.for_finding(f) for f in report["findings"]
-                if f["severity"] in ("high", "medium")]
-    outputs = {"output_verified": report["passed"], "finding_counts": report["finding_counts"],
-               "findings": report["findings"], "variables": report["variables"],
-               "netcdf_files": report["netcdf_files"], "casts": report["casts"],
-               "text": report["text"]}
-    summary = (f"{report['netcdf_files']} file(s), {report['casts']} cast(s): "
-               + ("verified" if report["passed"] else "NOT verified")
-               + f", findings {report['finding_counts']}")
-    return _outcome("done", summary, outputs, problems)
+        return _outcome("done", "no output to verify", {"output_verified": None})
+    taxa = [p for p in files if is_taxa_file_name(p.name, run.ws.accession)]
+    profiles = [p for p in files if p not in taxa]
+    outputs: Dict[str, Any] = {}
+    problems, parts, passed = [], [], []
+    if profiles:
+        report = verify_output(str(run.ws.processed_dir), paths=[str(p) for p in profiles])
+        problems += [remedies.for_finding(f) for f in report["findings"]
+                     if f["severity"] in ("high", "medium")]
+        outputs.update({"profiles_verified": report["passed"],
+                        "finding_counts": report["finding_counts"],
+                        "findings": report["findings"], "variables": report["variables"],
+                        "netcdf_files": report["netcdf_files"], "casts": report["casts"],
+                        "text": report["text"]})
+        passed.append(report["passed"])
+        parts.append(f"{report['netcdf_files']} file(s), {report['casts']} cast(s): "
+                     + ("verified" if report["passed"] else "NOT verified")
+                     + f", findings {report['finding_counts']}")
+    if taxa:
+        checks = {p.name: validate_taxa_netcdf(str(p)) for p in taxa}
+        for name, c in checks.items():
+            if not c["passed"]:
+                problems.append(remedies.problem(
+                    "verify", f"{name} is not a valid Taxa-Record file", "; ".join(c["errors"]),
+                    "A bug in wod_etl (each haul passed on its own); see run.log.",
+                    kind="finding"))
+        ok = all(c["passed"] for c in checks.values())
+        outputs.update({"taxa_verified": ok,
+                        "taxa_checks": {n: {k: c.get(k) for k in ("passed", "errors",
+                                                                  "warnings")}
+                                        for n, c in checks.items()}})
+        passed.append(ok)
+        parts.append(f"{len(taxa)} Taxa-Record file(s): " + ("verified" if ok else
+                                                             "NOT verified"))
+    outputs["output_verified"] = all(passed)
+    return _outcome("done", "; ".join(parts), outputs, problems)
 
 
 FINGERPRINTS = {"resolve": _fp_resolve, "fetch": _fp_fetch, "triage": _fp_triage,
@@ -787,13 +818,11 @@ RUNNERS = {"resolve": stage_resolve, "fetch": stage_fetch, "triage": stage_triag
 
 
 def _left_behind(run: Run, name: str) -> Optional[str]:
-    """What a stage wrote, as it is on disk now. A finished stage whose inputs are unchanged
-    still reruns when this differs: outputs deleted by hand must be rebuilt, not verified as
-    an empty folder. (fetch's mirror is already part of its fingerprint.)"""
+    """Hash of a stage's outputs on disk; a change (e.g. deleted by hand) makes it rerun."""
     ws = run.ws
     trees = {"resolve": lambda: _tree(ws.run_dir, [ws.listing_path.name]),
              "triage": lambda: _tree(ws.run_dir, [ws.triage_path.name]),
-             "stage": lambda: _tree(ws.staging_dir / "profiles"),
+             "stage": lambda: [_tree(ws.staging_dir / k) for k in STAGED_KINDS],
              "process": lambda: [_tree(ws.processed_dir, [p.name for p in wod_files(ws)]),
                                  _tree(ws.per_file_dir)]}
     return _hash(trees[name]()) if name in trees else None
@@ -803,9 +832,10 @@ def _left_behind(run: Run, name: str) -> Optional[str]:
 def run_pipeline(source: str, accession_id: Optional[str] = None,
                  from_stage: Optional[str] = None,
                  progress: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
-    """`wod-etl run`: resolve, fetch and triage the accession, and write decisions.toml for a
-    person to review. Nothing is processed. Never raises on data; returns
-    `{"accession", "command", "exit_code", "stages", "problems", "paths"}`."""
+    """`wod-etl run`: resolve, fetch, triage and write decisions.toml for review.
+
+    Never raises on data; returns `{"accession", "command", "exit_code", "stages", "problems",
+    "paths"}`."""
     from wod_etl.discovery import accession_for
 
     accession = accession_id or accession_for(source)
@@ -821,8 +851,8 @@ def run_pipeline(source: str, accession_id: Optional[str] = None,
 
 def confirm_pipeline(accession: str, from_stage: Optional[str] = None,
                      progress: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
-    """`wod-etl confirm`: write what the reviewed decisions.toml includes -- stage, process,
-    verify -- and report. Same return as run_pipeline."""
+    """`wod-etl confirm`: stage, process and verify what decisions.toml includes. Returns as
+    run_pipeline."""
     if from_stage and from_stage not in CONFIRM_STAGES:
         return _refused(accession, "check", f"unknown stage {from_stage!r} for confirm", "",
                         "Use one of: " + ", ".join(CONFIRM_STAGES))
@@ -857,7 +887,7 @@ def _locked(ws: Workspace, source: str, command: str, stages: tuple,
         return _refused(ws.accession, stages[0], f"cannot write the run folder {ws.run_dir}",
                         f"{type(e).__name__}: {e}",
                         "Check that the folder is writable and the disk is not full, then "
-                        "run the same command again -- it continues from where it stopped.")
+                        "run the same command again: it continues from where it stopped.")
 
 
 def _drive(ws: Workspace, source: str, command: str, stages: tuple,
@@ -912,9 +942,10 @@ def _drive(ws: Workspace, source: str, command: str, stages: tuple,
                 fp = None
             done = prior.get("status") == "done"
             intact = not done or prior.get("left") == _left_behind(run, name)
-            if done and intact and prior.get("fingerprint") == fp and name not in forced:
+            if done and intact and fp is not None and prior.get("fingerprint") == fp \
+                    and name not in forced:
                 say(f"[{i}/{total}] {name:<8} ✓ {prior.get('summary', '')} (unchanged)")
-                runlog.event(log, logging.INFO, f"stage {name}: up to date, reused -- "
+                runlog.event(log, logging.INFO, f"stage {name}: up to date, reused; "
                                                 f"{prior.get('summary', '')}",
                              kind="stage_reused", stage=name)
                 continue
@@ -944,6 +975,8 @@ def _drive(ws: Workspace, source: str, command: str, stages: tuple,
                              traceback=traceback.format_exc(limit=8))
                 outcome = _outcome("failed", f"raised {type(e).__name__}",
                                    problems=[remedies.for_exception(name, e)])
+            # Resolve's fingerprint reads its own outputs, so they are recorded first.
+            state["stages"][name]["outputs"] = outcome["outputs"]
             try:
                 fp_after = FINGERPRINTS[name](run) if outcome["status"] == "done" else fp
             except Exception:                           # noqa: BLE001
@@ -959,14 +992,13 @@ def _drive(ws: Workspace, source: str, command: str, stages: tuple,
             mark = {"done": "✓", "failed": "✗", "blocked": "⏸"}.get(outcome["status"], "?")
             say(f"[{i}/{total}] {name:<8} {mark} {outcome['summary']}")
             runlog.event(log, logging.WARNING if outcome["status"] != "done" else logging.INFO,
-                         f"stage {name}: {outcome['status']} -- {outcome['summary']}",
+                         f"stage {name}: {outcome['status']}, {outcome['summary']}",
                          kind="stage_end", stage=name, status=outcome["status"],
                          problems=outcome["problems"])
-            # The log reads on its own: each problem with its why and its fix, not only in
-            # events.jsonl.
+            # Also write each problem to the text log, not only events.jsonl.
             for p in outcome["problems"]:
                 log.log(logging.WARNING if p.get("blocking") else logging.INFO,
-                        "  %s: %s%s -- fix: %s", "problem" if p.get("blocking") else "note",
+                        "  %s: %s%s; fix: %s", "problem" if p.get("blocking") else "note",
                         p["what"], f" ({p['why']})" if p.get("why") else "", p["how_to_fix"])
             if outcome["status"] == "failed":
                 exit_code, stopped = EXIT_FAILED, True
@@ -975,8 +1007,7 @@ def _drive(ws: Workspace, source: str, command: str, stages: tuple,
                 exit_code, stopped = EXIT_DECISIONS, True
                 break
         if not stopped and command == "confirm":
-            # Files that could not be written fail the command, though the rest were written
-            # and verified: the person has something to fix either way.
+            # Unwritten files fail the command even though the rest were written.
             if any(p.get("blocking") and p.get("kind") == "failure"
                    for p in (state["stages"].get("process") or {}).get("problems") or []):
                 exit_code = EXIT_FAILED

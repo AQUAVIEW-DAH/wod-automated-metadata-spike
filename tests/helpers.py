@@ -1,4 +1,4 @@
-"""Shared fixtures for the writer and verify suites -- a minimal cast that passes."""
+"""Shared test helpers: a minimal valid cast, code-list caching and mooring NetCDF files."""
 import numpy as np
 import pandas as pd
 
@@ -32,7 +32,7 @@ def make_cast(lat=61.93, lon=-172.27, rows=3, dic=False):
 
 
 def cache_code_list(cache_dir, field, text, retrieved="2026-01-01T00:00:00+00:00"):
-    """Put a published code list into the (test) cache, as if fetched on `retrieved`."""
+    """Write a code list into the test cache as if fetched on `retrieved`."""
     import json
     from pathlib import Path
 
@@ -50,8 +50,7 @@ JPEG_HEAD = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x
 def write_mooring_nc(path, *, days=30.0, levels=1,
                      variables=(("T_20", "TEMPERATURE (C)", "C"),),
                      mooring="18bs8a", instrument="Seabird SBE-39"):
-    """One instrument's record from a mooring, as PMEL's EcoFOCI writes it (EPIC): every
-    variable along time x depth x lat x lon, longitude in degree_west."""
+    """Write one mooring instrument record in EPIC layout (time x depth x lat x lon)."""
     import netCDF4
 
     n = int(days * 24) + 1

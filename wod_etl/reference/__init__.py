@@ -1,9 +1,5 @@
-"""WOD reference knowledge: the manual's tables, loaded rather than remembered.
-
-Every WOD code, unit, flag meaning and threshold used anywhere in this project comes from
-knowledge/wod_code_tables/*.json, which was extracted from knowledge/wod_readme.pdf with
-page citations. Nothing is transcribed from memory into code.
-"""
+"""WOD reference tables, loaded from knowledge/wod_code_tables/*.json (extracted from the WOD
+manual with page citations), and the CF Standard Name Table."""
 
 from .load_tables import (
     load_table,
@@ -29,11 +25,17 @@ from .load_tables import (
     unit_constants,
     range_check_variables,
 )
-from .query_wod_knowledge import query_wod_knowledge, search_manual
+from .countries import country_codes, resolve_country
+from .cf_names import (canonical_units, is_alias, resolve_standard_name,
+                       standard_name_vocabulary)
 
 __all__ = [
-    "query_wod_knowledge",
-    "search_manual",
+    "canonical_units",
+    "is_alias",
+    "resolve_standard_name",
+    "standard_name_vocabulary",
+    "country_codes",
+    "resolve_country",
     "load_table",
     "available_tables",
     "wod_datasets",
