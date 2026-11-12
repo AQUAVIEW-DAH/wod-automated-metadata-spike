@@ -208,8 +208,8 @@ def read_station_list(
         info["parsed"] += 1
 
     if info["duplicates"]:
-        info["note"] = ("Some station keys repeat: a station occupied more than once. Match "
-                        "casts on station and date, not station alone.")
+        info["note"] = ("Some station keys repeat (a station occupied more than once), so a "
+                        "cast is identified by station and date.")
     return stations, info
 
 

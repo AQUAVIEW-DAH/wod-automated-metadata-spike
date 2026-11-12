@@ -233,14 +233,14 @@ def _read_fixed_width(path, fmt, profile):
                      header=None if headerless else 0,
                      encoding=fmt.get("encoding", "utf-8"),
                      na_values=list(NA_SENTINELS))
-    warnings = ["fixed-width column boundaries are inferred, not declared; check them "
-                "against the accession's format description before trusting the split"]
+    warnings = ["fixed-width column boundaries are inferred, not declared; the accession's "
+                "format description can confirm them"]
     if headerless:
         df.columns = [f"col_{i}" for i in range(df.shape[1])]
         warnings.append(f"no column header row: {df.shape[1]} columns named col_0..."
-                        f"col_{df.shape[1] - 1}. No col_N maps to a WOD code: name them "
-                        f"during staging, from the header block or the accession's format "
-                        f"description, with units folded into the name.")
+                        f"col_{df.shape[1] - 1}, which map to no WOD code until a staging "
+                        f"script names them, with units, from the header block or the "
+                        f"format description")
     else:
         df.columns = [str(c).strip() for c in df.columns]
     note = (f"fixed width, {len(colspecs)} inferred columns at {colspecs}"
@@ -620,8 +620,7 @@ def _read_netcdf(path, fmt, profile):
     for name, whens in undated.items():
         warnings.append(f"'{name}' has units '{clocks[name][0]}' and decodes to "
                         f"{_iso(whens[0])}: the epoch looks wrong. {len(whens)} cast(s) are "
-                        f"left with no date rather than that one; correct the units in a "
-                        f"staged copy to date them.")
+                        f"left undated; a staged copy with corrected units dates them.")
     return casts, {"warnings": warnings, "global_attributes": global_attrs}
 
 
@@ -926,7 +925,7 @@ def _renamed(variables) -> List[str]:
 
 def _labels(variables) -> Dict[str, str]:
     """Every variable's column label, in file order. When two would share a label (two sensors
-    of one quantity), the later keeps its own name, so neither overwrites the other."""
+    of one quantity), the later keeps its own name."""
     out: Dict[str, str] = {}
     taken = set()
     for name, v in variables.items():

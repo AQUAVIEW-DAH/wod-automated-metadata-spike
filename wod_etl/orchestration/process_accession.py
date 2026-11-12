@@ -479,7 +479,7 @@ def process_one_file(url: str, dataset_type: Optional[str], out_dir: Path, run_i
                      options: Optional[Dict[str, Any]] = None,
                      stem: Optional[str] = None,
                      source_prefix: str = "") -> Dict[str, Any]:
-    """Run every phase on one file. Returns {"ok": bool, ...}; never raises.
+    """Fetch, read, map, write and validate one file. Returns {"ok": bool, ...}; never raises.
 
     `key` is the path relative to the accession root (default: basename); `source_prefix`
     plus `key` is what its casts record as `source_file`. `accession` is written into casts
@@ -778,17 +778,14 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
     if not measured:
         verdict["skip_kind"] = "sidecar"
         verdict["skip_reason"] = (
-            "no measured variable: this file carries coordinates and identifiers but "
-            "nothing from Table 3a. It is a station list or metadata sidecar, not a cast: "
-            "use it to stage coordinates into the cast files that reference it (staging, "
-            "wod_etl/staging/).")
+            "no measured variable: the file holds coordinates and identifiers but no Table 3a "
+            "variable, so it is a station list or metadata sidecar, not a cast.")
         return None, verdict
     if empty:
         verdict["skip_kind"] = "no_data"
         verdict["skip_reason"] = (
             f"no measurements: every mapped measurement column is empty "
-            f"({', '.join(empty)}), as with 'Not analyzed' values. The file is well-formed "
-            f"but holds nothing to standardize.")
+            f"({', '.join(empty)}), e.g. all 'Not analyzed'.")
         return None, verdict
 
     # No position or depth: stop here and name the cause. A missing time only warns.
@@ -797,10 +794,8 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
     if blocking:
         verdict["skip_kind"] = "unmappable"
         verdict["skip_reason"] = (
-            f"missing required coordinate(s): {', '.join(blocking)}. They are not in the "
-            f"data file or its header block. Stage them in first from a sibling station "
-            f"list, the folder readme or a cruise report, noting where each came from "
-            f"(staging, wod_etl/staging/).")
+            f"missing required coordinate(s): {', '.join(blocking)}. Neither the data nor "
+            f"its header block states them.")
         return None, verdict
     verdict["missing_coordinates"] = missing or None
 
@@ -810,12 +805,10 @@ def _build_cast(cast, key, dataset_type, dataset_overrides, process_unidentified
         verdict["skip_kind"] = "unmappable"
         verdict["skip_reason"] = (
             "pressure but no depth: the pressure is not in decibars, so depth was not "
-            "computed from it. Convert it during staging with "
-            "wod_etl.staging.pressure_to_depth, which needs the cast's latitude, and record "
-            "that depth was derived."
+            "computed from it."
             if has_pressure else
-            "no depth axis: no column resolves to depth, and there is no pressure column to "
-            "derive one from. A profile cannot be written without one.")
+            "no depth axis: no column resolves to depth, and no pressure column to derive "
+            "one from.")
         return None, verdict
 
     # Drop levels with no value (WOD has none); pressure, the level's coordinate, does not count.
@@ -974,7 +967,7 @@ def _prefilter(key: str, dataset_type, dataset_overrides) -> Optional[Dict[str, 
     if bundle:
         return {"reason": f"NCEI bundle file: {bundle}", "stage": "prefilter"}
     if dataset_type or _override_for(key, dataset_overrides):
-        return None                       # an operator named this folder; do not second-guess
+        return None                       # a dataset named by the caller beats path exclusions
     verdict = classify_dataset(path=key)
     if verdict.get("exclusion") and verdict["exclusion"]["matched_in"] == "path":
         return {"reason": f"not WOD profile data: {verdict['exclusion']['reason']}",
@@ -1107,7 +1100,8 @@ def _depth_from_pressure(df, header: str):
     """(df, note): add the depth column WOD requires to a cast on pressure surfaces.
 
     Depth uses the UNESCO 1983 formula (Fofonoff and Millard) at the cast's latitude. Unchanged
-    if the cast has depth already, no pressure in decibars (unitless counts), or no latitude.
+    if the cast has depth already, no pressure in decibars (one with no unit is taken as
+    decibars), or no latitude.
     """
     import numpy as np
     import pandas as pd

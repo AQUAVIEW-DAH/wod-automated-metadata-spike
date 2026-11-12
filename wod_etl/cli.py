@@ -48,8 +48,7 @@ def _print_problems(problems, out=sys.stdout) -> None:
             print(textwrap.indent(textwrap.fill(f"why: {p['why']}", 92), "     "), file=out)
         print(textwrap.indent(textwrap.fill(f"fix: {p['how_to_fix']}", 92), "     "), file=out)
     if len(blocking) > MAX_PRINTED:
-        print(f"\n  ... and {len(blocking) - MAX_PRINTED} more (all of them are in "
-              f"report.md)", file=out)
+        print(f"\n  ... and {len(blocking) - MAX_PRINTED} more (all in report.md)", file=out)
     if other:
         print(f"\n  also ({len(other)} not blocking): "
               + "; ".join(p["what"] for p in other[:6])

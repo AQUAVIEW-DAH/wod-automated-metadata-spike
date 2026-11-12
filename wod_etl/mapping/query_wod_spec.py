@@ -82,11 +82,9 @@ NOT_STORED = {
                      r"_theta$"],
         "reason": "Potential temperature is derived, not measured. Table 3a code 1 is "
                   "in-situ temperature; there is no code for theta.",
-        "route": "If the file also has in-situ temperature, that is written and this is not. "
-                 "If theta is all there is, convert it to in-situ during staging (it needs "
-                 "pressure and salinity) and record the conversion. It is never mapped to "
-                 "code 1: with both columns present the cast would claim Temperature twice, "
-                 "and with theta alone it would report the wrong quantity.",
+        "route": "Not written. If the file has no in-situ temperature, convert theta to "
+                 "in-situ during staging (it needs pressure and salinity) and record the "
+                 "conversion.",
     },
     "conservative_temperature": {
         "aliases": ["conservative_temperature", "cons_temp", "conservative_temp"],
@@ -434,9 +432,8 @@ def explain_column(column_name: str) -> Optional[Dict[str, Any]]:
 
 
 def declared_standard_name(attrs) -> str:
-    """A NetCDF variable's CF `standard_name`, lower case, with a deprecated alias read as the
-    name that replaced it. A name the table lacks is kept as written. `attrs` is a dict or a
-    variable."""
+    """A NetCDF variable's CF `standard_name`, lower case, with a deprecated alias replaced by
+    its current name. `attrs` is a dict or a variable."""
     get = attrs.get if isinstance(attrs, dict) else (lambda k: getattr(attrs, k, None))
     raw = str(get("standard_name") or "").strip()
     return (resolve_standard_name(raw) or raw).lower()
@@ -549,9 +546,8 @@ def resolve_column(query: str, columns: List[str]) -> Dict[str, Any]:
         if len(hits) > 1:
             out["ambiguous"] = True
             out["note"] = (f"{len(hits)} columns match {query!r} at the {tier} tier: "
-                           f"{hits}. Name the one you mean. Sensor-indexed pairs such as "
-                           f"t090C/t190C resolve to the same WOD code by design: they "
-                           f"are the primary and secondary sensor, not duplicates.")
+                           f"{hits}. Sensor pairs such as t090C/t190C share a WOD code as "
+                           f"the primary and secondary sensor.")
             return out
         column = hits[0]
         refusal = explain_column(column)

@@ -1,4 +1,4 @@
-"""Reading originator tables that pandas cannot open as they stand."""
+"""Read originator tables that pandas cannot open directly."""
 import collections
 import csv
 import re

@@ -122,7 +122,6 @@ def classify_taxa_code(code: int) -> Dict[str, Any]:
             "citation": "Table 8, WOD 2023 User's Manual p.35"}
 
 
-# ------------------------------------------------------- online code tables
 def missing_biological_fields(stated_ids) -> List[str]:
     """The key Table 6a fields a haul does not state, as `"<id> <name>"`.
 
@@ -141,6 +140,7 @@ def missing_biological_fields(stated_ids) -> List[str]:
     return out
 
 
+# ------------------------------------------------------- online code tables
 def code_table_links() -> Dict[str, Any]:
     """Every WOD online code-table link, plus the hub URLs.
 

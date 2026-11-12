@@ -58,23 +58,22 @@ def for_file_failure(key: str, stage: str, error: str, staged: bool) -> Dict[str
         how = ("A bug in wod_etl, not in the data: the traceback is in run.log. "
                "Report it. " + leave_out)
     elif "pivot_long" in error or "long format" in error.lower():
-        how = ("It names its variables in a cell: it needs a [profiles.<name>] recipe with "
-               "kind = \"long\" (`wod-etl run` proposes one for a file it recognises as long "
-               "format). " + leave_out)
+        how = ("It is in long format (variable names in a cell) and must be reshaped first, "
+               "with a staging script ([profiles.<name>], kind = \"script\"). " + leave_out)
     elif "missing required coordinate" in error:
-        how = ("It carries no position or date of its own. Name the station list that locates "
-               "it in a [profiles.<name>] recipe (kind = \"per_file\"). " + leave_out)
+        how = ("Add the missing coordinates with a staging script ([profiles.<name>], "
+               "kind = \"script\"), e.g. from a station list or cruise report. " + leave_out)
     elif "pressure but no depth" in error:
         how = ("Depth must be derived from pressure, which needs the cast's latitude: stage "
                "it with a kind = \"script\" recipe using staging.pressure_to_depth. "
                + leave_out)
     elif stage in ("sniff_format", "read_any"):
-        how = ("It does not read as any table this package knows. If it holds data, find out "
-               "what wrote it (the accession's readme or the submitter) and stage "
-               "it with a script recipe. " + leave_out)
+        how = ("wod-etl cannot read it as a table. If it holds data, write a staging script "
+               "for it ([profiles.<name>], kind = \"script\"). " + leave_out)
     elif staged:
-        how = ("A recipe wrote this staged file: fix the recipe in decisions.toml (units, "
-               "columns), or list the cast in its skip_casts, and confirm again.")
+        how = ("A recipe staged this file. If it is a script recipe, fix the script; "
+               "otherwise set include = false on its source file(s) in decisions.toml. Then "
+               "confirm again.")
     else:
         how = ("If it was classified as the wrong dataset, set dataset = \"<dataset>\" in its "
                "entry. " + leave_out)
@@ -131,8 +130,8 @@ def for_finding(finding: Dict[str, Any]) -> Dict[str, Any]:
 
 def for_exception(stage: str, exc: BaseException) -> Dict[str, Any]:
     return problem(stage, f"stage '{stage}' raised {type(exc).__name__}", str(exc),
-                   "A bug, not a data problem: the traceback is in run.log. Fix or report "
-                   "it, then run the same command again: it continues from this stage.")
+                   "A bug, not a data problem; the traceback is in run.log. Fix or report "
+                   "it, then run the same command again to continue from this stage.")
 
 
 def for_decisions_syntax(error: str, stage: str = "decide") -> Dict[str, Any]:

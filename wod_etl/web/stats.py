@@ -1,9 +1,7 @@
 """Descriptive statistics of a file's variables, for the preview's Statistics tab.
 
-A written file is summarized per dimension, found by its CF ragged counts as the preview
-finds them. An input NetCDF file is summarized as stored, since it describes itself; any
-other table by the columns the pipeline's reader (`read_any`) splits it into. Neither is what
-staging (a mooring's daily means, a station list's casts) makes of the file.
+A written file is summarized per ragged dimension. An input NetCDF file is summarized as
+stored; any other input by the columns `read_any` splits it into, before any staging.
 
 Numbers get count, quartiles, mean, standard deviation and a histogram; flags and text their
 most common values; times their first and last.
@@ -80,9 +78,10 @@ def input_stats(path: str) -> Dict[str, Any]:
 
 
 def _stored_netcdf(path: str) -> List[Dict[str, Any]]:
-    """Each variable of any NetCDF file, grouped by its dimensions: the most values first,
-    then the most dimensions; variables of one value share a group. Fill is missing, declared or not (EPIC's 1e35). A
-    variable over `LIMIT` values is read at an even step along its first dimension."""
+    """Each variable of any NetCDF file, grouped by its dimensions, largest group first.
+
+    Undeclared fill (EPIC's 1e35) counts as missing. A variable over `LIMIT` values is read at
+    an even step along its first dimension."""
     import netCDF4
 
     from wod_etl.discovery.read_any import _decode_time, _is_clock, honour_fill

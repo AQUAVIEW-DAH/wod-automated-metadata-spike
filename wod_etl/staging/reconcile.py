@@ -86,7 +86,7 @@ def reconcile_stations(
                     "values": {s: (v["latitude"], v["longitude"])
                                for s, v in row["sources"].items()},
                     "note": f"{spread:.1f} km apart, beyond the {position_tolerance_km} km "
-                            f"tolerance, so the sources cannot all be right."})
+                            f"tolerance."})
 
         if "date" in compare:
             dates = {s: v["date"] for s, v in row["sources"].items() if v["date"]}
@@ -94,8 +94,7 @@ def reconcile_stations(
             if len(set(dates.values())) > 1:
                 conflicts.append({
                     "station": labels[station], "field": "date", "values": dates,
-                    "note": "the sources give different dates; a third source (a fishing "
-                            "log, a time-stamped event) can settle which is right."})
+                    "note": "the sources give different dates."})
         detail[labels[station]] = row
 
     return {

@@ -410,7 +410,7 @@ class TestDeclaredIdentity:
 
 
 class TestAFillTheFileDoesNotDeclare:
-    """EPIC files mark a missing value with 1e35 and may not declare it (0306185)."""
+    """EPIC files mark a missing value with 1e35 and may not declare it."""
 
     def test_a_record_of_fill_is_no_variable_and_one_fill_is_no_value(self, tmp_path):
         from helpers import write_mooring_nc
@@ -425,7 +425,7 @@ class TestAFillTheFileDoesNotDeclare:
         info = read_instrument(p)
         assert [v["name"] for v in info["variables"]] == ["T_20", "S_41"]
         assert info["pressure"] is None
-        assert "PRESSURE (DB) (dbar) (every sample is fill: no value)" in info["not_stored"]
+        assert "PRESSURE (DB) (dbar) (every sample is fill)" in info["not_stored"]
         # placed by its nominal pressure, not by 1e35 dbar
         assert info["depth"] == pytest.approx(pressure_to_depth(20.0, 62.19), abs=0.01)
         daily = mooring_days([p], [info])["daily"][0]

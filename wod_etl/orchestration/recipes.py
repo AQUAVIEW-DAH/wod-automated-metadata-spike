@@ -90,7 +90,7 @@ def check_profile_recipe(recipe: Dict[str, Any], data_root) -> Dict[str, Any]:
                 "casts_without_station": [reverse.get(c, c)
                                           for c in report["casts_without_station"]],
                 "stations_without_cast": report["stations_without_cast"]}
-    except Exception as e:                              # noqa: BLE001 - reported to the person
+    except Exception as e:                              # noqa: BLE001 - reported as a problem
         return {"error": f"{type(e).__name__}: {e}"}
 
 
@@ -120,28 +120,27 @@ def check_mooring_recipe(recipe: Dict[str, Any], root: Path) -> Dict[str, Any]:
             problems.append(f"{name}: {info['error']}")
             continue
         if depths.get(name) == "pressure" and not info.get("pressure"):
-            problems.append(f"{name}: depth = \"pressure\", but it records no pressure it "
-                            f"can be placed by; give its depth in m")
+            problems.append(f"{name}: placed by pressure, but it records no pressure")
         for v in info["variables"]:
             key = _unit_key(v["code"], v["units"])
             seen = units.setdefault(v["code"], (key, v["units"] or "no unit", name))
             if seen[0] != key:
                 problems.append(f"{name} states {v['column']!r} in '{v['units'] or 'no unit'}' "
-                                f"where {seen[2]} states '{seen[1]}': one unit per variable on "
-                                f"a mooring; convert one, or stage it with a script recipe")
+                                f"where {seen[2]} states '{seen[1]}'; a mooring takes one unit "
+                                f"per variable")
         lat, lon = info.get("latitude"), info.get("longitude")
         if lat is not None and lon is not None:
             if not (-90 <= lat <= 90 and -180 <= lon <= 360):
                 problems.append(f"{name}: its position reads as {lat}, {lon}, not a place on "
-                                f"Earth; set position = [lat, lon]")
+                                f"Earth")
             else:
                 positions.append((lat, lon))
     if positions and max(max(abs(a[0] - b[0]), abs(a[1] - b[1]))
                          for a in positions for b in positions) > 0.01:
-        problems.append("its instruments are 0.01 degree or more apart, and one recipe is one "
-                        "mooring: split it into one per mooring")
+        problems.append("its instruments are 0.01 degree or more apart, so they are not one "
+                        "mooring")
     if not recipe.get("position") and not positions:
-        problems.append("no instrument states its position: set position = [lat, lon]")
+        problems.append("no instrument states its position")
     return {"instruments": len(recipe.get("files") or []), "mooring_problems": problems}
 
 
@@ -194,11 +193,11 @@ def _run_mooring(name: str, recipe: Dict[str, Any], root: Path, out: Path, acces
         f"Position from {where}.",
         (f"Deployed {built['window'][0]} to {built['window'][1]}, "
          + ("from the pressure its instruments record" if recipe.get("deployment") != "record"
-            else "its record without its first and last day: none of its instruments records "
-                 "pressure to tell when it went in, and a logger may record air on deck")
-         + ": samples outside are not used." if built["window"] else
-         "Deployed: the whole record. None of its instruments records pressure to tell "
-         "when it was in the water, and the review included it as it stands.")]
+            else "its record without its first and last day (no instrument records pressure "
+                 "to tell when it went in, and a logger may record air on deck)")
+         + "; samples outside are not used." if built["window"] else
+         "Deployed: the whole record. No instrument records pressure to tell when it was "
+         "in the water, and the review included it.")]
     notes += [f"{n}: depth {d}." for n, d in sorted((recipe.get("placed") or {}).items())
               if d and recipe["depths"].get(n) != "pressure"]
     notes += [n for i in instruments for n in i.get("notes") or []]
@@ -290,11 +289,11 @@ def run_profile_recipe(name: str, recipe: Dict[str, Any], data_root, out_dir,
             f"Pivoted from {len(recipe['files'])} long-format file(s) on {recipe['keys']}: "
             f"variable '{recipe['variable']}', value '{recipe['value']}'. "
             + (f"Column names and units: {recipe['columns']}." if recipe.get("columns") else
-               "Columns named as the files name the variables: a unit a name states is "
-               "read, and a name with none is read in WOD's standard unit.")]
+               "Columns keep the files' variable names; a name without a unit is read in "
+               "WOD's standard unit.")]
         if info["conflicts"]:
             notes.append(f"{len(info['conflicts'])} level(s) had two values for one variable; "
-                         f"the first was kept (on_conflict = \"first\").")
+                         f"the first was kept.")
         idx = {c: i for i, c in enumerate(cols)}
         groups = group_rows(rows, cols, [cast_key])
         width = max((len(k[0]) for k in groups if k and k[0].isdigit()), default=0)
@@ -633,7 +632,7 @@ def check_taxa_recipe(recipe: Dict[str, Any], data_root) -> Dict[str, Any]:
     """Dry run of a taxa recipe, for the review: hauls, records, hauls it cannot locate."""
     try:
         built = _taxa_hauls(recipe, Path(data_root))
-    except Exception as e:                              # noqa: BLE001 - reported to the person
+    except Exception as e:                              # noqa: BLE001 - reported as a problem
         return {"error": f"{type(e).__name__}: {e}"}
     from wod_etl.reference import missing_biological_fields
 

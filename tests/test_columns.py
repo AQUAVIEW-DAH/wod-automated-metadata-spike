@@ -112,7 +112,8 @@ class TestRenameRefusesToChangeMeaning:
 
 
 class TestRenameNeverCorrupts:
-    """strict=False accepts a judgement call. It never accepts a structural one."""
+    """strict=False applies a rename that loses a unit, never one that collides or matches
+    no column."""
 
     def test_a_collision_is_blocked_even_with_strict_false(self):
         cols, audit = rename_columns(["LAT", "Latitude"], {"LAT": "Latitude"}, strict=False)

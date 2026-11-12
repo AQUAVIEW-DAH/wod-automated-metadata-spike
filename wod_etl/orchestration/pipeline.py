@@ -494,7 +494,7 @@ def stage_check(run: Run, changed: bool) -> Dict[str, Any]:
                      + ", as decisions.toml says",
                      kind="decision", key=p, dataset=ds, drop=options.get("drop") or None,
                      metadata=options.get("metadata") or None)
-    return _outcome("done", f"{len(plan['direct'])} file(s) to process as they stand, "
+    return _outcome("done", f"{len(plan['direct'])} file(s) to process directly, "
                             f"{len(plan['profiles']) + len(plan.get('taxa') or {})} recipe(s) "
                             f"to stage, "
                             f"{len(plan['left_out'])} file(s) left out",
@@ -595,7 +595,7 @@ def stage_stage(run: Run, changed: bool) -> Dict[str, Any]:
             try:
                 results.append(runners[kind](name, recipe, run.data_root, building[kind],
                                              run.ws.accession, plan))
-            except Exception as e:                      # noqa: BLE001 - reported to the person
+            except Exception as e:                      # noqa: BLE001 - reported as a problem
                 runlog.event(log, logging.ERROR, f"recipe {kind}.{name} failed: {e}",
                              kind="recipe", recipe=f"{kind}.{name}",
                              traceback=traceback.format_exc(limit=6))

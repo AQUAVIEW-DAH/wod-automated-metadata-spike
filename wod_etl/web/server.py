@@ -148,9 +148,9 @@ def start_run(source: str = Body(..., embed=True),
 
     sources = [s.strip() for s in re.split(r"[,\n]", source) if s.strip()]
     if not sources:
-        raise HTTPException(400, "give an accession: a landing-page URL, a number, an NCEI "
-                                 "data directory or a local folder; several, separated by "
-                                 "commas")
+        raise HTTPException(400, "give an accession (a landing-page URL, a number, an NCEI "
+                                 "data directory or a local folder), or several separated "
+                                 "by commas")
     accession_id = (accession_id or "").strip()
     if accession_id and len(sources) > 1:
         raise HTTPException(400, "an accession id names one input, not several")
@@ -307,7 +307,7 @@ def files(accession: str):
             # A mooring's logger: where wod-etl places it, and how.
             "depth": mooring.get("depth") if mooring.get("placed_by") else None,
             "depth_note": mooring.get("depth_note"),
-            # A plankton table wod-etl can write as Taxa-Records (not one it proposes out).
+            # A plankton table complete enough to write as Taxa-Records.
             "taxa": bool(f.get("taxa")) and not f["taxa"].get("missing"),
             "size": path.stat().st_size if path.is_file() else None})
     headings = dict(dec.SECTIONS)

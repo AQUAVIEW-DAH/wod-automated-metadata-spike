@@ -251,7 +251,7 @@ class TestInstrumentExportNames:
         ("T090", 1, "ITS-90"), ("OxML/L", 3, None), ("OxMg/L", 3, None),
     ])
     def test_old_seasoft_names_map_with_their_scale(self, column, code, scale):
-        """Accession 0054244's ASCII exports name columns 'Pr T068 Sal00 OxML/L'."""
+        """Older Sea-Bird ASCII exports name columns 'Pr T068 Sal00 OxML/L'."""
         from wod_etl.mapping.query_wod_spec import extract_scale
 
         assert match_variable(column) == code

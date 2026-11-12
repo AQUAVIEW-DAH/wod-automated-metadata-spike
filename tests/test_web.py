@@ -264,7 +264,7 @@ class TestInputPreview:
 
 
 class TestStats:
-    """Each variable summarized as a scientist reads it: numbers, flags, text and times."""
+    """Summaries of numbers, flags, text and times."""
 
     def test_numbers(self):
         import pandas as pd

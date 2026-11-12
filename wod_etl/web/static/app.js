@@ -68,7 +68,7 @@ function renderStatus(s) {
 
   $("problems").innerHTML = (s.problems || []).map((p) =>
     `<li class="${p.blocking ? "" : "note"}"><strong>${esc(p.what)}</strong>` +
-    (p.why ? ` — ${esc(p.why)}` : "") +
+    (p.why ? `: ${esc(p.why)}` : "") +
     (p.how_to_fix ? `<br><span class="how">→ ${esc(p.how_to_fix)}</span>` : "") + "</li>").join("");
 
   $("lines").textContent = job ? (job.lines || []).join("\n") : "";
@@ -156,7 +156,7 @@ function renderBatch() {
     `data-acc="${esc(b.accession)}" title="${esc(b.outcome || STEP[b.step] || "")}">` +
     `${esc(b.accession)} <small>${esc(stepWord(b))}</small>` +
     (b.step === "queued" ? `<span class="x" data-unqueue="${esc(b.accession)}" ` +
-      `title="Take it out of the queue">×</span>` : "") + "</span>").join("");
+      `title="Remove from the queue">×</span>` : "") + "</span>").join("");
   const n = (...steps) => items.filter((b) => steps.includes(b.step)).length;
   $("batch-count").textContent = [[n("review"), "to review"], [n("running", "queued"), "to go"],
                                   [n("done"), "done"], [n("empty"), "nothing written"],
@@ -511,7 +511,7 @@ async function refreshOutputs() {
       `title="Preview">${esc(f.name)}</a>` +
       `<div class="meta">${esc(meta)}</div>${resolution}${from}</div>`;
   }).join("") +
-    (r.taxa_list_unavailable ? `<p class="meta warn">Taxa list unavailable: names kept as ` +
+    (r.taxa_list_unavailable ? `<p class="meta warn">Taxa list unavailable; names kept as ` +
       `written. To resolve them, run online: uv run wod-etl confirm ${esc(ui.acc)} ` +
       `--from process</p>` : "") +
     (r.taxa_not_stated ? `<p class="meta warn" title="${esc(r.taxa_not_stated.join("\n"))}">` +
@@ -818,9 +818,9 @@ function renderFormatted(f, r) {
       return `<td class="${number.test(c) ? "" : "text"}">${esc(c)}</td>`;
     }).join("") + "</tr>").join("") + "</tbody></table></div>" +
     `<p class="meta">${f.named ? "" : "No header row: the columns are numbered. "}` +
-    (f.casts > 1 ? `The first of ${f.casts} casts in the text read. ` : "") +
+    (f.casts > 1 ? `Only the first of ${f.casts} casts is shown. ` : "") +
     (f.rows_total > f.rows.length ? `The first ${f.rows.length} of ${f.rows_total} rows ` +
-      "read." : "") + "</p>";
+      "are shown." : "") + "</p>";
 }
 
 function renderInput(r, path) {
@@ -862,8 +862,7 @@ function renderInput(r, path) {
 }
 
 // ------------------------------------------------------------------ statistics
-// The open file's variables, a row each: numbers by quartiles, mean, std and a histogram;
-// flags and text by their commonest values; times by first and last. Loaded once per file.
+// The open file's variables, a row each. Loaded once per file.
 const STATS = [["min", "min"], ["p25", "25%"], ["median", "median"], ["p75", "75%"],
                ["max", "max"], ["mean", "mean"], ["std", "std"]];
 

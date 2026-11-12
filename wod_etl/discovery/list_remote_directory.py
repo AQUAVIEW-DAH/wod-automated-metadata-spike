@@ -320,9 +320,8 @@ def _diagnose_empty(url_or_path: str) -> Dict[str, Any]:
     number = accession_number(url_or_path)
     is_landing = bool(_LANDING_PAGE.search(url_or_path)) or bool(_ACCESSION_URL.search(url_or_path))
     if not (is_landing or _BARE_ACCESSION.match(str(url_or_path))):
-        return {"hint": "The page was fetched but held no file links. It may be an index "
-                        "that renders its listing with JavaScript, or a page that is not a "
-                        "directory at all. Open it and check before retrying."}
+        return {"hint": "The page was fetched but held no file links: it may render its "
+                        "listing with JavaScript, or not be a directory."}
 
     where = (f"https://www.ncei.noaa.gov/archive/accession/download/{number}"
              if number else "the accession's download page")
@@ -330,12 +329,9 @@ def _diagnose_empty(url_or_path: str) -> Dict[str, Any]:
         "error": "not an accession data directory: this is an NCEI metadata landing page or "
                  "a bare accession number, so there are no files to list.",
         "accession_number": number,
-        "hint": f"Open {where}, take the data directory URL from it and pass that "
-                f"instead. NCEI renders the file listing client-side, so "
-                f"the directory URL cannot be derived from the accession number: it lives "
-                f"under /data/oceans/archive/arc<NNNN>/{number or '<accession>'}/ and only "
-                f"that page says which arc bundle. If the files are already downloaded, "
-                f"point at the local folder instead.",
+        "hint": f"Pass the data directory URL that {where} gives, or a local folder of the "
+                f"downloaded files. The directory is /data/oceans/archive/arc<NNNN>/"
+                f"{number or '<accession>'}/, and only NCEI's pages say which arc bundle.",
     }
 
 

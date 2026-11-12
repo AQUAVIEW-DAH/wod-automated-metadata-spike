@@ -737,13 +737,13 @@ def _write_provenance(ds, casts) -> None:
     shared = [k for k in keys[0] if all(k in other for other in keys[1:])]
     if shared:
         ds.metadata_not_placed = (
-            "header keys with no WOD field, kept here so they are not lost: "
+            "header keys with no WOD field: "
             + "; ".join(shared[:40])
             + (f" (and {len(shared) - 40} more)" if len(shared) > 40 else ""))
     own = [[k for k in ks if k not in shared] for ks in keys]
     if any(own):
         _per_cast_text(ds, "cast_metadata_not_placed", ["; ".join(ks) for ks in own],
-                       "this cast's header keys with no WOD field, kept so they are not lost")
+                       "this cast's header keys with no WOD field")
 
 
 def _write_primary_header(ds, casts) -> None:
@@ -826,7 +826,7 @@ def split_coded_value(entry: Dict[str, Any]):
     """(value to write in the field, originator text to write beside it, lookup summary).
 
     A value whose lookup found no code is not written in the field; its text goes beside
-    it with the reason. A value never looked up is written as it stands.
+    it with the reason. A value never looked up is written unchanged.
     """
     if not entry:
         return None, None, None

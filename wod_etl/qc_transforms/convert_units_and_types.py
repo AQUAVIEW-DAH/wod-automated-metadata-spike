@@ -1,4 +1,4 @@
-"""Deterministic unit and type conversions driven by the mapping contract.
+"""Unit conversions and numeric coercion for the columns in the mapping contract.
 
 Each conversion is logged with its constant and source, for the NetCDF metadata.
 """

@@ -117,8 +117,8 @@ def read_wod_csv(path, encoding: str = "utf-8") -> Tuple[List[Dict[str, Any]], D
         casts.append({"cast_id": str(n), "df": df, "header_block": "\n".join(header),
                       "source_note": f"WOD CSV, cast {n}"})
     if flags_dropped:
-        warnings.append("WOD's own QC flags (F) were not carried: WOD applies its QC again; "
-                        "the originator's flags (O) were")
+        warnings.append("WOD's own QC flags (F) were dropped, since WOD runs its QC again; "
+                        "the originator's flags (O) were kept")
     return casts, {"warnings": warnings}
 
 

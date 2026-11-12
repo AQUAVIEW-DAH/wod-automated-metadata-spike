@@ -23,7 +23,7 @@ _NUM = r"[-+]?\d+(?:\.\d+)?"
 SECONDARY_HEADER_PATTERNS: Dict[int, str] = {
     1:  r"(?:accession(?:[_\s]*(?:no|num|number))?|nodc[_\s]*accession|ncei[_\s]*accession)",
     2:  r"(?:project|programme|program|expedition)",
-    # Not 'cruise': that names a voyage, not a vessel (character data).
+    # Excludes 'cruise', which names a voyage (character data).
     3:  r"(?:platform(?:[_\s]*name)?|ship(?:[_\s]*name)?|vessel(?:[_\s]*name)?|callsign|"
         r"call[_\s]*sign)",
     4:  r"(?:institut(?:e|ion)|agency|laborator(?:y|ies)|originator[_\s]*institution|data[_\s]*cent(?:er|re))",
@@ -482,8 +482,7 @@ def _place_pair(pair, line, names, out) -> None:
         out["unresolved"].append({
             "key": key, "value": None, "variable": variable, "evidence": evidence,
             "matches": None,
-            "note": "the key is present in the block but its value column is empty, so "
-                    "nothing was recorded for it."})
+            "note": "the value column is empty, so nothing was recorded."})
         return
 
     # Column 1 names the variable, so a per-variable key attaches to it.
@@ -604,9 +603,9 @@ def _from_columns(columns: List[str], df, out: Dict[str, Any]) -> None:
             if not constant:
                 entry["value"] = None
                 entry["note"] = (
-                    f"'{col}' varies down the cast, so no single value is recorded: a "
-                    f"secondary header describes the whole cast. If it varies between casts, "
-                    f"split the file per cast in staging and keep the column.")
+                    f"'{col}' varies down the cast and a secondary header holds one value per "
+                    f"cast, so none is recorded. If it varies between casts, split the file "
+                    f"per cast in staging.")
             # A header-block value wins over one inferred from a column.
             existing = out["secondary_headers"].get(str(sec_id))
             if existing and existing.get("value") not in (None, ""):
@@ -724,10 +723,10 @@ def _find_originator_flags(columns: List[str], out: Dict[str, Any]) -> None:
             "name": "Originator's flags",
             "value": None,
             "source": "inferred from flag columns",
-            "note": "This file carries the originator's own quality flags. WOD records "
-                    "which flag set was used as secondary header 96; the file does not state "
-                    "it, so it must come from the submitter or the accession documentation. "
-                    "The flag values are kept verbatim and are not WOD Table 12 flags.",
+            "note": "The file has originator quality flags but does not name the flag set "
+                    "(secondary header 96); it must come from the submitter or the accession "
+                    "documentation. Flag values are kept verbatim; they are not WOD Table 12 "
+                    "flags.",
         }
 
 

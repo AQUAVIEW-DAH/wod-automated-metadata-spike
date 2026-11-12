@@ -1,4 +1,4 @@
-"""Staging: the parsing and reshaping that lets an unreadable file be read."""
+"""Staging: parsing and reshaping files the pipeline cannot read directly."""
 import datetime as dt
 
 import pytest

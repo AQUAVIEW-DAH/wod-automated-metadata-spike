@@ -383,9 +383,9 @@ def place_instruments(layout: Dict[str, Any], members: Sequence[Dict[str, Any]]
                 anchor = beside[0]["row"]
                 placed[m["name"]] = {
                     "depth": round(known[anchor], 1), "how": "beside",
-                    "detail": f"{source} lists it with {name_of(anchor)}, with no position "
-                              f"of its own: at that instrument's depth by its pressure, "
-                              f"{known[anchor]:.1f} m",
+                    "detail": f"{source} lists it with {name_of(anchor)} and no position of "
+                              f"its own, so it is placed at that instrument's depth by "
+                              f"pressure, {known[anchor]:.1f} m",
                     "short": f"listed with {name_of(anchor)}, no position of its own"}
                 del wanted[row]
 

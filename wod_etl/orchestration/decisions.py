@@ -382,9 +382,9 @@ METADATA_FIELDS = [
      ("variable_specific_header", 5)),
 ]
 METADATA_HELP = [
-    "# A WOD code is safest (platform = 8553): a name is looked up in WOD's list and kept as",
-    "# text when it is not one entry. A value that differs between files goes in their own",
-    '# entries instead: metadata = { cruise = "NABOS-08" }.']
+    "# A WOD code is safest (platform = 8553). A name is looked up in WOD's list and kept as",
+    "# text unless exactly one entry matches. A value that differs between files goes in",
+    '# their own entries: metadata = { cruise = "NABOS-08" }.']
 # The keys as older decisions files wrote them.
 _OLD_METADATA_KEYS = {"Platform": "platform", "Institution": "institution",
                       "Project": "project", "Cruise": "cruise",
@@ -786,8 +786,8 @@ def _bounding_box(triage: Dict[str, Any]) -> Optional[List[float]]:
 # ----------------------------------------------------------------- validation
 def open_item(item_id: str, what: str, how: str, blocking: bool = True,
               key: Optional[str] = None) -> Dict[str, Any]:
-    """An item for the person; `key` is the decisions.toml section that settles it (default:
-    the item id; "" for none)."""
+    """An open item; `key` is the decisions.toml section that settles it (default: the item
+    id; "" for none)."""
     return {"id": item_id, "what": what, "how_to_fix": how, "blocking": blocking,
             "decisions_key": item_id if key is None else (key or None)}
 
@@ -845,7 +845,7 @@ def validate(decisions: Dict[str, Any], triage: Dict[str, Any],
         if entry.get("metadata") is not None and not isinstance(entry["metadata"], dict):
             items.append(open_item(hdr, f"{key}: metadata = {entry['metadata']!r}",
                                    "write metadata as a table, e.g. metadata = "
-                                   "{ Cruise = \"NABOS-08\" }"))
+                                   "{ cruise = \"NABOS-08\" }"))
         dataset = entry.get("dataset")
         if dataset not in (None, "") and dataset not in datasets:
             items.append(open_item(hdr, f"{key}: dataset = {dataset!r} is not a WOD dataset",
@@ -853,9 +853,9 @@ def validate(decisions: Dict[str, Any], triage: Dict[str, Any],
         elif not dataset:
             unnamed = [p for p in decided if p not in consumed and not files[p].get("dataset")]
             if unnamed:
-                items.append(open_item(hdr, f"{key}: is included, and nothing names its WOD "
-                                            f"dataset: it is classified from what it holds "
-                                            f"when it is processed",
+                items.append(open_item(hdr, f"{key}: included with no WOD dataset named; it "
+                                            f"is classified from what it holds when "
+                                            f"processed",
                                        "nothing to do, or set dataset = one of "
                                        + ", ".join(sorted(datasets)),
                                        blocking=False))
@@ -869,8 +869,8 @@ def validate(decisions: Dict[str, Any], triage: Dict[str, Any],
     for name, r in (decisions.get("profiles") or {}).items():
         hdr = item_header("profiles", name)
         if not isinstance(r, dict) or r.get("kind") != "script":
-            items.append(open_item(hdr, f"[profiles.{name}] is not read: wod-etl works "
-                                        f"out how files become casts from the files",
+            items.append(open_item(hdr, f"[profiles.{name}] is not read: only recipes of "
+                                        f"kind = \"script\" are",
                                    "nothing to do; delete the section", blocking=False))
             continue
         if not r.get("script"):
@@ -900,8 +900,8 @@ def validate(decisions: Dict[str, Any], triage: Dict[str, Any],
                                    "nothing to do", blocking=False, key=""))
         if check.get("pivot_conflicts"):
             items.append(open_item(hdr, f"{name}: {check['pivot_conflicts']} level(s) carry "
-                                        f"two values for one variable: the first is kept, and "
-                                        f"the casts' notes say so",
+                                        f"two values for one variable; the first is kept and "
+                                        f"noted in the casts",
                                    "nothing to do", blocking=False, key=""))
     for name, r in plan["taxa"].items():
         check = (taxa_checks or {}).get(name) or {}
@@ -927,7 +927,7 @@ def validate(decisions: Dict[str, Any], triage: Dict[str, Any],
                                         f"read as missing-value codes and not written",
                                    "nothing to do", blocking=False, key=""))
         if check.get("missing_biological_fields"):
-            items.append(open_item(hdr, f"{source}: not stated: "
+            items.append(open_item(hdr, f"{source} does not state "
                                         + ", ".join(check["missing_biological_fields"]),
                                    "nothing to do; ask the submitter", blocking=False,
                                    key=""))
@@ -941,8 +941,8 @@ def validate(decisions: Dict[str, Any], triage: Dict[str, Any],
 
 def build_plan(decisions: Dict[str, Any], triage: Dict[str, Any],
                conflicts: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """What `wod-etl confirm` will do: files processed as they stand, recipes to stage, and
-    files left out and why.
+    """What `wod-etl confirm` will do: files processed directly, recipes to stage, and files
+    left out and why.
 
     Included files are written as the `dataset` their entry names, not reclassified; CTD casts
     with coarse levels still route to OSD (manual p.19)."""

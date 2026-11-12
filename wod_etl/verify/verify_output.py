@@ -167,7 +167,7 @@ def _read_one(path, per_variable, flags, report, sample_levels, cast_ids=None) -
                 entry["max"] = max(entry["max"], float(data[finite].max()))
             # Keep values with their depths: the acceptable range depends on depth.
             room = sample_levels - len(entry["values"])
-            # A level its originator flagged bad is not judged again: it is known bad.
+            # Levels the originator flagged bad are known bad and not range-checked.
             entry["originator_bad"] = entry.get("originator_bad", 0) + int((finite & bad).sum())
             present = np.flatnonzero(finite & ~bad)
             keep = present[:max(room, 0)]
@@ -181,7 +181,7 @@ def _read_one(path, per_variable, flags, report, sample_levels, cast_ids=None) -
                 entry["not_checked"] = entry.get("not_checked", 0) + int(present.size - keep.size)
 
 
-# Fewer shared levels than this and two variables agreeing proves nothing.
+# Fewest shared levels at which two equal variables count as a copy.
 MIN_LEVELS_FOR_A_COPY = 10
 
 
@@ -331,8 +331,8 @@ def _summarize(name, v, findings) -> Dict[str, Any]:
             f"bound of 0 by at most {abs(values[near_zero].min()):g} {v['units']} (minimum "
             f"{values[near_zero].min():g}), small against the variable's own range",
             "A sensor zero or dark offset, not impossible data. The values are kept as "
-            "submitted (QC flags them downstream), not clipped to zero, which would change "
-            "the originator's numbers."))
+            "submitted (QC flags them downstream); clipping them to zero would change the "
+            "originator's numbers."))
         outside = outside & ~near_zero
     n_out = int(outside.sum())
     fraction = n_out / values.size
@@ -351,18 +351,16 @@ def _summarize(name, v, findings) -> Dict[str, Any]:
     if fraction >= SYSTEMATIC_FRACTION:
         findings.append(_finding(
             "systematically_out_of_range", "high", None, name, evidence,
-            "This is a unit or a conversion, not bad data: individual extreme levels happen, "
-            "a whole variable being impossible does not. "
+            "A whole variable out of range points to a unit or a conversion error. "
             + _suspect_cause(values[~np.isnan(values)], lo, hi)))
     elif fraction >= NOTABLE_FRACTION:
         findings.append(_finding(
             "out_of_range_levels", "medium", None, name, evidence,
-            "Enough levels are impossible to be worth reading. Check the extremes against "
-            "the source file before accepting them."))
+            "Check the extreme levels against the source file before accepting them."))
     else:
         findings.append(_finding(
             "out_of_range_levels", "low", None, name, evidence,
-            "A few extreme levels, which is normal in real casts and not alarming."))
+            "A few extreme levels, normal in real casts."))
     return out
 
 
@@ -389,11 +387,11 @@ def _check_cast_ids(cast_ids: Dict[str, List[str]], findings) -> None:
         "duplicate_cast_id", "high", None, "cast_id",
         f"{len(repeated)} cast id(s) occur more than once across {len(cast_ids)} id(s): "
         f"{shown}",
-        "cast_id is the CF profile_id: two casts sharing one are one cast to any tool that "
-        "merges these files. If it is one cast in two source files, leave one of them out "
-        "(include = false); if they are different casts, give each an accession, cruise, "
-        "cast or station and date in its staged header (the writer builds the id from "
-        "those)."))
+        "cast_id is the CF profile_id, so tools that merge these files treat casts sharing "
+        "one as a single cast. If it is one cast in two source files, leave one out "
+        "(include = false); if they are different casts, give each its own accession, "
+        "cruise, cast or station and date in its staged header, from which the id is "
+        "built."))
 
 
 def _suspect_cause(values, lo, hi) -> str:

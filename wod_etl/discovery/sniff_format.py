@@ -91,8 +91,8 @@ def sniff_format(path: str, num_bytes: int = SNIFF_BYTES) -> Dict[str, Any]:
         return _result("binary_unknown", "none", "medium", readable=False, size_bytes=size,
                        evidence=[f"no encoding in {list(TEXT_ENCODINGS)} decodes it",
                                  f"first bytes: {head[:16]!r}"],
-                       note="An unrecognised binary. Ask the submitter or the accession "
-                            "readme what wrote it before guessing a layout.")
+                       note="An unrecognised binary: the submitter or the accession readme "
+                            "may say what wrote it.")
 
     return {**_sniff_text(text, size), "encoding": encoding, "size_bytes": size}
 
@@ -122,9 +122,8 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
     if any(m in text for m in _CNV_MARKERS):
         return _result("sea_bird_cnv", "sea_bird_cnv", "high",
                        evidence=[f"Sea-Bird marker {m!r}" for m in _CNV_MARKERS if m in text],
-                       note="Column names live in the '# name N = ' header lines, not in a "
-                            "header row. Units are in that header too; fold them into the "
-                            "name so unit detection can see them.")
+                       note="Column names and units are in the '# name N = ' header lines, "
+                            "not in a header row.")
 
     structured = _structured_text(text)
     if structured:
@@ -142,9 +141,8 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
                                      f"splitting into {count} fields"],
                            delimiter=char, delimiter_name=name, row_consistency=1.0,
                            single_data_row=True,
-                           note="One data row. If the folder holds many files like this, "
-                                "they are levels of one cast rather than one cast each: "
-                                "combine them before staging.")
+                           note="One data row. Many files like this in one folder are "
+                                "levels of one cast, to be combined before staging.")
 
     if len(body) < MIN_CONSISTENT_ROWS:
         return _result("unstructured_text", "none", "medium", readable=False,
@@ -173,9 +171,8 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
                                  f"their fields are numeric",
                                  "no delimiter splits them consistently" if not delim
                                  else f"delimiter {delim[1]} found but the content is prose"],
-                       note="Prose with numbers in it (a readme, a cruise log, a station "
-                            "narrative): not data, but it may hold coordinates or sentinel "
-                            "legends.")
+                       note="Prose with numbers in it (a readme or a cruise log): not data, "
+                            "but it may hold coordinates or sentinel legends.")
 
     fw = _fixed_width_columns(body)
     if fw:
@@ -184,15 +181,15 @@ def _sniff_text(text: str, size: int) -> Dict[str, Any]:
                                  f"{len(body)} sampled rows with no single delimiter"],
                        colspecs=fw,
                        note="Boundaries are inferred from where every sampled row has a "
-                            "space. Verify them against the accession's format description "
-                            "before trusting the split: a column that is full in the "
-                            "sample and empty later shifts every field after it.")
+                            "space; a column full in the sample and empty later shifts every "
+                            "field after it. The accession's format description can confirm "
+                            "them.")
 
     return _result("ragged_text", "delimited", "low",
                    evidence=["numeric rows, but no delimiter and no stable column boundary"],
                    delimiter=r"\s+",
-                   note="Rows do not agree on a shape. Usually several blocks concatenated, "
-                        "or a wrapped record. Look at it by hand before staging.")
+                   note="Rows do not agree on a shape: usually several blocks concatenated, "
+                        "or a wrapped record.")
 
 
 def _structured_text(text: str) -> Optional[Dict[str, Any]]:
@@ -212,12 +209,12 @@ def _structured_text(text: str) -> Optional[Dict[str, Any]]:
         if looks_json:
             return _result("json", "none", "medium", readable=False,
                            evidence=["parses as JSON, or carries quoted keys"],
-                           note="Metadata sidecar, or data in a shape only its own "
-                                "submitter documents: stage a table from it to process it.")
+                           note="Metadata, or data in a layout only its submitter "
+                                "documents; a table staged from it can be processed.")
     if lead == "<":
         family = "xml"
-        note = ("XML. In an NCEI accession this is usually ISO 19115 metadata: a source of "
-                "coordinates, instrument and time coverage, not of measurements.")
+        note = ("XML; in an NCEI accession usually ISO 19115 metadata, which gives "
+                "coordinates, instrument and time coverage but no measurements.")
         return _result(family, "none", "medium", readable=False,
                        evidence=["text begins with an XML/SGML tag"], note=note)
     return None
@@ -390,8 +387,7 @@ def _disambiguate_zip(path: Path) -> Dict[str, Any]:
                 "note": f"claims to be a ZIP but will not open: {e}"}
     if any(n.startswith("xl/") for n in names):
         return {"format_family": "spreadsheet_xlsx", "reader": "spreadsheet",
-                "note": "Excel workbook. Every sheet is a candidate table; name the one "
-                        "you read in the staged copy's provenance."}
+                "note": "Excel workbook: each sheet is read as a table."}
     if any(n.startswith("word/") for n in names):
         return {"format_family": "word_document", "reader": "none", "readable": False,
                 "note": "Word document: documentation, not data."}
@@ -403,8 +399,7 @@ def _disambiguate_zip(path: Path) -> Dict[str, Any]:
                 "note": "OpenDocument spreadsheet."}
     return {"format_family": "archive_zip", "reader": "none", "readable": False,
             "member_count": len(names), "members": names[:20],
-            "note": "A real archive. Extract it into data/raw/ and list the members; do "
-                    "not process the archive itself."}
+            "note": "A zip archive: not read; its members can be once it is extracted."}
 
 
 # Documentation and container families, which callers skip; any other unreadable file is a failure.

@@ -13,8 +13,7 @@ import numpy as np
 from wod_etl.staging.mooring_layout import file_serial, serial_key
 from wod_etl.staging.parse import parse_coordinate, pressure_to_depth
 
-# CF standard names of what a moored instrument measures in the water, as Table 3a codes.
-# What a name matcher would read as temperature, pressure or oxygen and is not a measurement
+# What a name matcher would read as temperature, pressure or oxygen but is not a measurement
 # of the water: the instrument's own temperature, the air, a derived quantity, a saturation.
 _NOT_OF_THE_WATER_STANDARD = {
     "air_temperature", "air_pressure", "air_pressure_at_mean_sea_level",
@@ -85,8 +84,8 @@ def _time(ds):
         if m and v.ndim == 1:
             calendar = str(getattr(v, "calendar", "") or "").strip().lower()
             if calendar not in _STANDARD_CALENDARS:
-                raise ValueError(f"its time is on the '{calendar}' calendar, not the standard "
-                                 f"one: stage it with a script recipe")
+                raise ValueError(f"its time is on the non-standard '{calendar}' calendar; "
+                                 f"stage it with a script recipe")
             unit = m.group(1).lower().rstrip("s")
             ref = pd.Timestamp(m.group(2).replace("UTC", "").strip())
             ref = ref.tz_convert(None) if ref.tzinfo else ref
@@ -192,8 +191,8 @@ def read_instrument(path) -> Dict[str, Any]:
                         getattr(v.dtype, "kind", "U") in "SU":
                     continue
                 if any(len(ds.dimensions[d]) != 1 for d in v.dimensions if d != tdim):
-                    out["error"] = (f"'{name}' holds several depths in one file: one "
-                                    f"instrument per file is what a mooring recipe reads")
+                    out["error"] = (f"'{name}' holds several depths; a mooring recipe "
+                                    f"reads one instrument per file")
                     return out
                 if hasattr(v, "flag_values") or hasattr(v, "flag_meanings") or \
                         _FLAG_NAME.search(_words(name)):
@@ -221,7 +220,7 @@ def read_instrument(path) -> Dict[str, Any]:
                 every = tuple(slice(None, None, max(1, n // SAMPLE)) if d == tdim else 0
                               for d in v.dimensions)
                 if not np.isfinite(_floats(v, every)).any():
-                    out["not_stored"].append(f"{label} (every sample is fill: no value)")
+                    out["not_stored"].append(f"{label} (every sample is fill)")
                     continue
                 entry = {"name": name, "code": code, "column": label, "units": units,
                          "factor": 1.0, "offset": 0.0}

@@ -237,7 +237,7 @@ def _check_qc(ds, errors, warnings, checks):
                     f"('{name}_qc_originator') and no WOD Table 12 flags. Expected when WOD "
                     f"QC is off; the two scales are not interchangeable.")
             else:
-                warnings.append(f"Measured variable '{name}' has no quality flags at all: "
+                warnings.append(f"Measured variable '{name}' has no quality flags: "
                                 f"neither WOD '{qc}' nor originator flags")
             continue
         q = ds.variables[qc]

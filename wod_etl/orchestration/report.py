@@ -121,7 +121,7 @@ def _items(value: Any, limit: int = 12) -> List[str]:
         lines = [f"  - {v}" for v in entries[:limit]]
         more = len(entries) - limit
     if more > 0:
-        lines.append(f"  - ... and {more} more (all of them are in report.json)")
+        lines.append(f"  - ... and {more} more (all in report.json)")
     return lines
 
 
@@ -156,7 +156,7 @@ def render(report: Dict[str, Any]) -> str:
                       f"   - Why: {p['why']}" if p.get("why") else None,
                       f"   - How to fix: {p['how_to_fix']}", ""]
     if other:
-        lines += ["## Notes and warnings (they do not stop anything)", ""]
+        lines += ["## Notes and warnings (not blocking)", ""]
         for p in other:
             lines.append(f"- {p['what']}; {p['how_to_fix']}")
         lines.append("")
@@ -236,9 +236,9 @@ def _render_wod_files(report: Dict[str, Any]) -> List[str]:
         return []
     folder = (report.get("paths") or {}).get("output")
     lines = ["## WOD files written", "",
-             f"In `{folder}`, written {report.get('files_written_at')}: one file per WOD "
-             f"dataset and year, named as WOD names its own (`wod_<dataset>_<year>`) with the "
-             f"accession. Each cast says which source file it came from.", ""]
+             f"In `{folder}`, written {report.get('files_written_at')}. One file per WOD "
+             f"dataset and year, named `wod_<dataset>_<year>_<accession>.nc`; each cast "
+             f"records its source file.", ""]
     if not files:
         # Taxa-Record files are listed in their own section.
         lines = lines[:2] + (["No profile files.", ""] if report.get("taxa_files")

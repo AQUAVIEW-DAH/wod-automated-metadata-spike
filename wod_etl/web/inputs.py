@@ -1,8 +1,8 @@
-"""What an input file holds, for the browser preview: its text, its sheets, or (read in the
-worker, like an output file) a NetCDF's attributes and variables. Files are only read.
+"""Input file previews for the browser: text, spreadsheet sheets, or a NetCDF's attributes
+and variables (read in the worker by `preview.describe_input`). Files are only read.
 
-Text is also laid out to be read: a table as a header block and columns (split as the
-pipeline splits it), XML and JSON indented, prose wrapped. The text as stored comes too.
+Text also gets a layout: a table split into a header block and columns as the pipeline
+splits it, XML and JSON indented, prose wrapped. The raw text is sent as well.
 """
 import csv
 import json

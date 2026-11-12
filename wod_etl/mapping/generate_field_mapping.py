@@ -49,7 +49,7 @@ _MASS_ABBREV = re.compile(r"^[mun]?g\s*/\s*(?:l|kg)$")
 _HEADER_PATTERNS = {
     1:  r"(?:accession|accession[_\s]*(?:no|number)|nodc[_\s]*accession)",
     2:  r"(?:project|programme|program)",
-    # Not 'cruise', which names a voyage; as in map_metadata.SECONDARY_HEADER_PATTERNS.
+    # Excludes 'cruise', which names a voyage, as map_metadata.SECONDARY_HEADER_PATTERNS does.
     3:  r"(?:platform|ship|vessel|callsign)",
     4:  r"(?:institut(?:e|ion)|agency|originator[_\s]*institution)",
     5:  r"(?:cast|cast[_\s]*(?:no|number)|tow[_\s]*(?:no|number))",

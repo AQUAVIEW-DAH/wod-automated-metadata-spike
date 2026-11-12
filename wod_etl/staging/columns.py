@@ -60,9 +60,8 @@ def rename_columns(
     audit["applied"] = applied
     audit["applied_with_problems"] = bool(failed)
     if blocked:
-        audit["note"] = (f"{len(blocked)} rename(s) could not be applied at all "
-                         f"(no such column, or a name collision) and were skipped even "
-                         f"with strict=False.")
+        audit["note"] = (f"{len(blocked)} rename(s) could not be applied (no such column, "
+                         f"or a name collision) and were skipped even with strict=False.")
     return out, audit
 
 
@@ -103,8 +102,8 @@ def _plan_one(query: str, new_name: str, columns: List[str],
     if code_before is not None and code_before != code_after:
         entry["problems"].append(
             f"{old!r} resolves to WOD code {code_before} but {new_name!r} resolves to "
-            f"{code_after}. A rename must not change which variable a column is; add an "
-            f"alias to VARIABLE_ALIASES if the pipeline should learn this name.")
+            f"{code_after}. A rename must not change which variable a column is; for a "
+            f"name that recurs, add an alias to VARIABLE_ALIASES.")
 
     if require_unit and unit_before and unit_after != unit_before:
         suggestion = f"{new_name} ({unit_before})"
@@ -155,8 +154,7 @@ def suggest_column_names(columns: List[str],
             by_code.setdefault(code, []).append(col)
         if not extract_unit(col) and unit:
             entry["suggested"] = f"{col} ({unit})"
-            entry["why"] = ("the unit is not in the name, so unit detection cannot see "
-                            "it; folding it in is what makes the conversion correct")
+            entry["why"] = "the unit is not in the name, so unit detection cannot see it"
         out.append(entry)
 
     collisions = {code: names for code, names in by_code.items() if len(names) > 1}
@@ -170,4 +168,4 @@ def suggest_column_names(columns: List[str],
             "collisions": {str(k): v for k, v in collisions.items()},
             "unmapped": [e["column"] for e in out if e["wod_code"] is None],
             "note": "Suggestions only. Apply with rename_columns, which re-checks each "
-                    "one against the code, unit and scale before writing."}
+                    "one against the code, unit and scale."}
