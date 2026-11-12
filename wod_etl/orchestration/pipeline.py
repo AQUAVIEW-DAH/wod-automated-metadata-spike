@@ -329,7 +329,7 @@ def _epoch(iso: Optional[str]) -> Optional[float]:
 # Code hashed into stage fingerprints, so a code change reruns the stages it affects.
 TRIAGE_CODE = ("wod_etl/discovery", "wod_etl/mapping", "wod_etl/reference", "wod_etl/staging",
                "wod_etl/config.py", "wod_etl/terms.py", "wod_etl/time_zones.py",
-               "knowledge/wod_code_tables")
+               "knowledge/wod_code_tables", "knowledge/cf_standard_names.json")
 OUTPUT_CODE = TRIAGE_CODE + ("wod_etl/qc_transforms", "wod_etl/writers",
                              "wod_etl/verify", "wod_etl/orchestration/process_accession.py",
                              "wod_etl/orchestration/process_taxa.py",

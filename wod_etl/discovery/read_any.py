@@ -908,7 +908,8 @@ def _pick_dim(ds, variables, hints, exclude=None, prefer=None):
 def _renamed(variables) -> List[str]:
     """`Note:` lines for variables read under another name, so the originator's stays on
     record (they reach the output's `comment`)."""
-    from wod_etl.mapping.query_wod_spec import STANDARD_NAME_LABELS, declared_label
+    from wod_etl.mapping.query_wod_spec import (STANDARD_NAME_LABELS, declared_label,
+                                                declared_standard_name)
 
     out = []
     for name, label in _labels(variables).items():
@@ -918,8 +919,7 @@ def _renamed(variables) -> List[str]:
         declared = declared_label(v)
         how = ("its long_name" if not declared or not label.startswith(declared) else
                "its CF standard_name"
-               if str(getattr(v, "standard_name", "") or "").strip().lower()
-               in STANDARD_NAME_LABELS else "its EPIC code")
+               if declared_standard_name(v) in STANDARD_NAME_LABELS else "its EPIC code")
         out.append(f"Note: NetCDF variable '{name}' is read as '{label}' by {how}")
     return out
 

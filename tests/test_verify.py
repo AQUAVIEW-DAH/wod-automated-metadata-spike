@@ -56,6 +56,34 @@ class TestValidator:
         assert not report["passed"]
         assert any("entirely missing" in e for e in report["errors"])
 
+    def test_standard_names_and_units_are_checked_against_the_cf_table(self, tmp_path):
+        p = tmp_path / "good.nc"
+        write_ragged_profiles([make_cast(dic=True)], str(p))
+        report = validate_intermediate_netcdf(str(p))
+        assert "cf_standard_names" in report["checks_run"]
+        with nc.Dataset(p) as ds:
+            assert ds.standard_name_vocabulary.startswith("CF Standard Name Table v")
+
+        with nc.Dataset(p, "a") as ds:
+            ds["temperature"].units = "dbar"
+            ds["dissolved_inorganic_carbon"].standard_name = "sea_water_dic"
+        errors = validate_intermediate_netcdf(str(p))["errors"]
+        assert any("not convertible to 'K'" in e for e in errors)
+        assert any("'sea_water_dic', which is not in the CF Standard Name Table" in e
+                   for e in errors)
+
+    def test_a_deprecated_standard_name_is_only_a_warning(self, tmp_path):
+        p = tmp_path / "alias.nc"
+        write_ragged_profiles([make_cast()], str(p))
+        with nc.Dataset(p, "a") as ds:
+            ds["temperature"].standard_name = "sea_water_temperature status_flag"
+            v = ds.createVariable("chl", "f4", ("z_obs",))
+            v.standard_name, v.units = "chlorophyll_concentration_in_sea_water", "ug L-1"
+        report = validate_intermediate_netcdf(str(p))
+        assert report["passed"], report["errors"]
+        assert any("deprecated standard_name 'chlorophyll_concentration_in_sea_water'" in w
+                   for w in report["warnings"])
+
     def test_unreadable_file_reports_fatal_error(self, tmp_path):
         bad = tmp_path / "notnc.nc"
         bad.write_text("definitely not netcdf")

@@ -11,7 +11,8 @@ import netCDF4 as nc
 import numpy as np
 
 from wod_etl.config import CF_CONVENTIONS, NETCDF_FILL_VALUE, TOOL_NAME, WOD_VERSION
-from wod_etl.reference import biological_headers, taxa_biomass_variables
+from wod_etl.reference import (biological_headers, standard_name_vocabulary,
+                               taxa_biomass_variables)
 from wod_etl.writers.generate_netcdf_ragged import (
     CAST_DIM, _cast_ids, _cast_times, _cast_var, _coord, _describe_time,
     _write_character_data, _write_provenance, _write_shared_secondary_headers,
@@ -46,6 +47,7 @@ def write_taxa_netcdf(hauls: List[Dict[str, Any]], output_path: str) -> Dict[str
 
         ds.title = "WOD Intermediate Taxa-Records"
         ds.Conventions = CF_CONVENTIONS
+        ds.standard_name_vocabulary = standard_name_vocabulary()
         ds.WOD_version = WOD_VERSION
         ds.wod_dataset_type = "OSD"
         ds.wod_record_model = ("Biological Header (Table 6a) per haul; Taxa-Records (Table 7a) "

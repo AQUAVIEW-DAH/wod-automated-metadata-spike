@@ -4,6 +4,8 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.15.0",
+    # verify: a standard_name's units must convert to its canonical units (UDUNITS bundled).
+    "cf-units>=3.3.1",
     "fastapi>=0.143.2",
     "httpx>=0.28.1",
     "netcdf4>=1.7.4",

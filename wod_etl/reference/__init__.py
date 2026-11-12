@@ -1,5 +1,5 @@
 """WOD reference tables, loaded from knowledge/wod_code_tables/*.json (extracted from the WOD
-manual with page citations)."""
+manual with page citations), and the CF Standard Name Table."""
 
 from .load_tables import (
     load_table,
@@ -26,8 +26,14 @@ from .load_tables import (
     range_check_variables,
 )
 from .countries import country_codes, resolve_country
+from .cf_names import (canonical_units, is_alias, resolve_standard_name,
+                       standard_name_vocabulary)
 
 __all__ = [
+    "canonical_units",
+    "is_alias",
+    "resolve_standard_name",
+    "standard_name_vocabulary",
     "country_codes",
     "resolve_country",
     "load_table",

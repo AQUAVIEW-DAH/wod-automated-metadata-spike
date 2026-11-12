@@ -1,5 +1,7 @@
 """The knowledge base: table loading, flag derivation, and the knowledge index."""
 
+import re
+
 import pytest
 
 from wod_etl.reference import (
@@ -92,3 +94,41 @@ class TestReferenceContent:
 
     def test_molar_volume_constant(self):
         assert unit_constants()["molar_volume_o2_stp_l_per_mole"] == pytest.approx(22.3916)
+
+
+class TestCfStandardNames:
+    """The CF Standard Name Table, and the names the code writes and reads against it."""
+
+    def test_an_alias_resolves_to_its_current_name(self):
+        from wod_etl.reference import is_alias, resolve_standard_name
+        assert is_alias("chlorophyll_concentration_in_sea_water")
+        assert resolve_standard_name("chlorophyll_concentration_in_sea_water") == \
+            "mass_concentration_of_chlorophyll_in_sea_water"
+        assert resolve_standard_name(" Sea_Water_Temperature ") == "sea_water_temperature"
+        assert resolve_standard_name("sea_water_temperature status_flag") is None
+        assert resolve_standard_name(None) is None
+
+    def test_vocabulary_names_the_table_version(self):
+        from wod_etl.reference import standard_name_vocabulary
+        assert re.fullmatch(r"CF Standard Name Table v\d+", standard_name_vocabulary())
+
+    def test_written_names_are_current_and_their_units_convert(self):
+        from cf_units import Unit
+
+        from wod_etl.reference import canonical_units
+        from wod_etl.writers.generate_netcdf_ragged import CF_STANDARD_NAMES, CF_UNITS
+
+        for code, name in CF_STANDARD_NAMES.items():
+            canonical = canonical_units(name)
+            assert canonical is not None, f"{code}: {name} is not a current standard name"
+            units = CF_UNITS[wod_variables()[code]["standard_unit"]]
+            assert Unit(units).is_convertible(Unit(canonical)), (code, units, canonical)
+
+    def test_names_read_from_input_are_current(self):
+        from wod_etl.mapping.query_wod_spec import STANDARD_NAME_LABELS
+        from wod_etl.reference import canonical_units
+        from wod_etl.staging.moorings import _NOT_OF_THE_WATER_STANDARD
+
+        unknown = [n for n in {*STANDARD_NAME_LABELS, *_NOT_OF_THE_WATER_STANDARD}
+                   if canonical_units(n) is None]
+        assert not unknown, unknown

@@ -8,6 +8,7 @@ from typing import Any, Dict
 import numpy as np
 
 from wod_etl.reference import missing_biological_fields
+from wod_etl.verify.validate_intermediate_netcdf import check_standard_names
 
 _MEASUREMENTS = ("t_4_", "t_10_", "t_11_", "t_12_", "t_13_", "t_14_", "t_15_", "t_25_")
 _PER_UNIT = ("t_10_", "t_11_", "t_12_", "t_13_", "t_14_", "t_15_", "t_25_")
@@ -31,6 +32,7 @@ def validate_taxa_netcdf(path: str) -> Dict[str, Any]:
         if errors:
             return _result(errors, warnings)
 
+        check_standard_names(ds, errors, warnings)
         n_obs = len(ds.dimensions["taxa_obs"])
         if int(np.sum(v["taxa_row_size"][:])) != n_obs:
             errors.append("taxa_row_size does not sum to the taxa_obs dimension")

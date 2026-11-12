@@ -8,6 +8,9 @@ from typing import Dict, Any, List
 import netCDF4 as nc
 import numpy as np
 
+from wod_etl.reference import (canonical_units, is_alias, resolve_standard_name,
+                               standard_name_vocabulary)
+
 CF_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 OBS_DIM = "z_obs"
 CAST_DIM = "casts"
@@ -25,6 +28,8 @@ def validate_intermediate_netcdf(nc_file_path: str) -> Dict[str, Any]:
             _check_globals(ds, errors, warnings, checks)
             _check_dimensions(ds, errors, checks)
             _check_names(ds, errors, checks)
+            checks.append("cf_standard_names")
+            check_standard_names(ds, errors, warnings)
             _check_coordinates(ds, errors, warnings, checks)
             _check_ragged(ds, errors, warnings, checks)
             _check_qc(ds, errors, warnings, checks)
@@ -84,6 +89,47 @@ def _check_names(ds, errors, checks):
     for name in ds.dimensions:
         if not CF_NAME.fullmatch(name):
             errors.append(f"Dimension name '{name}' is not a valid CF identifier")
+
+
+def check_standard_names(ds, errors, warnings) -> None:
+    """Each `standard_name` is in the CF Standard Name Table and its `units` convert to the
+    name's canonical units (CF section 3.3). A deprecated alias is a warning."""
+    from cf_units import Unit
+
+    table = standard_name_vocabulary()
+    for name, v in ds.variables.items():
+        declared = str(getattr(v, "standard_name", "") or "").split()
+        if not declared:
+            continue
+        std = declared[0]
+        if canonical_units(std) is None:
+            if not is_alias(std):
+                errors.append(f"'{name}' has standard_name '{std}', which is not in the {table}")
+                continue
+            current = resolve_standard_name(std)
+            warnings.append(f"'{name}' has the deprecated standard_name '{std}'; the {table} "
+                            f"replaces it with '{current}'")
+            std = current
+        if len(declared) > 1:
+            continue                    # a modifier (CF Appendix C) changes the units
+        canonical = canonical_units(std)
+        units = str(getattr(v, "units", "") or "").strip()
+        if not units:
+            if canonical != "1":
+                errors.append(f"'{name}' ({std}) has no units; expected units convertible "
+                              f"to '{canonical}'")
+            continue
+        try:
+            u = Unit(units)
+            if u.is_time_reference():
+                u = Unit(units.split(" since ")[0])
+            ok = u.is_convertible(Unit(canonical))
+        except ValueError:
+            errors.append(f"'{name}' has units '{units}', which UDUNITS cannot read")
+            continue
+        if not ok:
+            errors.append(f"'{name}' has units '{units}', not convertible to '{canonical}', "
+                          f"the canonical units of {std}")
 
 
 def _check_coordinates(ds, errors, warnings, checks):

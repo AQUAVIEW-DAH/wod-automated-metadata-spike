@@ -14,6 +14,7 @@ import pandas as pd
 from wod_etl.config import (CF_CONVENTIONS, NETCDF_FILL_VALUE, QC_FILL_VALUE, TOOL_NAME,
                             WOD_VERSION)
 from wod_etl.time_zones import utc_offset_hours
+from wod_etl.reference import standard_name_vocabulary
 from wod_etl.reference.code_lists import is_standard_unit
 from wod_etl.reference.load_tables import flag_meanings_attr, flag_values_attr
 from wod_etl.mapping.query_wod_spec import DEPTH_SENTINEL_CODE
@@ -40,7 +41,9 @@ CF_UNITS = {
     "Day": "day", "Tritium Unit": "1e-18", "Nanomole kilogram-1": "nmol kg-1",
     "Percent": "percent", "Per mille": "1e-3", "Picomole kilogram-1": "pmol kg-1",
 }
-# CF standard names for Table 3a variables that have one. pH has no WOD scale, so none.
+# CF standard names for Table 3a variables that have one; a test checks them against
+# knowledge/cf_standard_names.json. pH has no WOD scale, so none. CFC-12 and CFC-113 have no
+# per-mass name.
 CF_STANDARD_NAMES = {
     1: "sea_water_temperature", 2: "sea_water_practical_salinity",
     3: "moles_of_oxygen_per_unit_mass_in_sea_water",
@@ -53,7 +56,7 @@ CF_STANDARD_NAMES = {
     21: "mole_concentration_of_dissolved_inorganic_carbon_in_sea_water",
     24: "volume_beam_attenuation_coefficient_of_radiative_flux_in_sea_water",
     25: "sea_water_pressure", 26: "air_temperature", 29: "air_pressure",
-    30: "latitude", 31: "longitude",
+    30: "latitude", 31: "longitude", 40: "moles_of_cfc11_per_unit_mass_in_sea_water",
 }
 
 
@@ -647,6 +650,7 @@ def _shared_or_per_cast(ds, name: str, values: List[Optional[str]], long_name: s
 def _write_globals(ds, casts) -> None:
     ds.title = TITLE
     ds.Conventions = CF_CONVENTIONS
+    ds.standard_name_vocabulary = standard_name_vocabulary()
     ds.featureType = "profile"
     ds.WOD_version = WOD_VERSION
     # WOD keeps one dataset per file; a mixed file says so, and `dataset` says which is which.

@@ -42,6 +42,7 @@ RUNS_DIR = _folder("WOD_RUNS_DIR", DATA_DIR / "runs")
 KNOWLEDGE_DIR = ROOT / "knowledge"
 CODE_TABLES_DIR = KNOWLEDGE_DIR / "wod_code_tables"
 WOD_README_PDF = KNOWLEDGE_DIR / "wod_readme.pdf"
+CF_STANDARD_NAMES_JSON = KNOWLEDGE_DIR / "cf_standard_names.json"
 
 for _d in (RAW_DIR, STAGING_DIR, PROCESSED_DIR, MANIFEST_DIR, RUNS_DIR):
     _d.mkdir(parents=True, exist_ok=True)

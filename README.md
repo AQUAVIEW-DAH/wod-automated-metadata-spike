@@ -92,6 +92,10 @@ The WOD 2023 manual is [`knowledge/wod_readme.pdf`](knowledge/wod_readme.pdf). I
 extracted to JSON with page citations (`knowledge/wod_code_tables/`), and the code reads those
 rather than hardcoded values.
 
+CF standard names are checked against the CF Standard Name Table
+(`knowledge/cf_standard_names.json`): names, canonical units and deprecated aliases. Each
+output names the table version in `standard_name_vocabulary`.
+
 ## For developers
 
 ```
@@ -105,8 +109,8 @@ wod_etl/
   qc_transforms/  unit conversion, opt-in WOD QC
   writers/        ragged NetCDF: profiles and Taxa-Records
   verify/         structural and value checks
-  reference/      loads knowledge/wod_code_tables/
-knowledge/        the manual and its tables as JSON
+  reference/      loads knowledge/: WOD tables, CF standard names
+knowledge/        the manual and its tables as JSON, the CF Standard Name Table
 tests/            unit and end-to-end tests; fixtures/accessions/
 data/             working area, not tracked
 ```
@@ -129,6 +133,9 @@ staged CSVs with `wod_etl.staging.write_staged_cast`.
 
 **New WOD release.** Replace the PDF and rebuild the code-list links:
 `uv run python -m wod_etl.reference.extract_code_table_links`.
+
+**New CF Standard Name Table.** Rebuild `knowledge/cf_standard_names.json` from cfconventions.org:
+`uv run python -m wod_etl.reference.extract_cf_standard_names`.
 
 **Settings.** Move the data folders with `WOD_DATA_DIR` (or `WOD_RAW_DIR`,
 `WOD_PROCESSED_DIR`…). The project root is found from `knowledge/wod_code_tables/`; override

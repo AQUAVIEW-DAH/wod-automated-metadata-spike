@@ -535,6 +535,8 @@ class TestDeclaredIdentity:
         ({"standard_name": "sea_water_potential_temperature"}, "Potential temperature"),
         ({"standard_name": "moles_of_nitrate_and_nitrite_per_unit_mass_in_sea_water"},
          "Nitrate + Nitrite"),
+        ({"standard_name": "chlorophyll_concentration_in_sea_water"}, "Chlorophyll"),
+        ({"standard_name": "moles_per_unit_mass_of_cfc11_in_sea_water"}, "CFC-11"),
         ({"epic_code": 28}, "Temperature"), ({"epic_code": "41"}, "Salinity"),
         ({"epic_key": "OST_62"}, "Oxygen saturation"),
         ({"standard_name": "sea_water_temperature status_flag"}, None),

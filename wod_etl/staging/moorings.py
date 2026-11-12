@@ -144,7 +144,8 @@ def read_instrument(path) -> Dict[str, Any]:
     import netCDF4
 
     from wod_etl.mapping.query_wod_spec import (STANDARD_NAME_LABELS, declared_label,
-                                                match_variable, prefer_declared)
+                                                declared_standard_name, match_variable,
+                                                prefer_declared)
     from wod_etl.reference import wod_variables
 
     p = Path(path)
@@ -202,7 +203,7 @@ def read_instrument(path) -> Dict[str, Any]:
                 # EPIC writes the unit into the name too: 'TEMPERATURE (C)', units 'C'.
                 label = (f"{long_name} ({units})" if units and f"({units})" not in long_name
                          else long_name)
-                std = str(getattr(v, "standard_name", "")).lower()
+                std = declared_standard_name(v)
                 if std in _NOT_OF_THE_WATER_STANDARD or \
                         (std not in STANDARD_NAME_LABELS and _NOT_OF_THE_WATER.search(
                             _words(name, long_name))):

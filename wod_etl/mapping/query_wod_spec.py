@@ -7,7 +7,8 @@ from typing import Dict, Any, List, Optional
 
 from wod_etl.terms import english_terms
 from wod_etl.config import HIGH_RES_DEPTH_INCREMENT_M
-from wod_etl.reference import wod_datasets, wod_secondary_headers, wod_variables
+from wod_etl.reference import (resolve_standard_name, wod_datasets, wod_secondary_headers,
+                               wod_variables)
 
 # Matching hints of our own, not part of the WOD standard.
 VARIABLE_ALIASES = {
@@ -168,8 +169,8 @@ _NOT_STORED_PATTERNS = [(re.compile(p), k)
                         for k, v in NOT_STORED.items() for p in v.get("patterns", [])]
 
 # What a NetCDF variable declares it holds, as the term the matcher resolves. A quantity WOD
-# does not store resolves to its NOT_STORED entry. CF standard names:
-# https://cfconventions.org/Data/cf-standard-names/current/build/cf-standard-name-table.html
+# does not store resolves to its NOT_STORED entry. Keys are current CF standard names
+# (knowledge/cf_standard_names.json); a test checks them.
 STANDARD_NAME_LABELS = {
     **dict.fromkeys(["sea_water_temperature", "sea_surface_temperature"], "Temperature"),
     "sea_water_potential_temperature": "Potential temperature",
@@ -217,10 +218,7 @@ STANDARD_NAME_LABELS = {
     "longitude": "Longitude",
     **dict.fromkeys(["mole_concentration_of_cfc11_in_sea_water",
                      "moles_of_cfc11_per_unit_mass_in_sea_water"], "CFC-11"),
-    **dict.fromkeys(["mole_concentration_of_cfc12_in_sea_water",
-                     "moles_of_cfc12_per_unit_mass_in_sea_water"], "CFC-12"),
-    **dict.fromkeys(["mole_concentration_of_cfc113_in_sea_water",
-                     "moles_of_cfc113_per_unit_mass_in_sea_water"], "CFC-113"),
+    "mole_concentration_of_cfc12_in_sea_water": "CFC-12",
     "sea_water_electrical_conductivity": "Conductivity",
     "sea_water_sigma_t": "Sigma-t",
     "sea_water_sigma_theta": "Sigma-theta",
@@ -435,11 +433,20 @@ def explain_column(column_name: str) -> Optional[Dict[str, Any]]:
             "route": entry["route"], "do_not_alias": True}
 
 
+def declared_standard_name(attrs) -> str:
+    """A NetCDF variable's CF `standard_name`, lower case, with a deprecated alias read as the
+    name that replaced it. A name the table lacks is kept as written. `attrs` is a dict or a
+    variable."""
+    get = attrs.get if isinstance(attrs, dict) else (lambda k: getattr(attrs, k, None))
+    raw = str(get("standard_name") or "").strip()
+    return (resolve_standard_name(raw) or raw).lower()
+
+
 def declared_label(attrs) -> Optional[str]:
     """The WOD term a NetCDF variable's attributes declare: its CF `standard_name`, else its
     EPIC code (`epic_code`, or an `epic_key` such as 'T_20'). `attrs` is a dict or a variable."""
     get = attrs.get if isinstance(attrs, dict) else (lambda k: getattr(attrs, k, None))
-    label = STANDARD_NAME_LABELS.get(str(get("standard_name") or "").strip().lower())
+    label = STANDARD_NAME_LABELS.get(declared_standard_name(attrs))
     if label:
         return label
     epic = get("epic_code")
