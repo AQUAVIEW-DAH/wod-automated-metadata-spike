@@ -13,6 +13,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from wod_etl.config import COMMAND_PREFIX
 from wod_etl.reference import wod_datasets
 
 PLACEHOLDER = "?"
@@ -131,7 +132,7 @@ def values_hash(values: Dict[str, Any]) -> str:
 FILE_HEADER = '''\
 # Accession {accession}: which of its files go into WOD, and why. Review it, then run:
 #
-#     uv run wod-etl confirm {accession}
+#     {prefix}wod-etl confirm {accession}
 #
 {summary}#
 # Each entry decides one file, or every file its * pattern matches (a file's own entry wins):
@@ -246,6 +247,7 @@ def append(path, sections: List[str], accession: str, label: str,
 
 def header(accession: str, rows) -> str:
     return FILE_HEADER.format(accession=accession, accession_toml=toml_value(accession),
+                              prefix=COMMAND_PREFIX,
                               datasets=", ".join(wod_datasets()), summary=summary(rows))
 
 

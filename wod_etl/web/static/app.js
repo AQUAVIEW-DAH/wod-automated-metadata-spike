@@ -512,8 +512,8 @@ async function refreshOutputs() {
       `<div class="meta">${esc(meta)}</div>${resolution}${from}</div>`;
   }).join("") +
     (r.taxa_list_unavailable ? `<p class="meta warn">Taxa list unavailable; names kept as ` +
-      `written. To resolve them, run online: uv run wod-etl confirm ${esc(ui.acc)} ` +
-      `--from process</p>` : "") +
+      `written. To resolve them, run online: ${esc(r.command_prefix || "")}wod-etl confirm ` +
+      `${esc(ui.acc)} --from process</p>` : "") +
     (r.taxa_not_stated ? `<p class="meta warn" title="${esc(r.taxa_not_stated.join("\n"))}">` +
       `${esc(r.taxa_not_stated.length)} Biological Header field(s) not stated: ask the ` +
       `submitter</p>` : "");

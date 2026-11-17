@@ -144,7 +144,7 @@ def missing_biological_fields(stated_ids) -> List[str]:
 def code_table_links() -> Dict[str, Any]:
     """Every WOD online code-table link, plus the hub URLs.
 
-    Rebuild with `uv run python -m wod_etl.reference.extract_code_table_links`.
+    Rebuild with `python -m wod_etl.reference.extract_code_table_links`.
     """
     return load_table("code_table_links")
 

@@ -62,6 +62,10 @@ def _tool_version() -> str:
 
 TOOL_VERSION = _tool_version()
 
+# Commands suggested to the user start with `uv run` when uv started this (it sets UV);
+# in an activated pip or conda environment they run as they are.
+COMMAND_PREFIX = "uv run " if os.environ.get("UV") else ""
+
 # ------------------------------------------------------------------ HTTP
 USER_AGENT = os.environ.get("WOD_USER_AGENT", f"{TOOL_NAME}/{TOOL_VERSION}")
 HTTP_TIMEOUT = float(os.environ.get("WOD_HTTP_TIMEOUT", "30"))

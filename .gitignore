@@ -2,6 +2,7 @@
 /data/
 
 .venv/
+.venv-pip/
 *.egg-info/
 /build/
 /dist/

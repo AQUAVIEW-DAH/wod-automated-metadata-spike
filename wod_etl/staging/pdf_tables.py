@@ -22,7 +22,7 @@ def pdf_page_text(path, pages: Optional[Sequence[int]] = None) -> Tuple[Dict[int
     try:
         from pypdf import PdfReader
     except ImportError:
-        return {}, {"error": "pypdf is not installed; `uv sync` installs it"}
+        return {}, {"error": "pypdf is not installed; install the dependencies (README.md, Setup)"}
     import logging
 
     # Silence pypdf's warnings about repaired cross-references.

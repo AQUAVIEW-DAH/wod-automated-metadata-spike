@@ -1,7 +1,7 @@
 """Rebuild code_table_links.json from the code-list hyperlinks in the WOD manual PDF.
 
 Maintainer tool, re-run after a new WOD release; the pipeline reads only the JSON.
-    uv run python -m wod_etl.reference.extract_code_table_links
+    python -m wod_etl.reference.extract_code_table_links
 """
 import collections
 import json
@@ -80,7 +80,7 @@ def build(pdf_path: Path) -> dict:
     try:
         import pypdf                                        # noqa: F401
     except ImportError:
-        return {"error": "pypdf is not installed: `uv sync` installs it."}
+        return {"error": "pypdf is not installed; install the dependencies (README.md, Setup)."}
 
     found = collections.defaultdict(dict)
     pages_seen = set()

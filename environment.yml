@@ -1,0 +1,18 @@
+# conda env create -f environment.yml && conda activate wod-etl && pip install -e .
+# Same packages and minimum versions as pyproject.toml; change both together.
+name: wod-etl
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.12
+  - pip
+  - beautifulsoup4>=4.15.0
+  - cf-units>=3.3.1
+  - fastapi>=0.143.2
+  - httpx>=0.28.1
+  - netcdf4>=1.7.4
+  - openpyxl>=3.1.5
+  - pandas>=3.0.5
+  - pypdf>=6.16.1
+  - uvicorn>=0.54.0
+  - pytest>=9.1.1

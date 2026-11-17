@@ -504,7 +504,7 @@ def stage_check(run: Run, changed: bool) -> Dict[str, Any]:
 def _not_ready(run: Run) -> Optional[Dict[str, Any]]:
     """Why confirm cannot proceed: no decisions yet, or the files or triage code changed since."""
     stages = run.state["stages"]
-    again = f"uv run wod-etl run {run.source}" if run.source else "uv run wod-etl run <input>"
+    again = f"{config.COMMAND_PREFIX}wod-etl run {run.source or '<input>'}"
     if (stages.get("decide") or {}).get("status") != "done" \
             or not run.ws.decisions_path.exists():
         return remedies.problem(
@@ -711,8 +711,8 @@ def stage_process(run: Run, changed: bool) -> Dict[str, Any]:
             transient = True
             problems.append(remedies.problem(
                 "process", f"the processed result of {p['source']} cannot be read back",
-                p["error"], f"Process every file again: uv run wod-etl confirm {ws.accession} "
-                            f"--from process"))
+                p["error"], f"Process every file again: {config.COMMAND_PREFIX}wod-etl confirm "
+                            f"{ws.accession} --from process"))
     files = [{**f, "sources": [{**s, "key": label(s["key"])} for s in f["sources"]]}
              for f in assembly["files"]]
     # Plankton: one Taxa-Record file per year.
@@ -861,8 +861,8 @@ def confirm_pipeline(accession: str, from_stage: Optional[str] = None,
     if not source:
         return _refused(accession, "check", f"no run recorded for accession {accession}",
                         f"nothing in {ws.run_dir}",
-                        "Run `uv run wod-etl run <input>` first, review the decisions it "
-                        "writes, then confirm.", code=EXIT_DECISIONS)
+                        f"Run `{config.COMMAND_PREFIX}wod-etl run <input>` first, review the "
+                        "decisions it writes, then confirm.", code=EXIT_DECISIONS)
     return _locked(ws, source, "confirm", CONFIRM_STAGES, from_stage, progress)
 
 

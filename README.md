@@ -9,19 +9,53 @@ fields. Moorings become MRB profiles; plankton tables become Taxa-Records.
 
 ## Setup
 
+Python 3.12 or newer. Install with uv, pip or conda; each one gives the same `wod-etl`
+command. Run every command from the project root.
+
+Each one keeps its own environment: uv in `.venv`, pip in `.venv-pip`, conda in the `wod-etl`
+env. `uv run` always uses `.venv`; a bare `wod-etl` or `pytest` runs from whichever
+environment you activated last.
+
+### uv
+
 ```bash
-uv sync            # Python 3.12+
+uv sync
 uv run pytest -q
 ```
 
-Run everything with `uv run` from the project root.
+Start each command below with `uv run` (`uv run wod-etl web`), or activate `.venv` first.
+
+### pip
+
+```bash
+python3 -m venv .venv-pip
+source .venv-pip/bin/activate      # Windows: .venv-pip\Scripts\activate
+pip install --upgrade pip          # --group needs pip 25.1 or newer
+pip install -e . --group dev       # dev adds pytest
+pytest -q
+```
+
+### conda
+
+```bash
+conda env create -f environment.yml
+conda activate wod-etl
+pip install -e .                   # the wod-etl package itself; conda installed its dependencies
+pytest -q
+```
+
+[`environment.yml`](environment.yml) takes every dependency from conda-forge, at the same
+minimum versions as `pyproject.toml`.
+
+The commands below assume the pip or conda environment is active. With uv, add `uv run` in
+front.
 
 ## Run an accession
 
 ### In the browser
 
 ```bash
-uv run wod-etl web                 # http://127.0.0.1:8000  (--host, --port)
+wod-etl web          # http://127.0.0.1:8000  (--host, --port)
 ```
 
 1. Run: enter an accession number, NCEI URL, local folder or `.tar.gz`, or several separated
@@ -53,10 +87,10 @@ share `data/runs/<accession>/`, so a run started in one can finish in the other.
 ### In a terminal
 
 ```bash
-uv run wod-etl run 0303928                                    # or a URL, folder or .tar.gz
-uv run wod-etl run data/raw/my_cruise --accession-id my_cruise
-uv run wod-etl confirm 0303928
-uv run wod-etl status 0303928
+wod-etl run 0303928                             # or a URL, folder or .tar.gz
+wod-etl run data/raw/my_cruise --accession-id my_cruise
+wod-etl confirm 0303928
+wod-etl status 0303928
 ```
 
 | Exit code | Meaning |
@@ -137,9 +171,9 @@ staged CSVs with `wod_etl.staging.write_staged_cast`.
 ### Updating reference data
 
 - New WOD release: replace the PDF and rebuild the code-list links with
-  `uv run python -m wod_etl.reference.extract_code_table_links`.
+  `python -m wod_etl.reference.extract_code_table_links`.
 - New CF Standard Name Table: rebuild `knowledge/cf_standard_names.json` from cfconventions.org
-  with `uv run python -m wod_etl.reference.extract_cf_standard_names`.
+  with `python -m wod_etl.reference.extract_cf_standard_names`.
 
 ### Settings
 

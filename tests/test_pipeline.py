@@ -392,7 +392,7 @@ class TestCommandLine:
     def test_run_confirm_and_status(self, env, capsys):
         assert main(["run", str(env)]) == EXIT_OK
         out = capsys.readouterr().out
-        assert "Decisions written:" in out and f"uv run wod-etl confirm {ACC}" in out
+        assert "Decisions written:" in out and f"wod-etl confirm {ACC}" in out
         assert "before confirming" not in out              # nothing to fill in
         assert main(["confirm", ACC]) == EXIT_OK
         out = capsys.readouterr().out

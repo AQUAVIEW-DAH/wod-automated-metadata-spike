@@ -376,6 +376,7 @@ def outputs(accession: str):
     return {"accession": accession, "folder": str(ws.processed_dir), "files": out,
             "taxa_not_stated": list(notes.get("missing_biological_fields") or {}) or None,
             "taxa_list_unavailable": bool(notes.get("taxa_list_unavailable")),
+            "command_prefix": config.COMMAND_PREFIX,
             "verified": verify.get("output_verified"),
             "finding_counts": verify.get("finding_counts"),
             "written_at": (state.get("stages", {}).get("process") or {}).get("finished_at"),

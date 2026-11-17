@@ -1,7 +1,7 @@
 """Rebuild cf_standard_names.json from the CF Standard Name Table XML.
 
 Maintainer tool, re-run when a new table is published; the pipeline reads only the JSON.
-    uv run python -m wod_etl.reference.extract_cf_standard_names [xml path or URL]
+    python -m wod_etl.reference.extract_cf_standard_names [xml path or URL]
 """
 import json
 import xml.etree.ElementTree as ET

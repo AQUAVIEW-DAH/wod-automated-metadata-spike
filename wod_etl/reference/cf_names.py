@@ -3,7 +3,7 @@ import functools
 import json
 from typing import Any, Dict, Optional
 
-from wod_etl.config import CF_STANDARD_NAMES_JSON
+from wod_etl.config import CF_STANDARD_NAMES_JSON, COMMAND_PREFIX
 
 
 @functools.lru_cache(maxsize=None)
@@ -12,7 +12,7 @@ def cf_standard_name_table() -> Dict[str, Any]:
     if not CF_STANDARD_NAMES_JSON.exists():
         raise FileNotFoundError(
             f"Missing {CF_STANDARD_NAMES_JSON}. Rebuild it with "
-            f"`uv run python -m wod_etl.reference.extract_cf_standard_names`.")
+            f"`{COMMAND_PREFIX}python -m wod_etl.reference.extract_cf_standard_names`.")
     return json.loads(CF_STANDARD_NAMES_JSON.read_text())
 
 

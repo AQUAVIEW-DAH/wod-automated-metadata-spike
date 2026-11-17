@@ -37,7 +37,7 @@ class TestAppendOnly:
                    "run 2")
         text = p.read_text()
         assert "include = false   # a calibration cast" in text
-        assert "# ---- added by run 2 ----" in text and "uv run wod-etl confirm 0303928" in text
+        assert "# ---- added by run 2 ----" in text and "wod-etl confirm 0303928" in text
         data = tomllib.loads(text)
         assert data["files"]["a.csv"]["include"] is False and "date:6" in data["conflicts"]
 

@@ -7,6 +7,7 @@ import sys
 import textwrap
 from typing import List, Optional
 
+from wod_etl.config import COMMAND_PREFIX
 from wod_etl.orchestration.pipeline import (CONFIRM_STAGES, RUN_STAGES, STAGES, Workspace,
                                             confirm_pipeline, run_pipeline, status)
 
@@ -110,7 +111,7 @@ def cmd_run(args) -> int:
         if blocking:
             print("\nSettle these before confirming:")
         _print_problems(result["problems"])
-        print(f"\nThen:  uv run wod-etl confirm {acc}")
+        print(f"\nThen:  {COMMAND_PREFIX}wod-etl confirm {acc}")
     elif code == 130:
         print("\nInterrupted. Run the same command again to continue.")
     else:
@@ -149,7 +150,7 @@ def cmd_confirm(args) -> int:
     elif code == 2:
         print("\nDecisions needed before anything is written:")
         _print_problems([p for p in result["problems"] if p.get("blocking")])
-        print(f"\nThen:  uv run wod-etl confirm {acc}")
+        print(f"\nThen:  {COMMAND_PREFIX}wod-etl confirm {acc}")
     elif code == 3:
         print("\nWritten, but verification flagged the output:")
         _print_problems([p for p in result["problems"] if p.get("stage") == "verify"])
